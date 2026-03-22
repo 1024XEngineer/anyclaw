@@ -1,0 +1,519 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+)
+
+type AuditLogger interface {
+	LogTool(toolName string, input map[string]any, output string, err error)
+}
+
+type DangerousCommandConfirmer func(command string) bool
+
+type BuiltinOptions struct {
+	WorkingDir              string
+	PermissionLevel         string
+	DangerousPatterns       []string
+	CommandTimeoutSeconds   int
+	ConfirmDangerousCommand DangerousCommandConfirmer
+	AuditLogger             AuditLogger
+	Sandbox                 *SandboxManager
+}
+
+type ToolFunc func(ctx context.Context, input map[string]any) (string, error)
+
+type Tool struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+	Handler     ToolFunc
+}
+
+type Registry struct {
+	tools map[string]*Tool
+}
+
+func NewRegistry() *Registry {
+	return &Registry{
+		tools: make(map[string]*Tool),
+	}
+}
+
+func (r *Registry) RegisterTool(name string, desc string, schema map[string]any, handler ToolFunc) {
+	r.tools[name] = &Tool{
+		Name:        name,
+		Description: desc,
+		InputSchema: schema,
+		Handler:     handler,
+	}
+}
+
+func (r *Registry) Register(t *Tool) {
+	r.tools[t.Name] = t
+}
+
+func (r *Registry) Get(name string) (*Tool, bool) {
+	t, ok := r.tools[name]
+	return t, ok
+}
+
+func (r *Registry) ListTools() []*Tool {
+	var list []*Tool
+	for _, t := range r.tools {
+		list = append(list, t)
+	}
+	return list
+}
+
+func (r *Registry) Call(ctx context.Context, name string, input map[string]any) (string, error) {
+	t, ok := r.tools[name]
+	if !ok {
+		return "", fmt.Errorf("tool not found: %s", name)
+	}
+
+	if t.Handler == nil {
+		return "", fmt.Errorf("tool handler not implemented: %s", name)
+	}
+
+	return t.Handler(ctx, input)
+}
+
+type ToolInfo struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+}
+
+func (r *Registry) List() []ToolInfo {
+	var list []ToolInfo
+	for _, t := range r.tools {
+		list = append(list, ToolInfo{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.InputSchema,
+		})
+	}
+	return list
+}
+
+func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
+	RegisterFileTools(r, opts)
+	RegisterWebTools(r, opts)
+}
+
+func RegisterFileTools(r *Registry, opts BuiltinOptions) {
+	workingDir := opts.WorkingDir
+	r.RegisterTool(
+		"read_file",
+		"Read the contents of a file from the filesystem",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]string{"type": "string", "description": "Path to the file"},
+			},
+			"required": []string{"path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "read_file", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return ReadFileToolWithCwd(ctx, input, workingDir)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"write_file",
+		"Write content to a file",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":    map[string]string{"type": "string", "description": "Path to the file"},
+				"content": map[string]string{"type": "string", "description": "Content to write"},
+			},
+			"required": []string{"path", "content"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "write_file", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return WriteFileToolWithCwd(ctx, input, workingDir, opts.PermissionLevel)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"list_directory",
+		"List files in a directory",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]string{"type": "string", "description": "Path to directory"},
+			},
+			"required": []string{"path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "list_directory", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return ListDirectoryToolWithCwd(ctx, input, workingDir)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"search_files",
+		"Search for files matching a pattern",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":    map[string]string{"type": "string", "description": "Root path to search"},
+				"pattern": map[string]string{"type": "string", "description": "Search pattern"},
+			},
+			"required": []string{"path", "pattern"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "search_files", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return SearchFilesToolWithCwd(ctx, input, workingDir)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"run_command",
+		"Execute a shell command within the working directory",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command": map[string]string{"type": "string", "description": "Shell command to execute"},
+				"cwd":     map[string]string{"type": "string", "description": "Optional working directory override"},
+			},
+			"required": []string{"command"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "run_command", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return RunCommandToolWithPolicy(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+}
+
+func RegisterWebTools(r *Registry, opts BuiltinOptions) {
+	r.RegisterTool(
+		"web_search",
+		"Search the web for information using DuckDuckGo",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":       map[string]string{"type": "string", "description": "Search query"},
+				"max_results": map[string]string{"type": "number", "description": "Maximum number of results (default: 5)"},
+			},
+			"required": []string{"query"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "web_search", input, WebSearchTool)(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"fetch_url",
+		"Fetch and extract text content from a URL",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]string{"type": "string", "description": "URL to fetch"},
+			},
+			"required": []string{"url"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "fetch_url", input, FetchURLTool)(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"browser_navigate",
+		"Open a page in a browser automation session",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"url":        map[string]string{"type": "string", "description": "URL to open"},
+			},
+			"required": []string{"url"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserNavigateTool(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"browser_click",
+		"Click an element on the current page",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"selector":   map[string]string{"type": "string", "description": "CSS selector to click"},
+			},
+			"required": []string{"selector"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserClickTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_type",
+		"Type text into an element",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"selector":   map[string]string{"type": "string", "description": "CSS selector to type into"},
+				"text":       map[string]string{"type": "string", "description": "Text to type"},
+			},
+			"required": []string{"selector", "text"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserTypeTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_screenshot",
+		"Take a screenshot of the current page or element",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"path":       map[string]string{"type": "string", "description": "File path to save screenshot"},
+				"selector":   map[string]string{"type": "string", "description": "Optional CSS selector for element screenshot"},
+			},
+			"required": []string{"path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserScreenshotTool(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"browser_upload",
+		"Upload a file via input element",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"selector":   map[string]string{"type": "string", "description": "File input CSS selector"},
+				"path":       map[string]string{"type": "string", "description": "Local path to upload"},
+			},
+			"required": []string{"selector", "path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserUploadTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_wait",
+		"Wait for an element or page state",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"selector":   map[string]string{"type": "string", "description": "Optional CSS selector"},
+				"state":      map[string]string{"type": "string", "description": "ready, visible, or enabled"},
+				"timeout_ms": map[string]string{"type": "number", "description": "Timeout in milliseconds"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserWaitTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_select",
+		"Select a value in a form control",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"selector":   map[string]string{"type": "string", "description": "CSS selector"},
+				"value":      map[string]string{"type": "string", "description": "Value to set"},
+			},
+			"required": []string{"selector", "value"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserSelectTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_press",
+		"Press a keyboard key in the page",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"selector":   map[string]string{"type": "string", "description": "Optional CSS selector to focus"},
+				"key":        map[string]string{"type": "string", "description": "Key to press, e.g. Enter, Tab, ArrowDown"},
+			},
+			"required": []string{"key"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserPressTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_scroll",
+		"Scroll the page or an element",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"selector":   map[string]string{"type": "string", "description": "Optional CSS selector to scroll inside"},
+				"direction":  map[string]string{"type": "string", "description": "up or down"},
+				"pixels":     map[string]string{"type": "number", "description": "Scroll distance in pixels"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserScrollTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_download",
+		"Download a linked resource to disk",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"selector":   map[string]string{"type": "string", "description": "Optional selector whose href/src should be downloaded"},
+				"url":        map[string]string{"type": "string", "description": "Optional absolute URL to download"},
+				"path":       map[string]string{"type": "string", "description": "Destination file path"},
+			},
+			"required": []string{"path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserDownloadTool(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"browser_snapshot",
+		"Capture the current page HTML and title",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserSnapshotTool(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"browser_eval",
+		"Evaluate JavaScript in the page context",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"expression": map[string]string{"type": "string", "description": "JavaScript expression"},
+			},
+			"required": []string{"expression"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserEvaluateTool(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"browser_pdf",
+		"Export the current page to PDF",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional tab id"},
+				"path":       map[string]string{"type": "string", "description": "File path to save PDF"},
+			},
+			"required": []string{"path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserPDFTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_close",
+		"Close a browser automation session",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserCloseTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_tab_new",
+		"Create a new browser tab in the session",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Optional desired tab id"},
+				"url":        map[string]string{"type": "string", "description": "Optional URL to open immediately"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserTabNewTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_tab_list",
+		"List all tabs in the browser session",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) { return BrowserTabListTool(ctx, input) },
+	)
+
+	r.RegisterTool(
+		"browser_tab_switch",
+		"Switch the active browser tab",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Tab id to activate"},
+			},
+			"required": []string{"tab_id"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserTabSwitchTool(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"browser_tab_close",
+		"Close a specific browser tab",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]string{"type": "string", "description": "Browser session id"},
+				"tab_id":     map[string]string{"type": "string", "description": "Tab id to close"},
+			},
+			"required": []string{"tab_id"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserTabCloseTool(ctx, input)
+		},
+	)
+}
+
+func auditCall(opts BuiltinOptions, toolName string, input map[string]any, next ToolFunc) ToolFunc {
+	return func(ctx context.Context, _ map[string]any) (string, error) {
+		output, err := next(ctx, input)
+		if opts.AuditLogger != nil {
+			opts.AuditLogger.LogTool(toolName, input, output, err)
+		}
+		return output, err
+	}
+}

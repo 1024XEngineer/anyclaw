@@ -1,0 +1,33 @@
+node_modules
+.env
+dist
+coverage
+__pycache__/
+*.pyc
+.DS_Store
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Agent credentials and memory (NEVER COMMIT)
+/memory/
+/.local/
+.agents/
+skills-lock.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+bin/

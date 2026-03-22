@@ -1,0 +1,861 @@
+{
+  "sessions": [],
+  "events": [],
+  "tools": [],
+  "audit": [
+    {
+      "id": "aud_1774162643705092300",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-22T06:57:23.7050923Z"
+    },
+    {
+      "id": "aud_1774162643710580200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-22T06:57:23.7105802Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774162643710580200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-22T06:57:23.7105802Z",
+      "meta": {
+        "count": 0,
+        "status": ""
+      }
+    },
+    {
+      "id": "aud_1774162643710580200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "config.read",
+      "target": "config",
+      "timestamp": "2026-03-22T06:57:23.7105802Z"
+    },
+    {
+      "id": "aud_1774162643713464600",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-22T06:57:23.7134646Z"
+    },
+    {
+      "id": "aud_1774162643715598900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "runtimes.read",
+      "target": "runtimes",
+      "timestamp": "2026-03-22T06:57:23.7155989Z"
+    },
+    {
+      "id": "aud_1774162643715598900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "plugins.read",
+      "target": "plugins",
+      "timestamp": "2026-03-22T06:57:23.7155989Z"
+    },
+    {
+      "id": "aud_1774162643716645500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "audit.read",
+      "target": "audit",
+      "timestamp": "2026-03-22T06:57:23.7166455Z"
+    },
+    {
+      "id": "aud_1774162643716645500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-22T06:57:23.7166455Z"
+    },
+    {
+      "id": "aud_1774162643717669400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:57:23.7176694Z"
+    },
+    {
+      "id": "aud_1774162643721770200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-22T06:57:23.7217702Z"
+    },
+    {
+      "id": "aud_1774162643728503700",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "auth.users.read",
+      "target": "users",
+      "timestamp": "2026-03-22T06:57:23.7285037Z"
+    },
+    {
+      "id": "aud_1774162643729010900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-22T06:57:23.7290109Z"
+    },
+    {
+      "id": "aud_1774162648720963500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:57:28.7209635Z"
+    },
+    {
+      "id": "aud_1774162653705899300",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:57:33.7058993Z"
+    },
+    {
+      "id": "aud_1774162657982669300",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.write",
+      "target": "黑塔",
+      "timestamp": "2026-03-22T06:57:37.9826693Z",
+      "meta": {
+        "enabled": true
+      }
+    },
+    {
+      "id": "aud_1774162657987823100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-22T06:57:37.9878231Z"
+    },
+    {
+      "id": "aud_1774162657991435200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "audit.read",
+      "target": "audit",
+      "timestamp": "2026-03-22T06:57:37.9914352Z"
+    },
+    {
+      "id": "aud_1774162658705771000",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:57:38.705771Z"
+    },
+    {
+      "id": "aud_1774162663714948500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:57:43.7149485Z"
+    },
+    {
+      "id": "aud_1774162668721103300",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:57:48.7211033Z"
+    },
+    {
+      "id": "aud_1774162673712590900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:57:53.7125909Z"
+    },
+    {
+      "id": "aud_1774162678722544900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:57:58.7225449Z"
+    },
+    {
+      "id": "aud_1774162680443031400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-22T06:58:00.4430314Z"
+    },
+    {
+      "id": "aud_1774162683706874200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:03.7068742Z"
+    },
+    {
+      "id": "aud_1774162688713854600",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:08.7138546Z"
+    },
+    {
+      "id": "aud_1774162693718209400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:13.7182094Z"
+    },
+    {
+      "id": "aud_1774162698707703900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:18.7077039Z"
+    },
+    {
+      "id": "aud_1774162703716881300",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:23.7168813Z"
+    },
+    {
+      "id": "aud_1774162708709511200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:28.7095112Z"
+    },
+    {
+      "id": "aud_1774162713705793500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:33.7057935Z"
+    },
+    {
+      "id": "aud_1774162718720353100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:38.7203531Z"
+    },
+    {
+      "id": "aud_1774162723717685100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:43.7176851Z"
+    },
+    {
+      "id": "aud_1774162730534662400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:50.5346624Z"
+    },
+    {
+      "id": "aud_1774162730536369400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.update",
+      "target": "resources",
+      "timestamp": "2026-03-22T06:58:50.5363694Z"
+    },
+    {
+      "id": "aud_1774162730540047400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-22T06:58:50.5400474Z"
+    },
+    {
+      "id": "aud_1774162733707550200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:53.7075502Z"
+    },
+    {
+      "id": "aud_1774162738710099700",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:58:58.7100997Z"
+    },
+    {
+      "id": "aud_1774162743709682800",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:03.7096828Z"
+    },
+    {
+      "id": "aud_1774162748713132900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:08.7131329Z"
+    },
+    {
+      "id": "aud_1774162753716984800",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:13.7169848Z"
+    },
+    {
+      "id": "aud_1774162758742775800",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:18.7427758Z"
+    },
+    {
+      "id": "aud_1774162763715003000",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:23.715003Z"
+    },
+    {
+      "id": "aud_1774162768706993600",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:28.7069936Z"
+    },
+    {
+      "id": "aud_1774162773718864600",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:33.7188646Z"
+    },
+    {
+      "id": "aud_1774162778708265500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:38.7082655Z"
+    },
+    {
+      "id": "aud_1774162783709237600",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:43.7092376Z"
+    },
+    {
+      "id": "aud_1774162785344657100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.write",
+      "target": "个人助手Agent",
+      "timestamp": "2026-03-22T06:59:45.3446571Z",
+      "meta": {
+        "enabled": false
+      }
+    },
+    {
+      "id": "aud_1774162785348649500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-22T06:59:45.3486495Z"
+    },
+    {
+      "id": "aud_1774162785352475700",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "audit.read",
+      "target": "audit",
+      "timestamp": "2026-03-22T06:59:45.3524757Z"
+    },
+    {
+      "id": "aud_1774162788709567200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:48.7095672Z"
+    },
+    {
+      "id": "aud_1774162789120643000",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.write",
+      "target": "系统管理员Agent",
+      "timestamp": "2026-03-22T06:59:49.120643Z",
+      "meta": {
+        "enabled": false
+      }
+    },
+    {
+      "id": "aud_1774162789123402000",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-22T06:59:49.1242491Z"
+    },
+    {
+      "id": "aud_1774162789127916200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "audit.read",
+      "target": "audit",
+      "timestamp": "2026-03-22T06:59:49.1279162Z"
+    },
+    {
+      "id": "aud_1774162790224710800",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.write",
+      "target": "只读审计Agent",
+      "timestamp": "2026-03-22T06:59:50.2247108Z",
+      "meta": {
+        "enabled": false
+      }
+    },
+    {
+      "id": "aud_1774162790226893400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-22T06:59:50.2268934Z"
+    },
+    {
+      "id": "aud_1774162790231563000",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "audit.read",
+      "target": "audit",
+      "timestamp": "2026-03-22T06:59:50.231563Z"
+    },
+    {
+      "id": "aud_1774162793708808200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:53.7088082Z"
+    },
+    {
+      "id": "aud_1774162798711374500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T06:59:58.7113745Z"
+    },
+    {
+      "id": "aud_1774162803708874200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:03.7088742Z"
+    },
+    {
+      "id": "aud_1774162808705778500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:08.7057785Z"
+    },
+    {
+      "id": "aud_1774162813708102300",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:13.7081023Z"
+    },
+    {
+      "id": "aud_1774162818711866200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:18.7118662Z"
+    },
+    {
+      "id": "aud_1774162823713631000",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:23.713631Z"
+    },
+    {
+      "id": "aud_1774162828709932100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:28.7099321Z"
+    },
+    {
+      "id": "aud_1774162833706812800",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:33.7068128Z"
+    },
+    {
+      "id": "aud_1774162838718002900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:38.7180029Z"
+    },
+    {
+      "id": "aud_1774162843710120900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:43.7101209Z"
+    },
+    {
+      "id": "aud_1774162848712739800",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:48.7127398Z"
+    },
+    {
+      "id": "aud_1774162853718658800",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:53.7186588Z"
+    },
+    {
+      "id": "aud_1774162858710715500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:00:58.7107155Z"
+    },
+    {
+      "id": "aud_1774162863719224200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:03.7192242Z"
+    },
+    {
+      "id": "aud_1774162868713614000",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:08.713614Z"
+    },
+    {
+      "id": "aud_1774162873722473400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:13.7224734Z"
+    },
+    {
+      "id": "aud_1774162878715281000",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:18.715281Z"
+    },
+    {
+      "id": "aud_1774162883710840100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:23.7108401Z"
+    },
+    {
+      "id": "aud_1774162886618015200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-22T07:01:26.6180152Z"
+    },
+    {
+      "id": "aud_1774162888721845800",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:28.7218458Z"
+    },
+    {
+      "id": "aud_1774162893711497100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:33.7114971Z"
+    },
+    {
+      "id": "aud_1774162898709479100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:38.7094791Z"
+    },
+    {
+      "id": "aud_1774162903707664900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:43.7076649Z"
+    },
+    {
+      "id": "aud_1774162908716742400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:48.7167424Z"
+    },
+    {
+      "id": "aud_1774162909718255100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.write",
+      "target": "resources",
+      "timestamp": "2026-03-22T07:01:49.7182551Z"
+    },
+    {
+      "id": "aud_1774162909721630300",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-22T07:01:49.7216303Z"
+    },
+    {
+      "id": "aud_1774162913717592900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:53.7175929Z"
+    },
+    {
+      "id": "aud_1774162918705693900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:01:58.7056939Z"
+    },
+    {
+      "id": "aud_1774162923716371700",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:03.7163717Z"
+    },
+    {
+      "id": "aud_1774162928710858500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:08.7108585Z"
+    },
+    {
+      "id": "aud_1774162933705888400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:13.7058884Z"
+    },
+    {
+      "id": "aud_1774162938705935400",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:18.7059354Z"
+    },
+    {
+      "id": "aud_1774162943710826200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:23.7108262Z"
+    },
+    {
+      "id": "aud_1774162946062313800",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.update",
+      "target": "resources",
+      "timestamp": "2026-03-22T07:02:26.0623138Z"
+    },
+    {
+      "id": "aud_1774162946065909600",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-22T07:02:26.0659096Z"
+    },
+    {
+      "id": "aud_1774162948709505500",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:28.7095055Z"
+    },
+    {
+      "id": "aud_1774162950895270700",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.update",
+      "target": "resources",
+      "timestamp": "2026-03-22T07:02:30.8952707Z"
+    },
+    {
+      "id": "aud_1774162950898958300",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-22T07:02:30.8989583Z"
+    },
+    {
+      "id": "aud_1774162953711069900",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:33.7110699Z"
+    },
+    {
+      "id": "aud_1774162958708492600",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:38.7084926Z"
+    },
+    {
+      "id": "aud_1774162963717781600",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:43.7177816Z"
+    },
+    {
+      "id": "aud_1774162969481873700",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:49.4818737Z"
+    },
+    {
+      "id": "aud_1774162974478848300",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "jobs.read",
+      "target": "jobs",
+      "timestamp": "2026-03-22T07:02:54.4788483Z"
+    }
+  ],
+  "orgs": [
+    {
+      "id": "org-local",
+      "name": "Local Org"
+    },
+    {
+      "id": "Local",
+      "name": "测试"
+    }
+  ],
+  "projects": [
+    {
+      "id": "project-local",
+      "org_id": "org-local",
+      "name": "Local Project"
+    }
+  ],
+  "workspaces": [
+    {
+      "id": "ws-d--anyclaw-anyclaw-0-2-anyclaw-workflows-personal",
+      "project_id": "project-local",
+      "name": "personal",
+      "path": "D:\\anyclaw\\anyclaw-0-2\\anyclaw\\workflows\\personal"
+    }
+  ],
+  "jobs": [],
+  "updated": "2026-03-22T07:02:54.4788483Z"
+}

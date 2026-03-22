@@ -1,0 +1,248 @@
+{
+  "llm": {
+    "provider": "qwen",
+    "model": "qwen-plus",
+    "api_key": "sk-5aaac7cebc3442ab957c981be653535f",
+    "base_url": "",
+    "max_tokens": 4096,
+    "temperature": 0.7,
+    "proxy": "",
+    "extra": null,
+    "routing": {
+      "enabled": true,
+      "reasoning_keywords": [
+        "计划",
+        "复杂",
+        "步骤",
+        "自动化",
+        "脚本",
+        "代码",
+        "plan",
+        "complex",
+        "script",
+        "code"
+      ],
+      "reasoning_provider": "qwen",
+      "reasoning_model": "qwen-plus",
+      "fast_provider": "qwen",
+      "fast_model": "qwen-turbo"
+    }
+  },
+  "agent": {
+    "name": "个人助手Agent",
+    "description": "通用个人效率助手，默认仅允许在 workflows 目录内写入",
+    "work_dir": ".anyclaw",
+    "working_dir": "workflows/personal",
+    "permission_level": "limited",
+    "require_confirmation_for_dangerous": true,
+    "profiles": [
+      {
+        "name": "个人助手Agent",
+        "description": "通用个人效率助手，默认仅允许在 workflows 目录内写入",
+        "working_dir": "workflows/personal",
+        "permission_level": "limited",
+        "enabled": false,
+        "personality": {
+          "template": "generalist",
+          "tone": "专业稳重",
+          "style": "结构化",
+          "goal_orientation": "结果导向",
+          "constraint_mode": "审慎",
+          "response_verbosity": "适中",
+          "traits": [
+            "可靠",
+            "清晰",
+            "协作"
+          ]
+        }
+      },
+      {
+        "name": "系统管理员Agent",
+        "description": "偏系统运维场景，允许执行命令但保留高危确认",
+        "working_dir": "workflows/admin",
+        "permission_level": "full",
+        "enabled": false,
+        "personality": {
+          "template": "generalist",
+          "tone": "专业稳重",
+          "style": "结构化",
+          "goal_orientation": "结果导向",
+          "constraint_mode": "审慎",
+          "response_verbosity": "适中",
+          "traits": [
+            "可靠",
+            "清晰",
+            "协作"
+          ]
+        }
+      },
+      {
+        "name": "只读审计Agent",
+        "description": "仅用于查看信息和审计，不允许写入或执行变更命令",
+        "working_dir": "workflows/audit",
+        "permission_level": "read-only",
+        "enabled": false,
+        "personality": {
+          "template": "generalist",
+          "tone": "专业稳重",
+          "style": "结构化",
+          "goal_orientation": "结果导向",
+          "constraint_mode": "审慎",
+          "response_verbosity": "适中",
+          "traits": [
+            "可靠",
+            "清晰",
+            "协作"
+          ]
+        }
+      },
+      {
+        "name": "黑塔",
+        "description": "米哈游的黑塔，陪你聊天",
+        "role": "黑塔",
+        "persona": "聊天ai",
+        "working_dir": "",
+        "permission_level": "full",
+        "default_model": "qwen",
+        "enabled": true,
+        "personality": {
+          "tone": "轻松"
+        },
+        "skills": [
+          {
+            "name": "find-skills",
+            "enabled": true,
+            "version": "1.0.0"
+          },
+          {
+            "name": "coder",
+            "enabled": true,
+            "version": "1.0.0"
+          },
+          {
+            "name": "file-operations",
+            "enabled": true,
+            "version": "1.0.0"
+          }
+        ]
+      }
+    ],
+    "active_profile": "个人助手Agent"
+  },
+  "skills": {
+    "dir": "skills",
+    "auto_load": true,
+    "include": null,
+    "exclude": null
+  },
+  "memory": {
+    "dir": "memory",
+    "max_history": 100,
+    "format": "markdown",
+    "auto_save": true
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 18789,
+    "bind": "loopback",
+    "runtime_max_instances": 16,
+    "runtime_idle_seconds": 900,
+    "job_worker_count": 2,
+    "job_max_attempts": 2,
+    "job_retry_delay_seconds": 2
+  },
+  "daemon": {
+    "pid_file": ".anyclaw/gateway.pid",
+    "log_file": ".anyclaw/gateway.log"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "bot_token": "",
+      "chat_id": "",
+      "poll_every_seconds": 3
+    },
+    "slack": {
+      "enabled": false,
+      "bot_token": "",
+      "app_token": "",
+      "default_channel": "",
+      "poll_every_seconds": 3
+    },
+    "discord": {
+      "enabled": false,
+      "bot_token": "",
+      "default_channel": "",
+      "poll_every_seconds": 3,
+      "api_base_url": "https://discord.com/api/v10",
+      "guild_id": "",
+      "public_key": "",
+      "use_gateway_ws": true
+    },
+    "whatsapp": {
+      "enabled": false,
+      "access_token": "",
+      "phone_number_id": "",
+      "verify_token": "",
+      "default_recipient": "",
+      "api_version": "v20.0",
+      "app_secret": ""
+    },
+    "signal": {
+      "enabled": false,
+      "base_url": "http://127.0.0.1:8080",
+      "number": "",
+      "default_recipient": "",
+      "poll_every_seconds": 3,
+      "bearer_token": ""
+    },
+    "routing": {
+      "mode": "per-chat",
+      "rules": null
+    }
+  },
+  "plugins": {
+    "dir": "plugins",
+    "enabled": null,
+    "allow_exec": false,
+    "exec_timeout_seconds": 10,
+    "trusted_signers": null,
+    "require_trust": true
+  },
+  "sandbox": {
+    "enabled": false,
+    "backend": "local",
+    "base_dir": ".anyclaw/sandboxes",
+    "docker_image": "alpine:3.20",
+    "docker_network": "none",
+    "reuse_per_scope": true,
+    "default_channel": ""
+  },
+  "security": {
+    "api_token": "",
+    "public_paths": [
+      "/healthz"
+    ],
+    "protect_events": false,
+    "webhook_secret": "",
+    "trusted_cidrs": null,
+    "rate_limit_rpm": 120,
+    "users": null,
+    "roles": null,
+    "audit_log": ".anyclaw/audit/audit.jsonl",
+    "dangerous_command_patterns": [
+      "rm -rf",
+      "del /f",
+      "format ",
+      "mkfs",
+      "shutdown",
+      "reboot",
+      "poweroff",
+      "chmod 777",
+      "takeown",
+      "icacls",
+      "git reset --hard"
+    ],
+    "command_timeout_seconds": 30
+  }
+}

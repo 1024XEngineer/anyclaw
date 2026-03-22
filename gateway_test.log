@@ -1,0 +1,3 @@
+[32m✓ [0mGateway listening on 127.0.0.1:18789
+[33mℹ [0mHealth: http://127.0.0.1:18789/healthz
+[33mℹ [0mStatus: http://127.0.0.1:18789/status

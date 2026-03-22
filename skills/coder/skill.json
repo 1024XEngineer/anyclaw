@@ -1,0 +1,13 @@
+{
+  "name": "coder",
+  "description": "Code generation and analysis assistant",
+  "version": "1.0.0",
+  "commands": [
+    {"name": "write_code", "description": "Write code", "pattern": "write code"},
+    {"name": "explain_code", "description": "Explain code", "pattern": "explain code"},
+    {"name": "debug", "description": "Debug code", "pattern": "debug"}
+  ],
+  "prompts": {
+    "system": "You are an expert programmer. Write clean, efficient, and well-documented code. Explain your reasoning when helpful."
+  }
+}
