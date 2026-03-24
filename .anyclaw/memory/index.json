@@ -251,7 +251,49 @@
       "type": "conversation",
       "role": "assistant",
       "content": "我是 **AnyClaw** —— 你的 AI 助手，专为**文件记忆优先、任务可追溯、操作可验证**而设计。\n\n✨ 我的特点包括：\n- ✅ **本地文件记忆**：能读写文件（`read_file` / `write_file`）、浏览目录（`list_directory`）、搜索内容（`search_files`），所有状态都可落盘留存  \n- ✅ **安全联网能力**：仅在你明确指令时，用 `web_search`（DuckDuckGo）或 `fetch_url` 获取外部信息，不自动追踪、不执行 JS、不登录网站  \n- ✅ **系统级协作友好**：支持生成 `.bat` / `.sh` / AppleScript 脚本，帮你一键启动软件、自动化流程、定制开发环境  \n- ✅ **角色可切换**：如你所见——我既能以严谨工程师风格帮你写 Python 脚本，也能切换成「黑塔」的冷峻诗意叙事模式 🌌  \n\n你之前已告诉我你是 **YongBurn**，喜欢《崩坏：星穹铁道》中的黑塔——我也已为你生成并保存了一段致敬风格的剧情片段（`story_blacktower_honkai_stellar_tribute.txt`），随时可读取或续写。\n\n那么，指挥官 YongBurn——  \n🔹 接下来，你想：  \n- 打开 WPS Office？→ 我可立即生成 `open_wps.bat` 或帮你定位安装路径  \n- 续写黑塔剧情？→ 比如加入「错误编号#0」怀表、量子日志、多线分支选项  \n- 查看/修改某份配置文件？运行某个脚本？搜索项目里的某个函数？  \n\n请下令。我在静候。🚀"
+    },
+    {
+      "id": "1774266104140-66666666",
+      "timestamp": "2026-03-23T19:41:44.1402779+08:00",
+      "type": "conversation",
+      "role": "user",
+      "content": "请只回复：pong"
+    },
+    {
+      "id": "1774266104143-iiiiiiii",
+      "timestamp": "2026-03-23T19:41:44.1431708+08:00",
+      "type": "conversation",
+      "role": "assistant",
+      "content": "pong"
+    },
+    {
+      "id": "1774268795930-eeeeeeee",
+      "timestamp": "2026-03-23T20:26:35.9305588+08:00",
+      "type": "conversation",
+      "role": "user",
+      "content": "anyclaw store list"
+    },
+    {
+      "id": "1774268795934-mmmmmmmm",
+      "timestamp": "2026-03-23T20:26:35.9347608+08:00",
+      "type": "conversation",
+      "role": "assistant",
+      "content": "当前目录是空的，没有文件或子目录。如果你有特定的文件或目录想要查看，请告诉我。"
+    },
+    {
+      "id": "1774268838418-66666666",
+      "timestamp": "2026-03-23T20:27:18.4180109+08:00",
+      "type": "conversation",
+      "role": "user",
+      "content": "anyclaw doctor                  # 检查系统配置"
+    },
+    {
+      "id": "1774268838420-iiiiiiii",
+      "timestamp": "2026-03-23T20:27:18.4204673+08:00",
+      "type": "conversation",
+      "role": "assistant",
+      "content": "系统检查已完成，所有配置和目录均正常。以下是详细检查结果：\n\n- **AnyClaw 版本**: v2026.3.13\n- **配置文件**: `anyclaw.json` 已找到\n- **工作目录**: `.anyclaw` 和 `workflows/personal` 均已准备好\n- **技能目录**: `skills` 目录已准备好\n- **网关地址**: `127.0.0.1:18789`\n- **API 密钥**: 已加载（建议使用环境变量而非直接存储在配置中）\n\n所有检查项均通过，系统运行正常。如有其他需要，请随时告诉我！🚀"
     }
   ],
-  "updated": "2026-03-22T16:12:02.5569598+08:00"
+  "updated": "2026-03-23T20:27:18.4226178+08:00"
 }

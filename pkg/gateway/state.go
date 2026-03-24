@@ -774,6 +774,49 @@ func (s *Store) RebindSessionsForWorkspace(workspaceID string, projectID string,
 	return s.saveLocked()
 }
 
+func (s *Store) RebindWorkspaceID(oldID string, newID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strings.TrimSpace(oldID) == "" || strings.TrimSpace(newID) == "" {
+		return fmt.Errorf("workspace IDs must not be empty")
+	}
+	if oldID == newID {
+		return nil
+	}
+	for _, workspace := range s.workspaces {
+		if workspace.ID == newID {
+			return fmt.Errorf("workspace already exists: %s", newID)
+		}
+	}
+	changed := false
+	for _, workspace := range s.workspaces {
+		if workspace.ID == oldID {
+			workspace.ID = newID
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return fmt.Errorf("workspace not found: %s", oldID)
+	}
+	for _, session := range s.sessions {
+		if session.Workspace == oldID {
+			session.Workspace = newID
+		}
+	}
+	for _, task := range s.tasks {
+		if task.Workspace == oldID {
+			task.Workspace = newID
+		}
+	}
+	for _, tool := range s.tools {
+		if tool.Workspace == oldID {
+			tool.Workspace = newID
+		}
+	}
+	return s.saveLocked()
+}
+
 func (s *Store) saveLocked() error {
 	sessions := make([]*Session, 0, len(s.sessions))
 	for _, session := range s.sessions {

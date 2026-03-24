@@ -17,10 +17,13 @@ import (
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/agent"
+	"github.com/anyclaw/anyclaw/pkg/agentstore"
 	"github.com/anyclaw/anyclaw/pkg/channel"
+	"github.com/anyclaw/anyclaw/pkg/chat"
 	"github.com/anyclaw/anyclaw/pkg/config"
 	"github.com/anyclaw/anyclaw/pkg/plugin"
 	"github.com/anyclaw/anyclaw/pkg/runtime"
+	taskModule "github.com/anyclaw/anyclaw/pkg/task"
 	"github.com/anyclaw/anyclaw/pkg/tools"
 )
 
@@ -40,6 +43,9 @@ type Server struct {
 	router         *channel.Router
 	runtimePool    *RuntimePool
 	tasks          *TaskManager
+	taskModule     taskModule.TaskManager
+	chatModule     chat.ChatManager
+	storeModule    agentstore.StoreManager
 	approvals      *approvalManager
 	auth           *authMiddleware
 	rateLimit      *rateLimiter
@@ -100,6 +106,18 @@ func New(app *runtime.App) *Server {
 	}
 	server.approvals = newApprovalManager(store)
 	server.tasks = NewTaskManager(store, server.sessions, server.runtimePool, taskAppInfo{Name: app.Config.Agent.Name, WorkingDir: app.WorkingDir}, app.LLM, server.approvals)
+
+	if app.Config.Orchestrator.Enabled && app.Orchestrator != nil {
+		server.taskModule = taskModule.NewTaskManager(app.Orchestrator)
+		server.chatModule = chat.NewChatManager(app.Orchestrator)
+	} else {
+		server.chatModule = chat.NewChatManager(nil)
+	}
+
+	if sm, err := agentstore.NewStoreManager(app.WorkDir, app.ConfigPath); err == nil {
+		server.storeModule = sm
+	}
+
 	return server
 }
 
@@ -328,18 +346,60 @@ func defaultResourceIDs(workingDir string) (string, string, string) {
 	return "org-local", "project-local", workspaceID
 }
 
+func normalizeWorkspacePath(path string) string {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	if os.PathSeparator == '\\' {
+		return strings.ToLower(clean)
+	}
+	return clean
+}
+
 func (s *Server) ensureDefaultWorkspace() error {
 	orgID, projectID, workspaceID := defaultResourceIDs(s.app.WorkingDir)
-	if _, ok := s.store.GetWorkspace(workspaceID); ok {
-		return nil
-	}
 	if err := s.store.UpsertOrg(&Org{ID: orgID, Name: "Local Org"}); err != nil {
 		return err
 	}
 	if err := s.store.UpsertProject(&Project{ID: projectID, OrgID: orgID, Name: "Local Project"}); err != nil {
 		return err
 	}
-	return s.store.UpsertWorkspace(&Workspace{ID: workspaceID, ProjectID: projectID, Name: filepath.Base(s.app.WorkingDir), Path: s.app.WorkingDir})
+	desired := &Workspace{
+		ID:        workspaceID,
+		ProjectID: projectID,
+		Name:      filepath.Base(s.app.WorkingDir),
+		Path:      s.app.WorkingDir,
+	}
+	if existing, ok := s.store.GetWorkspace(workspaceID); ok {
+		if existing.ProjectID == desired.ProjectID &&
+			existing.Name == desired.Name &&
+			normalizeWorkspacePath(existing.Path) == normalizeWorkspacePath(desired.Path) {
+			return nil
+		}
+		existing.ProjectID = desired.ProjectID
+		existing.Name = desired.Name
+		existing.Path = desired.Path
+		return s.store.UpsertWorkspace(existing)
+	}
+	for _, existing := range s.store.ListWorkspaces() {
+		if existing.ProjectID != projectID {
+			continue
+		}
+		samePath := normalizeWorkspacePath(existing.Path) == normalizeWorkspacePath(desired.Path)
+		sameName := existing.Name == desired.Name
+		if !samePath && !sameName {
+			continue
+		}
+		if existing.ID != desired.ID {
+			if err := s.store.RebindWorkspaceID(existing.ID, desired.ID); err != nil {
+				return err
+			}
+		}
+		existing.ID = desired.ID
+		existing.ProjectID = desired.ProjectID
+		existing.Name = desired.Name
+		existing.Path = desired.Path
+		return s.store.UpsertWorkspace(existing)
+	}
+	return s.store.UpsertWorkspace(desired)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -410,6 +470,14 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/sessions/move-batch", s.wrap("/sessions/move-batch", requirePermission("sessions.write", s.handleMoveSessionsBatch)))
 	mux.HandleFunc("/tasks", s.wrap("/tasks", requirePermission("tasks.write", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.handleTasks))))
 	mux.HandleFunc("/tasks/", s.wrap("/tasks/", s.handleTaskByID))
+	mux.HandleFunc("/v2/tasks", s.wrap("/v2/tasks", requirePermission("tasks.write", s.handleV2Tasks)))
+	mux.HandleFunc("/v2/tasks/", s.wrap("/v2/tasks/", requirePermission("tasks.read", s.handleV2TaskByID)))
+	mux.HandleFunc("/v2/agents", s.wrap("/v2/agents", requirePermission("tasks.read", s.handleV2Agents)))
+	mux.HandleFunc("/v2/chat", s.wrap("/v2/chat", requirePermission("tasks.write", s.handleV2Chat)))
+	mux.HandleFunc("/v2/chat/sessions", s.wrap("/v2/chat/sessions", requirePermission("tasks.read", s.handleV2ChatSessions)))
+	mux.HandleFunc("/v2/chat/sessions/", s.wrap("/v2/chat/sessions/", requirePermission("tasks.read", s.handleV2ChatSessionByID)))
+	mux.HandleFunc("/v2/store", s.wrap("/v2/store", requirePermission("tasks.read", s.handleV2Store)))
+	mux.HandleFunc("/v2/store/", s.wrap("/v2/store/", requirePermission("tasks.read", s.handleV2StoreByID)))
 	mux.HandleFunc("/approvals", s.wrap("/approvals", requirePermission("approvals.read", s.handleApprovals)))
 	mux.HandleFunc("/approvals/", s.wrap("/approvals/", requirePermission("approvals.write", s.handleApprovalByID)))
 	mux.HandleFunc("/skills", s.wrap("/skills", requirePermission("skills.read", s.handleSkills)))
@@ -2312,6 +2380,11 @@ func verifySignature(secret string, body []byte, provided string) bool {
 }
 
 func StartDetached(app *runtime.App) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if _, err := Probe(ctx, runtime.GatewayURL(app.Config)); err == nil {
+		return fmt.Errorf("gateway already running at %s", runtime.GatewayURL(app.Config))
+	}
 	logPath := app.Config.Daemon.LogFile
 	if logPath == "" {
 		logPath = filepath.Join(app.WorkDir, "gateway.log")
@@ -2337,8 +2410,24 @@ func StartDetached(app *runtime.App) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	pidData := []byte(strconv.Itoa(cmd.Process.Pid))
-	return os.WriteFile(pidPath, pidData, 0o644)
+	startCtx, startCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer startCancel()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		probeCtx, probeCancel := context.WithTimeout(startCtx, time.Second)
+		_, err := Probe(probeCtx, runtime.GatewayURL(app.Config))
+		probeCancel()
+		if err == nil {
+			pidData := []byte(strconv.Itoa(cmd.Process.Pid))
+			return os.WriteFile(pidPath, pidData, 0o644)
+		}
+		select {
+		case <-startCtx.Done():
+			return fmt.Errorf("gateway daemon failed to start within 5s; see %s", logPath)
+		case <-ticker.C:
+		}
+	}
 }
 
 func StopDetached(app *runtime.App) error {
@@ -2359,6 +2448,12 @@ func StopDetached(app *runtime.App) error {
 		return err
 	}
 	if err := process.Kill(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, probeErr := Probe(ctx, runtime.GatewayURL(app.Config)); probeErr != nil {
+			_ = os.Remove(pidPath)
+			return nil
+		}
 		return err
 	}
 	_ = os.Remove(pidPath)
@@ -2658,4 +2753,294 @@ func writeSSEEvent(w http.ResponseWriter, event *Event) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) handleV2Agents(w http.ResponseWriter, r *http.Request) {
+	if s.taskModule == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task module not available"})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	agents := s.taskModule.ListAgents()
+	writeJSON(w, http.StatusOK, agents)
+}
+
+func (s *Server) handleV2Tasks(w http.ResponseWriter, r *http.Request) {
+	if s.taskModule == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task module not available"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		tasks := s.taskModule.ListTasks()
+		writeJSON(w, http.StatusOK, tasks)
+
+	case http.MethodPost:
+		var req struct {
+			Title          string   `json:"title"`
+			Input          string   `json:"input"`
+			Mode           string   `json:"mode"`
+			SelectedAgent  string   `json:"selected_agent"`
+			SelectedAgents []string `json:"selected_agents"`
+			Sync           bool     `json:"sync"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+			return
+		}
+
+		if strings.TrimSpace(req.Input) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "input is required"})
+			return
+		}
+
+		mode := taskModule.ExecutionMode(req.Mode)
+		if mode == "" {
+			mode = taskModule.ModeSingle
+		}
+		if mode != taskModule.ModeSingle && mode != taskModule.ModeMulti {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be 'single' or 'multi'"})
+			return
+		}
+
+		taskReq := taskModule.TaskRequest{
+			Title:          req.Title,
+			Input:          req.Input,
+			Mode:           mode,
+			SelectedAgent:  req.SelectedAgent,
+			SelectedAgents: req.SelectedAgents,
+		}
+
+		taskResp, err := s.taskModule.CreateTask(taskReq)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		if req.Sync {
+			result, err := s.taskModule.ExecuteTask(r.Context(), taskResp.ID)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+					"task":  result,
+					"error": err.Error(),
+				})
+				return
+			}
+			writeJSON(w, http.StatusOK, result)
+			return
+		}
+
+		go func() {
+			ctx := context.Background()
+			_, _ = s.taskModule.ExecuteTask(ctx, taskResp.ID)
+		}()
+
+		writeJSON(w, http.StatusAccepted, taskResp)
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleV2TaskByID(w http.ResponseWriter, r *http.Request) {
+	if s.taskModule == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task module not available"})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	taskID := strings.TrimPrefix(r.URL.Path, "/v2/tasks/")
+	if taskID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "task id required"})
+		return
+	}
+
+	taskResp, err := s.taskModule.GetTask(taskID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, taskResp)
+}
+
+func (s *Server) handleV2Chat(w http.ResponseWriter, r *http.Request) {
+	if s.chatModule == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chat not available"})
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var req chat.ChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	if strings.TrimSpace(req.AgentName) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_name is required"})
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
+		return
+	}
+
+	resp, err := s.chatModule.Chat(r.Context(), req)
+	if err != nil {
+		code := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			code = http.StatusNotFound
+		}
+		writeJSON(w, code, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleV2ChatSessions(w http.ResponseWriter, r *http.Request) {
+	if s.chatModule == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chat not available"})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	sessions := s.chatModule.ListSessions()
+	writeJSON(w, http.StatusOK, sessions)
+}
+
+func (s *Server) handleV2ChatSessionByID(w http.ResponseWriter, r *http.Request) {
+	if s.chatModule == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chat not available"})
+		return
+	}
+
+	sessionID := strings.TrimPrefix(r.URL.Path, "/v2/chat/sessions/")
+	if sessionID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session id required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		history, err := s.chatModule.GetSessionHistory(sessionID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, history)
+
+	case http.MethodDelete:
+		if err := s.chatModule.DeleteSession(sessionID); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleV2Store(w http.ResponseWriter, r *http.Request) {
+	if s.storeModule == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store not available"})
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	filter := agentstore.StoreFilter{
+		Category: r.URL.Query().Get("category"),
+		Tag:      r.URL.Query().Get("tag"),
+		Keyword:  r.URL.Query().Get("q"),
+	}
+
+	if installedStr := r.URL.Query().Get("installed"); installedStr != "" {
+		installed := installedStr == "true"
+		filter.Installed = &installed
+	}
+
+	packages := s.storeModule.List(filter)
+	writeJSON(w, http.StatusOK, packages)
+}
+
+func (s *Server) handleV2StoreByID(w http.ResponseWriter, r *http.Request) {
+	if s.storeModule == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "store not available"})
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/v2/store/")
+	if id == "" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"categories": s.storeModule.GetCategories(),
+			"tags":       s.storeModule.GetTags(),
+		})
+		return
+	}
+
+	parts := strings.SplitN(id, "/", 2)
+	pkgID := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+
+	switch {
+	case action == "install" && r.Method == http.MethodPost:
+		if err := s.storeModule.Install(pkgID); err != nil {
+			code := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "not found") {
+				code = http.StatusNotFound
+			}
+			writeJSON(w, code, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "installed", "id": pkgID})
+
+	case action == "uninstall" && r.Method == http.MethodPost:
+		if err := s.storeModule.Uninstall(pkgID); err != nil {
+			code := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "not found") {
+				code = http.StatusNotFound
+			}
+			writeJSON(w, code, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "uninstalled", "id": pkgID})
+
+	case action == "" && r.Method == http.MethodGet:
+		pkg, err := s.storeModule.Get(pkgID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, pkg)
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }

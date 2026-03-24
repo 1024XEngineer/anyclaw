@@ -829,6 +829,22 @@
       "action": "jobs.read",
       "target": "jobs",
       "timestamp": "2026-03-22T07:02:54.4788483Z"
+    },
+    {
+      "id": "aud_1774266465029195200",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-23T11:47:45.0291952Z"
+    },
+    {
+      "id": "aud_1774266468739637100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-23T11:47:48.7396371Z"
     }
   ],
   "orgs": [
@@ -850,12 +866,12 @@
   ],
   "workspaces": [
     {
-      "id": "ws-d--anyclaw-anyclaw-0-2-anyclaw-workflows-personal",
+      "id": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
       "project_id": "project-local",
       "name": "personal",
-      "path": "D:\\anyclaw\\anyclaw-0-2\\anyclaw\\workflows\\personal"
+      "path": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw\\workflows\\personal"
     }
   ],
   "jobs": [],
-  "updated": "2026-03-22T07:02:54.4788483Z"
+  "updated": "2026-03-23T11:47:48.7396371Z"
 }

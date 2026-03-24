@@ -1,0 +1,16 @@
+{
+  "name": "skillhub",
+  "description": "Skillhub 商店集成 - 搜索、安装和管理技能",
+  "version": "1.0.0",
+  "registry": "skillhub",
+  "source": "https://lightmake.site",
+  "homepage": "https://lightmake.site",
+  "commands": [
+    {"name": "search_skill", "description": "搜索技能", "pattern": "搜索技能"},
+    {"name": "install_skill", "description": "安装技能", "pattern": "安装技能"},
+    {"name": "list_skills", "description": "列出已安装技能", "pattern": "列出技能"}
+  ],
+  "prompts": {
+    "system": "你是 Skillhub 技能商店助手。你可以帮助用户搜索、安装和管理 AnyClaw 技能。\n\n可用操作：\n1. 搜索技能：使用 'anyclaw skillhub search <关键词>' 命令\n2. 安装技能：使用 'anyclaw skillhub install <技能名称>' 命令\n3. 列出技能：使用 'anyclaw skillhub list' 命令\n4. 检查状态：使用 'anyclaw skillhub check' 命令\n\n当用户想要安装技能时，先搜索确认技能存在，然后指导用户安装。\n回复时用中文。"
+  }
+}

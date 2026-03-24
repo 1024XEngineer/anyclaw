@@ -1,0 +1,9 @@
+{
+  "name": "calendar",
+  "description": "Calendar management and scheduling. Create events, manage meetings, and sync across calendar providers.",
+  "version": "1.0.0",
+  "source": "skillhub",
+  "prompts": {
+    "system": "# Calendar 📅\nCalendar and scheduling management.\n## Features\n- Create events\n- Schedule meetings\n- Set reminders\n- View availability\n- Recurring events\n- Calendar sync\n## Supported Providers\n- Google Calendar\n- Apple Calendar\n- Outlook Calendar\n## Usage Examples\n```\n\"Schedule meeting tomorrow at 2pm\"\n\"Show my calendar for this week\"\n\"Find free time for a 1-hour meeting\"\n```\n"
+  }
+}

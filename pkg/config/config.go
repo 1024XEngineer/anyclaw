@@ -2,22 +2,25 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
 )
 
 type Config struct {
-	LLM      LLMConfig      `json:"llm"`
-	Agent    AgentConfig    `json:"agent"`
-	Skills   SkillsConfig   `json:"skills"`
-	Memory   MemoryConfig   `json:"memory"`
-	Gateway  GatewayConfig  `json:"gateway"`
-	Daemon   DaemonConfig   `json:"daemon"`
-	Channels ChannelsConfig `json:"channels"`
-	Plugins  PluginsConfig  `json:"plugins"`
-	Sandbox  SandboxConfig  `json:"sandbox"`
-	Security SecurityConfig `json:"security"`
+	LLM          LLMConfig          `json:"llm"`
+	Agent        AgentConfig        `json:"agent"`
+	Skills       SkillsConfig       `json:"skills"`
+	Memory       MemoryConfig       `json:"memory"`
+	Gateway      GatewayConfig      `json:"gateway"`
+	Daemon       DaemonConfig       `json:"daemon"`
+	Channels     ChannelsConfig     `json:"channels"`
+	Plugins      PluginsConfig      `json:"plugins"`
+	Sandbox      SandboxConfig      `json:"sandbox"`
+	Security     SecurityConfig     `json:"security"`
+	Orchestrator OrchestratorConfig `json:"orchestrator"`
 }
 
 type LLMConfig struct {
@@ -57,6 +60,9 @@ type AgentProfile struct {
 	Description     string          `json:"description"`
 	Role            string          `json:"role,omitempty"`
 	Persona         string          `json:"persona,omitempty"`
+	Domain          string          `json:"domain,omitempty"`
+	Expertise       []string        `json:"expertise,omitempty"`
+	SystemPrompt    string          `json:"system_prompt,omitempty"`
 	WorkingDir      string          `json:"working_dir"`
 	PermissionLevel string          `json:"permission_level"`
 	DefaultModel    string          `json:"default_model,omitempty"`
@@ -200,6 +206,25 @@ type SecurityConfig struct {
 	CommandTimeoutSeconds    int            `json:"command_timeout_seconds"`
 }
 
+type OrchestratorConfig struct {
+	Enabled             bool             `json:"enabled"`
+	MaxConcurrentAgents int              `json:"max_concurrent_agents"`
+	MaxRetries          int              `json:"max_retries"`
+	TimeoutSeconds      int              `json:"timeout_seconds"`
+	EnableDecomposition bool             `json:"enable_decomposition"`
+	AgentNames          []string         `json:"agent_names,omitempty"`
+	SubAgents           []SubAgentConfig `json:"sub_agents,omitempty"`
+}
+
+type SubAgentConfig struct {
+	Name            string   `json:"name"`
+	Description     string   `json:"description"`
+	Personality     string   `json:"personality,omitempty"`
+	PrivateSkills   []string `json:"private_skills"`
+	PermissionLevel string   `json:"permission_level"`
+	WorkingDir      string   `json:"working_dir,omitempty"`
+}
+
 type SecurityUser struct {
 	Name                string   `json:"name"`
 	Token               string   `json:"token"`
@@ -241,13 +266,23 @@ type ChannelRoutingRule struct {
 func Load(path string) (*Config, error) {
 	cfg := DefaultConfig()
 
-	if data, err := os.ReadFile(path); err == nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to read config file %q: %w", path, err)
+		}
+	} else {
 		if err := json.Unmarshal(data, cfg); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse config file %q: %w", path, err)
 		}
 	}
 
 	applyEnvOverrides(cfg)
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
 }
 
@@ -340,7 +375,86 @@ func DefaultConfig() *Config {
 			DangerousCommandPatterns: []string{"rm -rf", "del /f", "format ", "mkfs", "shutdown", "reboot", "poweroff", "chmod 777", "takeown", "icacls", "git reset --hard"},
 			CommandTimeoutSeconds:    30,
 		},
+		Orchestrator: OrchestratorConfig{
+			Enabled:             false,
+			MaxConcurrentAgents: 4,
+			MaxRetries:          2,
+			TimeoutSeconds:      300,
+			EnableDecomposition: true,
+			SubAgents:           nil,
+		},
 	}
+}
+
+func (c *Config) Validate() error {
+	var errs []string
+
+	// Validate LLM config
+	if strings.TrimSpace(c.LLM.Provider) == "" {
+		errs = append(errs, "llm.provider is required")
+	}
+	if strings.TrimSpace(c.LLM.Model) == "" {
+		errs = append(errs, "llm.model is required")
+	}
+	if c.LLM.MaxTokens < 0 {
+		errs = append(errs, "llm.max_tokens must be >= 0")
+	}
+	if c.LLM.Temperature < 0 || c.LLM.Temperature > 2.0 {
+		errs = append(errs, "llm.temperature must be between 0.0 and 2.0")
+	}
+
+	// Validate Agent config
+	validPermLevels := map[string]bool{"full": true, "limited": true, "read-only": true}
+	if c.Agent.PermissionLevel != "" && !validPermLevels[c.Agent.PermissionLevel] {
+		errs = append(errs, fmt.Sprintf("agent.permission_level must be one of: full, limited, read-only (got %q)", c.Agent.PermissionLevel))
+	}
+
+	// Validate Gateway config
+	if c.Gateway.Port < 0 || c.Gateway.Port > 65535 {
+		errs = append(errs, fmt.Sprintf("gateway.port must be between 0 and 65535 (got %d)", c.Gateway.Port))
+	}
+	if c.Gateway.Bind != "" && c.Gateway.Bind != "loopback" && c.Gateway.Bind != "all" && net.ParseIP(c.Gateway.Bind) == nil {
+		errs = append(errs, fmt.Sprintf("gateway.bind must be 'loopback', 'all', or a valid IP address (got %q)", c.Gateway.Bind))
+	}
+	if c.Gateway.RuntimeMaxInstances < 0 {
+		errs = append(errs, fmt.Sprintf("gateway.runtime_max_instances must be >= 0 (got %d)", c.Gateway.RuntimeMaxInstances))
+	}
+	if c.Gateway.JobWorkerCount < 0 {
+		errs = append(errs, fmt.Sprintf("gateway.job_worker_count must be >= 0 (got %d)", c.Gateway.JobWorkerCount))
+	}
+
+	// Validate Memory config
+	if c.Memory.MaxHistory < 0 {
+		errs = append(errs, fmt.Sprintf("memory.max_history must be >= 0 (got %d)", c.Memory.MaxHistory))
+	}
+	validFormats := map[string]bool{"markdown": true, "json": true, "txt": true}
+	if c.Memory.Format != "" && !validFormats[c.Memory.Format] {
+		errs = append(errs, fmt.Sprintf("memory.format must be one of: markdown, json, txt (got %q)", c.Memory.Format))
+	}
+
+	// Validate Security config
+	if c.Security.RateLimitRPM < 0 {
+		errs = append(errs, fmt.Sprintf("security.rate_limit_rpm must be >= 0 (got %d)", c.Security.RateLimitRPM))
+	}
+	if c.Security.CommandTimeoutSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("security.command_timeout_seconds must be >= 0 (got %d)", c.Security.CommandTimeoutSeconds))
+	}
+
+	// Validate Plugins config
+	if c.Plugins.ExecTimeoutSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("plugins.exec_timeout_seconds must be >= 0 (got %d)", c.Plugins.ExecTimeoutSeconds))
+	}
+
+	// Validate Sandbox config
+	validBackends := map[string]bool{"local": true, "docker": true}
+	if c.Sandbox.Backend != "" && !validBackends[c.Sandbox.Backend] {
+		errs = append(errs, fmt.Sprintf("sandbox.backend must be one of: local, docker (got %q)", c.Sandbox.Backend))
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	return nil
 }
 
 func (c *Config) FindAgentProfile(name string) (AgentProfile, bool) {
@@ -396,6 +510,8 @@ func (c *Config) UpsertAgentProfile(profile AgentProfile) error {
 	profile.Description = strings.TrimSpace(profile.Description)
 	profile.Role = strings.TrimSpace(profile.Role)
 	profile.Persona = strings.TrimSpace(profile.Persona)
+	profile.Domain = strings.TrimSpace(profile.Domain)
+	profile.SystemPrompt = strings.TrimSpace(profile.SystemPrompt)
 	profile.WorkingDir = strings.TrimSpace(profile.WorkingDir)
 	profile.PermissionLevel = strings.TrimSpace(profile.PermissionLevel)
 	profile.DefaultModel = strings.TrimSpace(profile.DefaultModel)
@@ -416,6 +532,14 @@ func (c *Config) UpsertAgentProfile(profile AgentProfile) error {
 		}
 	}
 	profile.Personality.Traits = filteredTraits
+	filteredExpertise := make([]string, 0, len(profile.Expertise))
+	for _, e := range profile.Expertise {
+		e = strings.TrimSpace(e)
+		if e != "" {
+			filteredExpertise = append(filteredExpertise, e)
+		}
+	}
+	profile.Expertise = filteredExpertise
 	filteredSkills := make([]AgentSkillRef, 0, len(profile.Skills))
 	for _, skill := range profile.Skills {
 		skill.Name = strings.TrimSpace(skill.Name)

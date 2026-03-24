@@ -17,13 +17,16 @@ import (
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/agent"
+	"github.com/anyclaw/anyclaw/pkg/agentstore"
 	"github.com/anyclaw/anyclaw/pkg/audit"
+	"github.com/anyclaw/anyclaw/pkg/chat"
 	"github.com/anyclaw/anyclaw/pkg/config"
 	"github.com/anyclaw/anyclaw/pkg/gateway"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/routing"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
 	"github.com/anyclaw/anyclaw/pkg/skills"
+	taskModule "github.com/anyclaw/anyclaw/pkg/task"
 	"github.com/anyclaw/anyclaw/pkg/tools"
 	"github.com/anyclaw/anyclaw/pkg/ui"
 )
@@ -58,6 +61,11 @@ func run(ctx context.Context, args []string) error {
 		case "skill":
 			runSkillCommand()
 			return nil
+		case "skillhub":
+			runSkillhubCommand()
+			return nil
+		case "shell":
+			return runShellCommand(args[1:])
 		case "gateway":
 			return runGatewayCommand(ctx, args[1:])
 		case "plugin":
@@ -66,6 +74,12 @@ func run(ctx context.Context, args []string) error {
 			return runDoctorCommand(args[1:])
 		case "onboard":
 			return runOnboardCommand(args[1:])
+		case "agent":
+			return runAgentCommand(ctx, args[1:])
+		case "store":
+			return runStoreCommand(args[1:])
+		case "task":
+			return runTaskCommand(ctx, args[1:])
 		}
 	}
 
@@ -93,7 +107,7 @@ func runRootCommand(ctx context.Context, args []string) error {
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return fmt.Errorf("配置加载失败: %w", err)
 	}
 
 	if *showVersion {
@@ -129,9 +143,12 @@ func runRootCommand(ctx context.Context, args []string) error {
 		return cfg.Save(*configPath)
 	}
 
-	app, err := appRuntime.NewApp(*configPath)
+	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
+		ConfigPath: *configPath,
+		Progress:   bootProgress,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("启动失败: %w", err)
 	}
 
 	state := &RuntimeState{
@@ -147,10 +164,6 @@ func runRootCommand(ctx context.Context, args []string) error {
 	}
 	rebindBuiltins(state)
 
-	printSuccess("Agent ready!")
-	fmt.Printf("%sProvider: %s/%s\n", ui.Cyan.Sprint(""), app.Config.LLM.Provider, app.Config.LLM.Model)
-	fmt.Printf("%sMemory: %s\n", ui.Cyan.Sprint(""), app.WorkDir)
-	fmt.Printf("%sWorking Dir: %s\n", ui.Cyan.Sprint(""), app.WorkingDir)
 	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
 
 	message := strings.TrimSpace(strings.Join(fs.Args(), " "))
@@ -317,9 +330,12 @@ func runGatewayServer(ctx context.Context, args []string) error {
 		return err
 	}
 
-	app, err := appRuntime.NewApp(*configPath)
+	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
+		ConfigPath: *configPath,
+		Progress:   bootProgress,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("gateway bootstrap failed: %w", err)
 	}
 	if *host != "" {
 		app.Config.Gateway.Host = *host
@@ -329,6 +345,7 @@ func runGatewayServer(ctx context.Context, args []string) error {
 	}
 
 	server := gateway.New(app)
+	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
 	printSuccess("Gateway listening on %s", appRuntime.GatewayAddress(app.Config))
 	printInfo("Health: %s/healthz", appRuntime.GatewayURL(app.Config))
 	printInfo("Status: %s/status", appRuntime.GatewayURL(app.Config))
@@ -340,9 +357,12 @@ func runGatewayDaemon(args []string) error {
 		return fmt.Errorf("usage: anyclaw gateway daemon <start|stop>")
 	}
 	configPath := "anyclaw.json"
-	app, err := appRuntime.NewApp(configPath)
+	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
+		ConfigPath: configPath,
+		Progress:   bootProgress,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("daemon bootstrap failed: %w", err)
 	}
 	app.ConfigPath = configPath
 
@@ -600,6 +620,534 @@ func runOnboardCommand(args []string) error {
 	return nil
 }
 
+// ─── Agent Chat Command ───────────────────────────────────────────────────
+
+func runAgentCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		printAgentUsage()
+		return nil
+	}
+
+	switch args[0] {
+	case "chat":
+		return runAgentChat(ctx, args[1:])
+	case "list":
+		return runAgentList()
+	case "use":
+		return runAgentUse(args[1:])
+	default:
+		printAgentUsage()
+		return fmt.Errorf("unknown agent command: %s", args[0])
+	}
+}
+
+func printAgentUsage() {
+	fmt.Print(`AnyClaw 智能体命令:
+
+用法:
+  anyclaw agent list                列出所有可用智能体
+  anyclaw agent use <名称>          切换当前智能体
+  anyclaw agent chat [智能体名称]   与智能体对话
+  anyclaw agent chat --agent <名称> 与指定智能体对话
+
+示例:
+  anyclaw agent list
+  anyclaw agent use Go编码专家
+  anyclaw agent chat 健身教练
+  anyclaw agent chat --agent 论文助手
+`)
+}
+
+func runAgentList() error {
+	cfg, err := config.Load("anyclaw.json")
+	if err != nil {
+		return fmt.Errorf("配置加载失败: %w", err)
+	}
+
+	fmt.Printf("%s\n\n", ui.Bold.Sprint("可用智能体:"))
+	fmt.Printf("  %s当前: %s%s\n\n", ui.Dim.Sprint(""), cfg.Agent.Name, ui.Reset.Sprint(""))
+
+	if len(cfg.Agent.Profiles) == 0 {
+		fmt.Println("  (未配置智能体，请在 anyclaw.json 中添加 agent.profiles)")
+		return nil
+	}
+
+	for _, p := range cfg.Agent.Profiles {
+		status := ui.Dim.Sprint("○ 禁用")
+		if p.IsEnabled() {
+			status = ui.Green.Sprint("● 启用")
+		}
+		fmt.Printf("  %s %s\n", status, ui.Bold.Sprint(p.Name))
+		if p.Description != "" {
+			fmt.Printf("     %s\n", ui.Dim.Sprint(p.Description))
+		}
+		if p.Domain != "" {
+			fmt.Printf("     领域: %s", p.Domain)
+		}
+		if len(p.Expertise) > 0 {
+			fmt.Printf(" | 擅长: %s", strings.Join(p.Expertise, "、"))
+		}
+		if p.Domain != "" || len(p.Expertise) > 0 {
+			fmt.Println()
+		}
+		fmt.Println()
+	}
+	return nil
+}
+
+func runAgentUse(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("用法: anyclaw agent use <智能体名称>")
+	}
+	name := strings.Join(args, " ")
+
+	cfg, err := config.Load("anyclaw.json")
+	if err != nil {
+		return err
+	}
+
+	if !cfg.ApplyAgentProfile(name) {
+		// List available names for help
+		fmt.Fprintf(os.Stderr, "智能体不存在: %s\n\n可用智能体:\n", name)
+		for _, p := range cfg.Agent.Profiles {
+			fmt.Fprintf(os.Stderr, "  - %s\n", p.Name)
+		}
+		return fmt.Errorf("智能体不存在: %s", name)
+	}
+
+	if err := cfg.Save("anyclaw.json"); err != nil {
+		return err
+	}
+	printSuccess("已切换到智能体: %s", name)
+	return nil
+}
+
+func runAgentChat(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("agent chat", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	agentName := fs.String("agent", "", "智能体名称")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// If no --agent flag, use positional arg
+	if *agentName == "" && fs.NArg() > 0 {
+		*agentName = strings.Join(fs.Args(), " ")
+	}
+
+	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
+		ConfigPath: "anyclaw.json",
+		Progress:   func(ev appRuntime.BootEvent) {},
+	})
+	if err != nil {
+		return fmt.Errorf("启动失败: %w", err)
+	}
+
+	if app.Orchestrator == nil {
+		return fmt.Errorf("编排器未启用，请在 anyclaw.json 中设置 orchestrator.enabled=true")
+	}
+
+	agents := app.Orchestrator.ListAgents()
+	if len(agents) == 0 {
+		return fmt.Errorf("没有可用的智能体")
+	}
+
+	// If no agent specified, show selection
+	if *agentName == "" {
+		fmt.Printf("%s\n\n", ui.Bold.Sprint("选择智能体:"))
+		for i, a := range agents {
+			domain := ""
+			if a.Domain != "" {
+				domain = " [" + a.Domain + "]"
+			}
+			fmt.Printf("  %s %s%s\n", ui.Cyan.Sprint(fmt.Sprintf("%d.", i+1)), ui.Bold.Sprint(a.Name), ui.Dim.Sprint(domain))
+			fmt.Printf("     %s\n\n", a.Description)
+		}
+		fmt.Printf("%s输入智能体编号或名称: %s", ui.Green.Sprint(""), ui.Reset.Sprint(""))
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		// Try as number
+		if idx, err := strconv.Atoi(input); err == nil && idx >= 1 && idx <= len(agents) {
+			*agentName = agents[idx-1].Name
+		} else {
+			*agentName = input
+		}
+	}
+
+	// Validate agent exists
+	found := false
+	for _, a := range agents {
+		if a.Name == *agentName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("智能体不存在: %s", *agentName)
+	}
+
+	chatMgr := chat.NewChatManager(app.Orchestrator)
+	reader := bufio.NewReader(os.Stdin)
+	var sessionID string
+
+	fmt.Println()
+	printSuccess("正在与 [%s] 对话 (输入 /exit 退出, /clear 清除历史)", *agentName)
+	fmt.Println(ui.Dim.Sprint(strings.Repeat("─", 50)))
+	fmt.Println()
+
+	for {
+		fmt.Printf("%s%s > %s", ui.Dim.Sprint("["), ui.Bold.Sprint(*agentName), ui.Reset.Sprint(""))
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		input = strings.TrimSpace(input)
+		if input == "" {
+			continue
+		}
+		if input == "/exit" || input == "/quit" {
+			printSuccess("再见!")
+			break
+		}
+		if input == "/clear" {
+			sessionID = ""
+			printSuccess("对话已清除")
+			continue
+		}
+
+		resp, err := chatMgr.Chat(ctx, chat.ChatRequest{
+			AgentName: *agentName,
+			SessionID: sessionID,
+			Message:   input,
+		})
+		if err != nil {
+			printError("%v", err)
+			continue
+		}
+		sessionID = resp.SessionID
+		fmt.Printf("\n%s\n\n", ui.Bold.Sprint(resp.Message.Content))
+	}
+	return nil
+}
+
+// ─── Store Command ────────────────────────────────────────────────────────
+
+func runStoreCommand(args []string) error {
+	if len(args) == 0 {
+		printStoreUsage()
+		return nil
+	}
+
+	switch args[0] {
+	case "list":
+		return runStoreList(args[1:])
+	case "search":
+		return runStoreSearch(args[1:])
+	case "info":
+		return runStoreInfo(args[1:])
+	case "install":
+		return runStoreInstall(args[1:])
+	case "uninstall":
+		return runStoreUninstall(args[1:])
+	default:
+		printStoreUsage()
+		return fmt.Errorf("unknown store command: %s", args[0])
+	}
+}
+
+func printStoreUsage() {
+	fmt.Print(`AnyClaw ????:
+
+??:
+  anyclaw store list [??]          ??????
+  anyclaw store search <???>      ????/???
+  anyclaw store info <ID>            ??????
+  anyclaw store install <ID>         ???????
+  anyclaw store uninstall <ID>       ???????
+??:
+  anyclaw store list
+  anyclaw store list ????
+  anyclaw store search ???
+  anyclaw store info xiaohongshu-auto-poster
+  anyclaw store install xiaohongshu-auto-poster
+`)
+}
+func runStoreList(args []string) error {
+	sm, err := agentstore.NewStoreManager(".anyclaw", "anyclaw.json")
+	if err != nil {
+		return err
+	}
+
+	filter := agentstore.StoreFilter{}
+	if len(args) > 0 {
+		filter.Category = args[0]
+	}
+
+	packages := sm.List(filter)
+	if len(packages) == 0 {
+		fmt.Println("?????????????")
+		return nil
+	}
+
+	fmt.Println(ui.Bold.Sprint(fmt.Sprintf("???? (%d ??????):", len(packages))))
+	fmt.Println()
+	for _, pkg := range packages {
+		icon := pkg.Icon
+		if icon == "" {
+			icon = "??"
+		}
+		installed := ""
+		if sm.IsInstalled(pkg.ID) {
+			installed = ui.Green.Sprint(" [???]")
+		}
+		fmt.Println("  " + icon + " " + ui.Bold.Sprint(pkg.DisplayName) + installed)
+		fmt.Println("     " + ui.Dim.Sprint(pkg.Description))
+		fmt.Println(fmt.Sprintf("     ??: %s | ??: %.1f (%d?) | ??: %d", pkg.Category, pkg.Rating, pkg.RatingCount, pkg.Downloads))
+		fmt.Println("     " + ui.Dim.Sprint(fmt.Sprintf("ID: %s", pkg.ID)))
+		fmt.Println()
+	}
+	return nil
+}
+func runStoreSearch(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("??: anyclaw store search <???>")
+	}
+	keyword := strings.Join(args, " ")
+
+	sm, err := agentstore.NewStoreManager(".anyclaw", "anyclaw.json")
+	if err != nil {
+		return err
+	}
+
+	results := sm.Search(keyword)
+	if len(results) == 0 {
+		fmt.Println(fmt.Sprintf("?????? %q ???????", keyword))
+		return nil
+	}
+
+	fmt.Println(ui.Bold.Sprint(fmt.Sprintf("???? (%d):", len(results))))
+	fmt.Println()
+	for _, pkg := range results {
+		icon := pkg.Icon
+		if icon == "" {
+			icon = "??"
+		}
+		installed := ""
+		if sm.IsInstalled(pkg.ID) {
+			installed = ui.Green.Sprint(" [???]")
+		}
+		fmt.Println("  " + icon + " " + ui.Bold.Sprint(pkg.DisplayName) + installed)
+		fmt.Println("     " + ui.Dim.Sprint(pkg.Description))
+		fmt.Println("     " + ui.Dim.Sprint(fmt.Sprintf("??: anyclaw store install %s", pkg.ID)))
+		fmt.Println()
+	}
+	return nil
+}
+func runStoreInfo(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("??: anyclaw store info <ID>")
+	}
+
+	sm, err := agentstore.NewStoreManager(".anyclaw", "anyclaw.json")
+	if err != nil {
+		return err
+	}
+
+	pkg, err := sm.Get(args[0])
+	if err != nil {
+		return err
+	}
+
+	icon := pkg.Icon
+	if icon == "" {
+		icon = "??"
+	}
+
+	fmt.Println(icon + " " + ui.Bold.Sprint(pkg.DisplayName))
+	fmt.Println()
+	fmt.Println(fmt.Sprintf("  ID:          %s", pkg.ID))
+	fmt.Println(fmt.Sprintf("  ??:        %s", pkg.Description))
+	fmt.Println(fmt.Sprintf("  ??:        %s", pkg.Author))
+	fmt.Println(fmt.Sprintf("  ??:        %s", pkg.Version))
+	fmt.Println(fmt.Sprintf("  ??:        %s", pkg.Category))
+	fmt.Println(fmt.Sprintf("  ??:        %s", strings.Join(pkg.Tags, ", ")))
+	fmt.Println(fmt.Sprintf("  ??:        %s", pkg.Domain))
+	fmt.Println(fmt.Sprintf("  ??:        %s", strings.Join(pkg.Expertise, "?")))
+	fmt.Println(fmt.Sprintf("  ??:        %s", strings.Join(pkg.Skills, ", ")))
+	fmt.Println(fmt.Sprintf("  ??:        %s", pkg.Permission))
+	fmt.Println(fmt.Sprintf("  ??:        %.1f (%d?)", pkg.Rating, pkg.RatingCount))
+	fmt.Println(fmt.Sprintf("  ???:      %d", pkg.Downloads))
+	fmt.Println(fmt.Sprintf("  ??:        %s", pkg.Tone))
+	fmt.Println(fmt.Sprintf("  ??:        %s", pkg.Style))
+	fmt.Println()
+	fmt.Println("  ?????:")
+	fmt.Println("    " + ui.Dim.Sprint(pkg.SystemPrompt))
+	fmt.Println()
+	if sm.IsInstalled(pkg.ID) {
+		fmt.Println("  " + ui.Green.Sprint("???"))
+	} else {
+		fmt.Println("  " + ui.Dim.Sprint(fmt.Sprintf("??: anyclaw store install %s", pkg.ID)))
+	}
+	return nil
+}
+func runStoreInstall(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("??: anyclaw store install <ID>")
+	}
+
+	sm, err := agentstore.NewStoreManager(".anyclaw", "anyclaw.json")
+	if err != nil {
+		return err
+	}
+
+	id := args[0]
+	if sm.IsInstalled(id) {
+		printInfo("????????: %s", id)
+		return nil
+	}
+
+	if err := sm.Install(id); err != nil {
+		return err
+	}
+
+	pkg, _ := sm.Get(id)
+	if pkg != nil {
+		printSuccess("????????: %s (%s)", pkg.DisplayName, id)
+	} else {
+		printSuccess("????????: %s", id)
+	}
+	return nil
+}
+func runStoreUninstall(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("??: anyclaw store uninstall <ID>")
+	}
+
+	sm, err := agentstore.NewStoreManager(".anyclaw", "anyclaw.json")
+	if err != nil {
+		return err
+	}
+
+	if err := sm.Uninstall(args[0]); err != nil {
+		return err
+	}
+	printSuccess("????????: %s", args[0])
+	return nil
+}
+func runTaskCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		printTaskUsage()
+		return nil
+	}
+
+	switch args[0] {
+	case "run":
+		return runTaskRun(ctx, args[1:])
+	case "list":
+		return runTaskList()
+	default:
+		printTaskUsage()
+		return fmt.Errorf("unknown task command: %s", args[0])
+	}
+}
+
+func printTaskUsage() {
+	fmt.Print(`AnyClaw 任务命令:
+
+用法:
+  anyclaw task run <任务描述>              单智能体执行
+  anyclaw task run --multi <任务描述>      多智能体协作执行
+  anyclaw task run --agent <名称> <描述>   指定智能体执行
+  anyclaw task list                       列出任务
+
+示例:
+  anyclaw task run "帮我写一个Go HTTP服务器"
+  anyclaw task run --agent Go编码专家 "写一个排序算法"
+  anyclaw task run --multi "帮我写一篇关于AI的英文论文"
+`)
+}
+
+func runTaskRun(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("task run", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	multi := fs.Bool("multi", false, "多智能体协作模式")
+	agentName := fs.String("agent", "", "指定智能体")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	input := strings.Join(fs.Args(), " ")
+	if input == "" {
+		return fmt.Errorf("请提供任务描述")
+	}
+
+	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
+		ConfigPath: "anyclaw.json",
+		Progress:   func(ev appRuntime.BootEvent) {},
+	})
+	if err != nil {
+		return fmt.Errorf("启动失败: %w", err)
+	}
+
+	if app.Orchestrator == nil {
+		return fmt.Errorf("编排器未启用，请在 anyclaw.json 中设置 orchestrator.enabled=true")
+	}
+
+	taskMgr := taskModule.NewTaskManager(app.Orchestrator)
+
+	mode := taskModule.ModeSingle
+	if *multi {
+		mode = taskModule.ModeMulti
+	}
+
+	req := taskModule.TaskRequest{
+		Input:         input,
+		Mode:          mode,
+		SelectedAgent: *agentName,
+	}
+
+	if *multi {
+		fmt.Printf("%s\n", ui.Bold.Sprint("多智能体协作模式"))
+	} else if *agentName != "" {
+		fmt.Printf("%s 智能体: %s\n", ui.Bold.Sprint("单智能体模式"), *agentName)
+	} else {
+		fmt.Printf("%s\n", ui.Bold.Sprint("单智能体模式"))
+	}
+	fmt.Printf("任务: %s\n\n", input)
+
+	task, err := taskMgr.CreateTask(req)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%s 执行中...\n\n", ui.Cyan.Sprint("▸"))
+	result, err := taskMgr.ExecuteTask(ctx, task.ID)
+	if err != nil {
+		// Still show partial results
+		if result != nil && result.Output != "" {
+			fmt.Printf("%s\n\n", result.Output)
+		}
+		printError("%v", err)
+		return nil
+	}
+
+	fmt.Printf("%s\n", result.Output)
+	fmt.Printf("\n%s 耗时: %s\n", ui.Dim.Sprint("⏱"), result.Duration)
+	return nil
+}
+
+func runTaskList() error {
+	sm, err := agentstore.NewStoreManager(".anyclaw", "anyclaw.json")
+	if err != nil {
+		_ = sm
+	}
+	fmt.Println("任务列表功能需要连接到运行中的 gateway")
+	fmt.Println("请使用: anyclaw gateway run")
+	return nil
+}
+
 func printGatewayUsage() {
 	fmt.Print(`AnyClaw gateway commands:
 
@@ -628,6 +1176,25 @@ func printSuccess(format string, args ...any) {
 
 func printInfo(format string, args ...any) {
 	fmt.Printf("%s\n", ui.Warning.Sprint("ℹ ")+fmt.Sprintf(format, args...))
+}
+
+func bootProgress(ev appRuntime.BootEvent) {
+	switch ev.Status {
+	case "start":
+		fmt.Printf("  %s %-12s %s", ui.Cyan.Sprint("▸"), ui.Dim.Sprint(string(ev.Phase)), ev.Message)
+	case "ok":
+		fmt.Printf("\r  %s %-12s %s %s\n", ui.Green.Sprint("✓"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
+	case "warn":
+		fmt.Printf("\r  %s %-12s %s %s\n", ui.Yellow.Sprint("⚠"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
+	case "skip":
+		fmt.Printf("\r  %s %-12s %s %s\n", ui.Dim.Sprint("○"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
+	case "fail":
+		errMsg := ""
+		if ev.Err != nil {
+			errMsg = ": " + ev.Err.Error()
+		}
+		fmt.Printf("\r  %s %-12s %s%s %s\n", ui.Red.Sprint("✗"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, errMsg, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
+	}
 }
 
 func runSetupWizard(cfg *config.Config) {
@@ -725,14 +1292,22 @@ func runInteractive(ctx context.Context, state *RuntimeState) {
 	fmt.Println()
 	fmt.Println(ui.Dim.Sprint(strings.Repeat("─", 50)))
 	fmt.Printf("%s\n", ui.Bold.Sprint("交互模式命令:"))
-	fmt.Println("  /exit, /quit    - 退出")
-	fmt.Println("  /clear          - 清除对话")
-	fmt.Println("  /memory         - 查看记忆")
-	fmt.Println("  /skills         - 查看技能")
-	fmt.Println("  /tools          - 查看工具")
-	fmt.Println("  /provider       - 查看提供商")
-	fmt.Println("  /set           - 修改设置")
-	fmt.Println("  /help           - 显示帮助")
+	fmt.Println("  /exit, /quit, /q   - 退出程序")
+	fmt.Println("  /clear             - 清除对话历史")
+	fmt.Println("  /memory            - 查看记忆内容")
+	fmt.Println("  /skills            - 查看可用技能")
+	fmt.Println("  /tools             - 查看可用工具")
+	fmt.Println("  /provider          - 显示当前提供商/模型")
+	fmt.Println("  /providers         - 显示可用提供商")
+	fmt.Println("  /models <名称>     - 显示提供商模型")
+	fmt.Println("  /agents            - 显示 Agent 配置")
+	fmt.Println("  /agent use <名称>  - 切换 Agent")
+	fmt.Println("  /audit             - 查看最近审计日志")
+	fmt.Println("  /set provider <值> - 切换 LLM 提供商")
+	fmt.Println("  /set model <值>    - 切换模型")
+	fmt.Println("  /set apikey <值>   - 设置 API 密钥")
+	fmt.Println("  /set temp <值>     - 设置温度 (0.0-2.0)")
+	fmt.Println("  /help, /?          - 显示帮助")
 	fmt.Println(ui.Dim.Sprint(strings.Repeat("─", 50)))
 	fmt.Println()
 
@@ -862,9 +1437,16 @@ func switchAgentProfile(state *RuntimeState, name string) error {
 	if err := state.cfg.Save(state.configPath); err != nil {
 		return err
 	}
-	app, err := appRuntime.NewApp(state.configPath)
+	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
+		ConfigPath: state.configPath,
+		Progress: func(ev appRuntime.BootEvent) {
+			if ev.Status == "fail" {
+				printError("%s: %v", ev.Message, ev.Err)
+			}
+		},
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("切换 agent 失败: %w", err)
 	}
 	history := state.agent.GetHistory()
 	state.agent = app.Agent
@@ -890,21 +1472,21 @@ func handleCommand(ctx context.Context, state *RuntimeState, input string) bool 
 	case cmd == "/help", cmd == "/?":
 		fmt.Println()
 		fmt.Printf("%s\n", ui.Bold.Sprint("可用命令:"))
-		fmt.Println("  /exit, /quit    - 退出程序")
-		fmt.Println("  /clear          - 清除对话历史")
-		fmt.Println("  /memory         - 查看记忆内容")
-		fmt.Println("  /skills         - 查看可用技能")
-		fmt.Println("  /tools          - 查看可用工具")
-		fmt.Println("  /provider       - 显示当前提供商/模型")
-		fmt.Println("  /agents         - 显示 Agent 配置")
-		fmt.Println("  /agent use <名称> - 切换 Agent")
-		fmt.Println("  /audit          - 查看最近审计日志")
-		fmt.Println("  /set provider   - 切换 LLM 提供商")
-		fmt.Println("  /set model     - 切换模型")
-		fmt.Println("  /set apikey    - 设置 API 密钥")
-		fmt.Println("  /set temp      - 设置温度 (0.0-2.0)")
-		fmt.Println("  /providers      - 显示可用提供商")
-		fmt.Println("  /models <名称>  - 显示提供商模型")
+		fmt.Println("  /exit, /quit, /q   - 退出程序")
+		fmt.Println("  /clear             - 清除对话历史")
+		fmt.Println("  /memory            - 查看记忆内容")
+		fmt.Println("  /skills            - 查看可用技能")
+		fmt.Println("  /tools             - 查看可用工具")
+		fmt.Println("  /provider          - 显示当前提供商/模型")
+		fmt.Println("  /providers         - 显示可用提供商")
+		fmt.Println("  /models <名称>     - 显示提供商模型")
+		fmt.Println("  /agents            - 显示 Agent 配置")
+		fmt.Println("  /agent use <名称>  - 切换 Agent")
+		fmt.Println("  /audit             - 查看最近审计日志")
+		fmt.Println("  /set provider <值> - 切换 LLM 提供商")
+		fmt.Println("  /set model <值>    - 切换模型")
+		fmt.Println("  /set apikey <值>   - 设置 API 密钥")
+		fmt.Println("  /set temp <值>     - 设置温度 (0.0-2.0)")
 		return false
 
 	case cmd == "/clear":
@@ -1159,6 +1741,151 @@ func printSkillUsage() {
   anyclaw skill install coder
   anyclaw skill list
 `)
+}
+
+func runSkillhubCommand() {
+	if len(os.Args) < 2 {
+		printSkillhubUsage()
+		return
+	}
+
+	args := os.Args[2:]
+	if len(args) == 0 {
+		printSkillhubUsage()
+		return
+	}
+
+	switch args[0] {
+	case "search":
+		query := ""
+		if len(args) > 1 {
+			query = strings.Join(args[1:], " ")
+		}
+		searchSkillhubFromCLI(query)
+	case "install":
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "用法: anyclaw skillhub install <名称>\n")
+			os.Exit(1)
+		}
+		installSkillhubFromCLI(args[1])
+	case "list":
+		listSkillhubSkills()
+	case "check":
+		checkSkillhubCLI()
+	default:
+		fmt.Fprintf(os.Stderr, "未知 Skillhub 命令: %s\n", args[0])
+		printSkillhubUsage()
+		os.Exit(1)
+	}
+}
+
+func printSkillhubUsage() {
+	fmt.Print(`AnyClaw Skillhub 商店:
+
+用法:
+  anyclaw skillhub search <关键词>   搜索 Skillhub 技能
+  anyclaw skillhub install <名称>    安装 Skillhub 技能
+  anyclaw skillhub list              列出已安装的技能
+  anyclaw skillhub check             查看 Skillhub 状态
+
+示例:
+  anyclaw skillhub search calendar
+  anyclaw skillhub install calendar
+  anyclaw skillhub list
+`)
+}
+
+func searchSkillhubFromCLI(query string) {
+	fmt.Printf("%s在 Skillhub 搜索: %s\n", ui.Cyan.Sprint("❯"), query)
+	fmt.Println(ui.Dim.Sprint(strings.Repeat("─", 50)))
+
+	ctx := context.Background()
+	results, err := skills.SearchSkillhub(ctx, query, 10)
+	if err != nil {
+		printError("搜索失败: %v", err)
+		return
+	}
+
+	if len(results) == 0 {
+		printInfo("没有找到相关技能")
+		return
+	}
+
+	fmt.Printf("%s 找到 %d 个技能\n\n", ui.Bold.Sprint("✓"), len(results))
+
+	for i, r := range results {
+		fullName := r.FullName
+		if fullName == "" {
+			fullName = r.Name
+		}
+		desc := r.Description
+		if desc == "" {
+			desc = "无描述"
+		}
+
+		fmt.Printf("%s %s\n", ui.Bold.Sprint(fmt.Sprintf("%d.", i+1)), ui.Green.Sprint(fullName))
+		fmt.Printf("   %s\n", desc)
+		if r.Category != "" {
+			fmt.Printf("   分类: %s\n", r.Category)
+		}
+		fmt.Printf("   %s\n\n", ui.Dim.Sprint(fmt.Sprintf("安装: anyclaw skillhub install %s", r.Name)))
+	}
+
+	fmt.Println(ui.Dim.Sprint(strings.Repeat("─", 50)))
+}
+
+func installSkillhubFromCLI(skillName string) {
+	fmt.Printf("%s正在安装 Skillhub 技能: %s\n", ui.Cyan.Sprint("❯"), skillName)
+
+	ctx := context.Background()
+	skillsDir := "skills"
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		printError("创建技能目录失败: %v", err)
+		return
+	}
+
+	if err := skills.InstallSkillhubSkill(ctx, skillName, skillsDir); err != nil {
+		printError("安装失败: %v", err)
+		return
+	}
+
+	printSuccess("技能安装成功: %s", skillName)
+	printInfo("请重启 AnyClaw 以加载新技能")
+}
+
+func listSkillhubSkills() {
+	entries, err := os.ReadDir("skills")
+	if err != nil {
+		printInfo("没有已安装的技能")
+		return
+	}
+
+	var skillList []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			skillJSON := filepath.Join("skills", entry.Name(), "skill.json")
+			if _, err := os.Stat(skillJSON); err == nil {
+				skillList = append(skillList, entry.Name())
+			}
+		}
+	}
+
+	if len(skillList) == 0 {
+		printInfo("没有已安装的技能")
+		return
+	}
+
+	fmt.Printf("%s\n\n", ui.Bold.Sprint("已安装的技能:"))
+	for _, skill := range skillList {
+		fmt.Printf("  %s %s\n", ui.Green.Sprint("●"), skill)
+	}
+}
+
+func checkSkillhubCLI() {
+	printSuccess("Skillhub 已集成到 AnyClaw")
+	printInfo("使用 'anyclaw skillhub search <关键词>' 搜索技能")
+	printInfo("使用 'anyclaw skillhub install <名称>' 安装技能")
+	printInfo("使用 'anyclaw skillhub list' 列出已安装技能")
 }
 
 func searchSkillsFromHub(query string) {
