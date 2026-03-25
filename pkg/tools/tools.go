@@ -14,7 +14,9 @@ type DangerousCommandConfirmer func(command string) bool
 type BuiltinOptions struct {
 	WorkingDir              string
 	PermissionLevel         string
+	ExecutionMode           string
 	DangerousPatterns       []string
+	ProtectedPaths          []string
 	CommandTimeoutSeconds   int
 	ConfirmDangerousCommand DangerousCommandConfirmer
 	AuditLogger             AuditLogger
@@ -100,6 +102,7 @@ func (r *Registry) List() []ToolInfo {
 func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 	RegisterFileTools(r, opts)
 	RegisterWebTools(r, opts)
+	RegisterDesktopTools(r, opts)
 }
 
 func RegisterFileTools(r *Registry, opts BuiltinOptions) {
@@ -134,7 +137,7 @@ func RegisterFileTools(r *Registry, opts BuiltinOptions) {
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "write_file", input, func(ctx context.Context, input map[string]any) (string, error) {
-				return WriteFileToolWithCwd(ctx, input, workingDir, opts.PermissionLevel)
+				return WriteFileToolWithPolicy(ctx, input, workingDir, opts)
 			})(ctx, input)
 		},
 	)
@@ -182,6 +185,7 @@ func RegisterFileTools(r *Registry, opts BuiltinOptions) {
 			"properties": map[string]any{
 				"command": map[string]string{"type": "string", "description": "Shell command to execute"},
 				"cwd":     map[string]string{"type": "string", "description": "Optional working directory override"},
+				"shell":   map[string]string{"type": "string", "description": "Optional shell: auto, cmd, powershell, pwsh, sh, or bash"},
 			},
 			"required": []string{"command"},
 		},
@@ -504,6 +508,100 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
 			return BrowserTabCloseTool(ctx, input)
+		},
+	)
+}
+
+func RegisterDesktopTools(r *Registry, opts BuiltinOptions) {
+	r.RegisterTool(
+		"desktop_open",
+		"Open an application, URL, or file on the desktop host",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"target": map[string]string{"type": "string", "description": "Application path/name, URL, or file path"},
+				"kind":   map[string]string{"type": "string", "description": "Optional kind: app, url, or file"},
+			},
+			"required": []string{"target"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_open", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopOpenTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_type",
+		"Type text into the active desktop window",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text": map[string]string{"type": "string", "description": "Text to send to the active window"},
+			},
+			"required": []string{"text"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_type", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopTypeTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_hotkey",
+		"Send a desktop hotkey chord to the active window",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"keys": map[string]any{
+					"type":        "array",
+					"description": "List of keys, e.g. [\"ctrl\", \"s\"]",
+					"items":       map[string]string{"type": "string"},
+				},
+			},
+			"required": []string{"keys"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_hotkey", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopHotkeyTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_click",
+		"Click a desktop screen coordinate on the host",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"x":      map[string]string{"type": "number", "description": "Screen X coordinate"},
+				"y":      map[string]string{"type": "number", "description": "Screen Y coordinate"},
+				"button": map[string]string{"type": "string", "description": "Optional mouse button: left, right, middle"},
+			},
+			"required": []string{"x", "y"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_click", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopClickTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_screenshot",
+		"Capture a screenshot of the desktop and save it to a file",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]string{"type": "string", "description": "Destination PNG path inside the working directory"},
+			},
+			"required": []string{"path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_screenshot", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopScreenshotTool(ctx, input, opts)
+			})(ctx, input)
 		},
 	)
 }

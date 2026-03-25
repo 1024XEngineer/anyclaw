@@ -867,7 +867,7 @@ func NewSessionManager(store *Store, agent SessionAgent) *SessionManager {
 		store: store,
 		agent: agent,
 		nextID: func() string {
-			return fmt.Sprintf("sess_%d", time.Now().UnixMilli())
+			return uniqueID("sess")
 		},
 		nowFunc: func() time.Time { return time.Now().UTC() },
 	}

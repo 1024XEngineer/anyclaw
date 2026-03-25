@@ -71,7 +71,7 @@ func NewTaskManager(store *Store, sessions *SessionManager, runtimePool *Runtime
 		planner:     planner,
 		approvals:   approvals,
 		nextID: func(prefix string) string {
-			return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+			return uniqueID(prefix)
 		},
 		nowFunc: func() time.Time {
 			return time.Now().UTC()
@@ -137,7 +137,7 @@ func (m *TaskManager) Steps(taskID string) []*TaskStep {
 	return m.store.ListTaskSteps(taskID)
 }
 
-func (m *TaskManager) MarkRejected(taskID string, reason string) error {
+func (m *TaskManager) MarkRejected(taskID string, stepIndex int, reason string) error {
 	task, ok := m.store.GetTask(taskID)
 	if !ok {
 		return fmt.Errorf("task not found: %s", taskID)
@@ -152,11 +152,22 @@ func (m *TaskManager) MarkRejected(taskID string, reason string) error {
 	if err := m.store.UpdateTask(task); err != nil {
 		return err
 	}
+	m.updateSessionPresence(task.SessionID, "idle", false)
 	steps := m.store.ListTaskSteps(task.ID)
+	failedStep := stepIndex
+	if failedStep <= 0 {
+		failedStep = 2
+	}
 	for i, step := range steps {
 		status := "skipped"
-		if i == 1 {
+		if step.Index == failedStep {
 			status = "failed"
+		} else if step.Index < failedStep {
+			if step.Status == "completed" || (i == 0 && step.Status == "pending") {
+				status = "completed"
+			} else if strings.TrimSpace(step.Status) != "" && step.Status != "pending" {
+				status = step.Status
+			}
 		}
 		_ = m.setStepStatus(task.ID, step.Index, status, "", "", reason)
 	}
@@ -222,8 +233,10 @@ func (m *TaskManager) Execute(ctx context.Context, taskID string) (*TaskExecutio
 	}
 	if approvalErr := m.awaitApprovalsIfNeeded(task, session, app.Config); approvalErr != nil {
 		if errors.Is(approvalErr, ErrTaskWaitingApproval) {
+			m.updateSessionPresence(session.ID, "waiting_approval", false)
 			return &TaskExecutionResult{Task: task, Session: session}, approvalErr
 		}
+		m.updateSessionPresence(session.ID, "idle", false)
 		_ = m.failTask(task, approvalErr)
 		return nil, approvalErr
 	}
@@ -233,11 +246,17 @@ func (m *TaskManager) Execute(ctx context.Context, taskID string) (*TaskExecutio
 	execCtx = agent.WithToolApprovalHook(execCtx, m.toolApprovalHook(task, session, app.Config))
 	response, err := app.Agent.Run(execCtx, task.Input)
 	if err != nil {
+		if errors.Is(err, ErrTaskWaitingApproval) {
+			m.updateSessionPresence(session.ID, "waiting_approval", false)
+			return &TaskExecutionResult{Task: task, Session: session}, err
+		}
+		m.updateSessionPresence(session.ID, "idle", false)
 		_ = m.failTask(task, err)
 		return nil, err
 	}
 	updatedSession, err := m.sessions.AddExchange(session.ID, task.Input, response)
 	if err != nil {
+		m.updateSessionPresence(session.ID, "idle", false)
 		_ = m.failTask(task, err)
 		return nil, err
 	}
@@ -288,6 +307,7 @@ func (m *TaskManager) awaitApprovalsIfNeeded(task *Task, session *Session, cfg *
 			task.LastUpdatedAt = m.nowFunc()
 			_ = m.store.UpdateTask(task)
 			_ = m.setStepStatus(task.ID, 2, "running", task.Input, "Approval granted. Executing planned work.", "")
+			m.updateSessionPresence(session.ID, "typing", true)
 			return nil
 		case "rejected":
 			return fmt.Errorf("task execution rejected by approver")
@@ -296,6 +316,7 @@ func (m *TaskManager) awaitApprovalsIfNeeded(task *Task, session *Session, cfg *
 			task.LastUpdatedAt = m.nowFunc()
 			_ = m.store.UpdateTask(task)
 			_ = m.setStepStatus(task.ID, 2, "waiting_approval", task.Input, "Awaiting approval before executing planned work.", "")
+			m.updateSessionPresence(session.ID, "waiting_approval", false)
 			return ErrTaskWaitingApproval
 		}
 	}
@@ -316,6 +337,7 @@ func (m *TaskManager) awaitApprovalsIfNeeded(task *Task, session *Session, cfg *
 		return err
 	}
 	_ = m.setStepStatus(task.ID, 2, "waiting_approval", task.Input, "Awaiting approval before executing planned work.", "")
+	m.updateSessionPresence(session.ID, "waiting_approval", false)
 	return ErrTaskWaitingApproval
 }
 
@@ -342,6 +364,7 @@ func (m *TaskManager) toolApprovalHook(task *Task, session *Session, cfg *config
 				task.LastUpdatedAt = m.nowFunc()
 				_ = m.store.UpdateTask(task)
 				_ = m.setStepStatus(task.ID, 3, "waiting_approval", "", fmt.Sprintf("Awaiting approval for tool %s.", tc.Name), "")
+				m.updateSessionPresence(session.ID, "waiting_approval", false)
 				return ErrTaskWaitingApproval
 			}
 		}
@@ -359,6 +382,7 @@ func (m *TaskManager) toolApprovalHook(task *Task, session *Session, cfg *config
 		task.LastUpdatedAt = m.nowFunc()
 		_ = m.store.UpdateTask(task)
 		_ = m.setStepStatus(task.ID, 3, "waiting_approval", "", fmt.Sprintf("Awaiting approval for tool %s.", tc.Name), "")
+		m.updateSessionPresence(session.ID, "waiting_approval", false)
 		return ErrTaskWaitingApproval
 	}
 }
@@ -366,7 +390,7 @@ func (m *TaskManager) toolApprovalHook(task *Task, session *Session, cfg *config
 func requiresToolApproval(tc agent.ToolCall) bool {
 	name := strings.TrimSpace(strings.ToLower(tc.Name))
 	switch name {
-	case "run_command", "write_file":
+	case "run_command", "write_file", "desktop_open", "desktop_type", "desktop_hotkey", "desktop_click", "desktop_screenshot":
 		return true
 	default:
 		return false
@@ -442,6 +466,13 @@ func (m *TaskManager) setStepStatus(taskID string, index int, status string, inp
 		return m.store.UpdateTaskStep(step)
 	}
 	return nil
+}
+
+func (m *TaskManager) updateSessionPresence(sessionID string, presence string, typing bool) {
+	if m.sessions == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	_, _ = m.sessions.SetPresence(sessionID, presence, typing)
 }
 
 func (m *TaskManager) planTask(ctx context.Context, input string) (string, []plannedStep) {

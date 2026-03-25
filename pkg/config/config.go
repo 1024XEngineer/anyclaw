@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -121,6 +123,7 @@ type DaemonConfig struct {
 
 type SandboxConfig struct {
 	Enabled        bool   `json:"enabled"`
+	ExecutionMode  string `json:"execution_mode"`
 	Backend        string `json:"backend"`
 	BaseDir        string `json:"base_dir"`
 	DockerImage    string `json:"docker_image"`
@@ -203,6 +206,7 @@ type SecurityConfig struct {
 	Roles                    []SecurityRole `json:"roles"`
 	AuditLog                 string         `json:"audit_log"`
 	DangerousCommandPatterns []string       `json:"dangerous_command_patterns"`
+	ProtectedPaths           []string       `json:"protected_paths"`
 	CommandTimeoutSeconds    int            `json:"command_timeout_seconds"`
 }
 
@@ -223,6 +227,14 @@ type SubAgentConfig struct {
 	PrivateSkills   []string `json:"private_skills"`
 	PermissionLevel string   `json:"permission_level"`
 	WorkingDir      string   `json:"working_dir,omitempty"`
+
+	LLMProvider    string   `json:"llm_provider,omitempty"`
+	LLMModel       string   `json:"llm_model,omitempty"`
+	LLMAPIKey      string   `json:"llm_api_key,omitempty"`
+	LLMBaseURL     string   `json:"llm_base_url,omitempty"`
+	LLMMaxTokens   *int     `json:"llm_max_tokens,omitempty"`
+	LLMTemperature *float64 `json:"llm_temperature,omitempty"`
+	LLMProxy       string   `json:"llm_proxy,omitempty"`
 }
 
 type SecurityUser struct {
@@ -332,6 +344,7 @@ func DefaultConfig() *Config {
 		},
 		Sandbox: SandboxConfig{
 			Enabled:       false,
+			ExecutionMode: "sandbox",
 			Backend:       "local",
 			BaseDir:       ".anyclaw/sandboxes",
 			DockerImage:   "alpine:3.20",
@@ -373,6 +386,7 @@ func DefaultConfig() *Config {
 			RateLimitRPM:             120,
 			AuditLog:                 ".anyclaw/audit/audit.jsonl",
 			DangerousCommandPatterns: []string{"rm -rf", "del /f", "format ", "mkfs", "shutdown", "reboot", "poweroff", "chmod 777", "takeown", "icacls", "git reset --hard"},
+			ProtectedPaths:           defaultProtectedPaths(),
 			CommandTimeoutSeconds:    30,
 		},
 		Orchestrator: OrchestratorConfig{
@@ -450,11 +464,78 @@ func (c *Config) Validate() error {
 	if c.Sandbox.Backend != "" && !validBackends[c.Sandbox.Backend] {
 		errs = append(errs, fmt.Sprintf("sandbox.backend must be one of: local, docker (got %q)", c.Sandbox.Backend))
 	}
+	validExecutionModes := map[string]bool{"sandbox": true, "host-reviewed": true}
+	if c.Sandbox.ExecutionMode != "" && !validExecutionModes[c.Sandbox.ExecutionMode] {
+		errs = append(errs, fmt.Sprintf("sandbox.execution_mode must be one of: sandbox, host-reviewed (got %q)", c.Sandbox.ExecutionMode))
+	}
+	for i, sa := range c.Orchestrator.SubAgents {
+		if sa.PermissionLevel != "" && !validPermLevels[sa.PermissionLevel] {
+			errs = append(errs, fmt.Sprintf("orchestrator.sub_agents[%d].permission_level must be one of: full, limited, read-only (got %q)", i, sa.PermissionLevel))
+		}
+		if sa.LLMMaxTokens != nil && *sa.LLMMaxTokens < 0 {
+			errs = append(errs, fmt.Sprintf("orchestrator.sub_agents[%d].llm_max_tokens must be >= 0", i))
+		}
+		if sa.LLMTemperature != nil && (*sa.LLMTemperature < 0 || *sa.LLMTemperature > 2.0) {
+			errs = append(errs, fmt.Sprintf("orchestrator.sub_agents[%d].llm_temperature must be between 0.0 and 2.0", i))
+		}
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
 	}
 	return nil
+}
+
+func defaultProtectedPaths() []string {
+	items := []string{}
+	home, _ := os.UserHomeDir()
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		items = append(items, filepath.Clean(path))
+	}
+	if runtime.GOOS == "windows" {
+		add(os.Getenv("SystemRoot"))
+		add(`C:\Windows`)
+		add(`C:\Program Files`)
+		add(`C:\Program Files (x86)`)
+		add(`C:\ProgramData`)
+		if home != "" {
+			add(filepath.Join(home, ".ssh"))
+			add(filepath.Join(home, "AppData"))
+			add(filepath.Join(home, "Documents"))
+			add(filepath.Join(home, "Desktop"))
+			add(filepath.Join(home, "Downloads"))
+			add(filepath.Join(home, "Pictures"))
+			add(filepath.Join(home, "Videos"))
+			add(filepath.Join(home, "Music"))
+			add(filepath.Join(home, "NTUSER.DAT"))
+		}
+	} else {
+		add("/etc")
+		add("/bin")
+		add("/sbin")
+		add("/usr")
+		add("/boot")
+		add("/dev")
+		add("/proc")
+		add("/sys")
+		add("/var/lib")
+		if home != "" {
+			add(filepath.Join(home, ".ssh"))
+			add(filepath.Join(home, ".gnupg"))
+			add(filepath.Join(home, ".config"))
+			add(filepath.Join(home, "Documents"))
+			add(filepath.Join(home, "Desktop"))
+			add(filepath.Join(home, "Downloads"))
+			add(filepath.Join(home, "Pictures"))
+			add(filepath.Join(home, "Videos"))
+			add(filepath.Join(home, "Music"))
+		}
+	}
+	return items
 }
 
 func (c *Config) FindAgentProfile(name string) (AgentProfile, bool) {
@@ -472,6 +553,14 @@ func (p AgentProfile) IsEnabled() bool {
 }
 
 func BoolPtr(value bool) *bool {
+	return &value
+}
+
+func IntPtr(value int) *int {
+	return &value
+}
+
+func Float64Ptr(value float64) *float64 {
 	return &value
 }
 

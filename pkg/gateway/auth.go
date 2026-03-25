@@ -82,14 +82,19 @@ func resolveRolePermissions(cfg *config.SecurityConfig, roleName string) []strin
 	if roleName == "admin" {
 		return []string{"*"}
 	}
-	for _, role := range cfg.Roles {
+	if cfg != nil {
+		for _, role := range cfg.Roles {
+			if role.Name == roleName {
+				return append([]string{}, role.Permissions...)
+			}
+		}
+	}
+	for _, role := range builtinRoleTemplates() {
 		if role.Name == roleName {
 			return append([]string{}, role.Permissions...)
 		}
 	}
 	switch roleName {
-	case "operator":
-		return []string{"status.read", "chat.send", "sessions.read", "sessions.write", "memory.read", "runtimes.read", "runtimes.write", "events.read", "tools.read"}
 	case "viewer":
 		return []string{"status.read", "sessions.read", "events.read", "audit.read", "plugins.read", "channels.read", "routing.read", "runtimes.read", "resources.read"}
 	default:

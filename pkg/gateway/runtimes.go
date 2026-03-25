@@ -70,7 +70,7 @@ func (p *RuntimePool) GetOrCreate(agentName string, org string, project string, 
 	if !ok {
 		return nil, fmt.Errorf("workspace not found: %s", workspaceID)
 	}
-	key := runtimeKey(agentName, workspaceID)
+	key := runtimeKey(agentName, org, project, workspaceID)
 	if entry, ok := p.runtimes[key]; ok {
 		entry.lastUsedAt = time.Now().UTC()
 		entry.hits++
@@ -105,7 +105,7 @@ func (p *RuntimePool) List() []RuntimeInfo {
 			Agent:         entry.app.Config.Agent.Name,
 			Org:           runtimePart(key, 1),
 			Project:       runtimePart(key, 2),
-			Workspace:     entry.app.WorkingDir,
+			Workspace:     runtimePart(key, 3),
 			WorkspacePath: entry.app.WorkingDir,
 			WorkDir:       entry.app.WorkDir,
 			CreatedAt:     entry.createdAt,

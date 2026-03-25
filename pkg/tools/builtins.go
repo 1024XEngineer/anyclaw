@@ -98,6 +98,18 @@ func WriteFileToolWithCwd(ctx context.Context, input map[string]any, cwd string,
 	return fmt.Sprintf("Written to %s", path), nil
 }
 
+func WriteFileToolWithPolicy(ctx context.Context, input map[string]any, cwd string, opts BuiltinOptions) (string, error) {
+	path, ok := input["path"].(string)
+	if !ok {
+		return "", fmt.Errorf("path is required")
+	}
+	resolved := resolvePath(path, cwd)
+	if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return "", err
+	}
+	return WriteFileToolWithCwd(ctx, input, cwd, opts.PermissionLevel)
+}
+
 func ListDirectoryTool(ctx context.Context, input map[string]any) (string, error) {
 	return ListDirectoryToolWithCwd(ctx, input, "")
 }
@@ -194,6 +206,7 @@ func RunCommandToolWithPolicy(ctx context.Context, input map[string]any, opts Bu
 	}
 
 	cwd, _ := input["cwd"].(string)
+	shellName, _ := input["shell"].(string)
 	if cwd == "" {
 		cwd = opts.WorkingDir
 	}
@@ -205,6 +218,9 @@ func RunCommandToolWithPolicy(ctx context.Context, input map[string]any, opts Bu
 	if opts.PermissionLevel == "read-only" {
 		return "", fmt.Errorf("permission denied: current agent is read-only")
 	}
+	if err := reviewCommandExecution(cmdStr, cwd, opts); err != nil {
+		return "", err
+	}
 
 	if opts.CommandTimeoutSeconds > 0 {
 		var cancel context.CancelFunc
@@ -213,7 +229,9 @@ func RunCommandToolWithPolicy(ctx context.Context, input map[string]any, opts Bu
 	}
 
 	resolvedCwd := cwd
-	commandFactory := shellCommand
+	commandFactory := func(cmdCtx context.Context, command string) (*exec.Cmd, error) {
+		return shellCommandWithShell(cmdCtx, command, shellName)
+	}
 	applyDir := true
 	if opts.Sandbox != nil {
 		sandboxCwd, factory, err := opts.Sandbox.ResolveExecution(ctx, cwd)
@@ -229,7 +247,10 @@ func RunCommandToolWithPolicy(ctx context.Context, input map[string]any, opts Bu
 		}
 	}
 
-	cmd := commandFactory(ctx, cmdStr)
+	cmd, err := commandFactory(ctx, cmdStr)
+	if err != nil {
+		return "", err
+	}
 	if resolvedCwd != "" && applyDir {
 		cmd.Dir = resolvedCwd
 	}
@@ -243,10 +264,63 @@ func RunCommandToolWithPolicy(ctx context.Context, input map[string]any, opts Bu
 }
 
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		return exec.CommandContext(ctx, "cmd", "/C", command)
+	cmd, err := shellCommandWithShell(ctx, command, "")
+	if err != nil {
+		if runtime.GOOS == "windows" {
+			return exec.CommandContext(ctx, "cmd", "/C", command)
+		}
+		return exec.CommandContext(ctx, "sh", "-c", command)
 	}
-	return exec.CommandContext(ctx, "sh", "-c", command)
+	return cmd
+}
+
+func shellCommandWithShell(ctx context.Context, command string, shellName string) (*exec.Cmd, error) {
+	switch normalizeShellName(shellName) {
+	case "", "auto":
+		if runtime.GOOS == "windows" {
+			return exec.CommandContext(ctx, "cmd", "/C", command), nil
+		}
+		return exec.CommandContext(ctx, "sh", "-c", command), nil
+	case "cmd":
+		if runtime.GOOS != "windows" {
+			return nil, fmt.Errorf("shell cmd is only supported on Windows")
+		}
+		return exec.CommandContext(ctx, "cmd", "/C", command), nil
+	case "powershell":
+		exe, err := findShellExecutable("pwsh", "powershell")
+		if err != nil {
+			return nil, err
+		}
+		return exec.CommandContext(ctx, exe, "-NoProfile", "-Command", command), nil
+	case "pwsh":
+		exe, err := findShellExecutable("pwsh")
+		if err != nil {
+			return nil, err
+		}
+		return exec.CommandContext(ctx, exe, "-NoProfile", "-Command", command), nil
+	case "sh":
+		return exec.CommandContext(ctx, "sh", "-c", command), nil
+	case "bash":
+		return exec.CommandContext(ctx, "bash", "-lc", command), nil
+	default:
+		return nil, fmt.Errorf("unsupported shell: %s", shellName)
+	}
+}
+
+func normalizeShellName(shellName string) string {
+	return strings.ToLower(strings.TrimSpace(shellName))
+}
+
+func findShellExecutable(candidates ...string) (string, error) {
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("shell executable not found: %s", strings.Join(candidates, ", "))
 }
 
 func ensureWriteAllowed(targetPath string, workingDir string, permissionLevel string) error {
@@ -287,6 +361,130 @@ func isDangerousCommand(command string, patterns []string) bool {
 		}
 	}
 	return false
+}
+
+func reviewCommandExecution(command string, cwd string, opts BuiltinOptions) error {
+	mode := strings.TrimSpace(strings.ToLower(opts.ExecutionMode))
+	if mode == "" {
+		mode = "sandbox"
+	}
+	sandboxEnabled := opts.Sandbox != nil && opts.Sandbox.Enabled()
+	if mode == "sandbox" && !sandboxEnabled {
+		return fmt.Errorf("host execution denied: sandbox.execution_mode is sandbox and sandbox is not enabled")
+	}
+	if mode != "host-reviewed" || sandboxEnabled {
+		return nil
+	}
+	if strings.TrimSpace(cwd) != "" {
+		if err := validateProtectedPath(resolvePath(cwd, opts.WorkingDir), opts.ProtectedPaths); err != nil {
+			return fmt.Errorf("host execution denied: %w", err)
+		}
+	}
+	if err := validateCommandAgainstProtectedPaths(command, opts.ProtectedPaths); err != nil {
+		return fmt.Errorf("host execution denied: %w", err)
+	}
+	return nil
+}
+
+func validateProtectedPath(targetPath string, protectedPaths []string) error {
+	targetPath = strings.TrimSpace(targetPath)
+	if targetPath == "" {
+		return nil
+	}
+	targetNorm, err := normalizePathForCompare(targetPath)
+	if err != nil {
+		return err
+	}
+	for _, protected := range protectedPaths {
+		protectedNorm, err := normalizePathForCompare(protected)
+		if err != nil || protectedNorm == "" {
+			continue
+		}
+		if pathWithin(targetNorm, protectedNorm) {
+			return fmt.Errorf("access to protected path is denied: %s", targetPath)
+		}
+	}
+	return nil
+}
+
+func validateCommandAgainstProtectedPaths(command string, protectedPaths []string) error {
+	normalizedCommand := normalizeCommandForCompare(command)
+	for _, protected := range protectedPaths {
+		for _, token := range protectedPathTokens(protected) {
+			if token != "" && strings.Contains(normalizedCommand, token) {
+				return fmt.Errorf("command references protected path: %s", protected)
+			}
+		}
+	}
+	return nil
+}
+
+func normalizePathForCompare(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", nil
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path %q: %w", path, err)
+	}
+	cleaned := filepath.Clean(absPath)
+	if runtime.GOOS == "windows" {
+		cleaned = strings.ToLower(cleaned)
+	}
+	return cleaned, nil
+}
+
+func pathWithin(target string, base string) bool {
+	if target == base {
+		return true
+	}
+	return strings.HasPrefix(target, base+string(filepath.Separator))
+}
+
+func normalizeCommandForCompare(command string) string {
+	normalized := strings.ToLower(strings.TrimSpace(command))
+	normalized = strings.ReplaceAll(normalized, "\\", "/")
+	for strings.Contains(normalized, "//") {
+		normalized = strings.ReplaceAll(normalized, "//", "/")
+	}
+	return normalized
+}
+
+func protectedPathTokens(path string) []string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	tokens := map[string]bool{}
+	add := func(value string) {
+		value = normalizeCommandForCompare(value)
+		if value != "" {
+			tokens[value] = true
+		}
+	}
+	add(path)
+	base := strings.ToLower(filepath.Base(path))
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		if rel, err := filepath.Rel(home, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			rel = normalizeCommandForCompare(rel)
+			add("~/" + rel)
+			add("$home/" + rel)
+			if runtime.GOOS == "windows" {
+				add("%userprofile%/" + rel)
+				add("%homepath%/" + rel)
+			}
+		}
+	}
+	switch base {
+	case "documents", "desktop", "downloads", "pictures", "videos", "music", ".ssh", "appdata", "ntuser.dat", ".gnupg", ".config":
+		add(base)
+	}
+	items := make([]string, 0, len(tokens))
+	for token := range tokens {
+		items = append(items, token)
+	}
+	return items
 }
 
 func GetTimeTool(ctx context.Context, input map[string]any) (string, error) {

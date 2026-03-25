@@ -661,7 +661,7 @@ func (s *Server) appendEvent(eventType string, sessionID string, payload map[str
 }
 
 func (s *Server) appendToolActivity(sessionID string, activity ToolActivityRecord) {
-	activity.ID = fmt.Sprintf("tool_%d", time.Now().UnixNano())
+	activity.ID = uniqueID("tool")
 	activity.SessionID = sessionID
 	if activity.Timestamp.IsZero() {
 		activity.Timestamp = time.Now().UTC()
@@ -720,7 +720,7 @@ func (s *Server) appendAudit(user *AuthUser, action string, target string, meta 
 		role = user.Role
 	}
 	_ = s.store.AppendAudit(&AuditEvent{
-		ID:        fmt.Sprintf("aud_%d", time.Now().UnixNano()),
+		ID:        uniqueID("aud"),
 		Actor:     actor,
 		Role:      role,
 		Action:    action,
@@ -1162,7 +1162,7 @@ func (s *Server) handleApprovalByID(w http.ResponseWriter, r *http.Request) {
 					s.recordTaskCompletion(result, "approval_resume")
 				}(updated.TaskID)
 			} else {
-				_ = s.tasks.MarkRejected(updated.TaskID, firstNonEmpty(strings.TrimSpace(req.Comment), "task execution rejected by approver"))
+				_ = s.tasks.MarkRejected(updated.TaskID, updated.StepIndex, firstNonEmpty(strings.TrimSpace(req.Comment), "task execution rejected by approver"))
 			}
 		}
 		s.appendAudit(UserFromContext(r.Context()), "approvals.write", id, map[string]any{"approved": req.Approved})
@@ -1603,7 +1603,7 @@ func (s *Server) handleRefreshRuntimesBatch(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	payload := map[string]any{"items": req.Items}
-	job := &Job{ID: fmt.Sprintf("job_%d", time.Now().UnixNano()), Kind: "runtimes.refresh.batch", Status: "queued", Summary: fmt.Sprintf("Refreshing %d runtimes", len(req.Items)), CreatedAt: time.Now().UTC(), Payload: payload, MaxAttempts: s.jobMaxAttempts}
+	job := &Job{ID: uniqueID("job"), Kind: "runtimes.refresh.batch", Status: "queued", Summary: fmt.Sprintf("Refreshing %d runtimes", len(req.Items)), CreatedAt: time.Now().UTC(), Payload: payload, MaxAttempts: s.jobMaxAttempts}
 	job.Cancellable = true
 	job.Retriable = true
 	_ = s.store.AppendJob(job)
@@ -1740,6 +1740,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			"runtimes.read":   true,
 			"runtimes.write":  true,
 			"resources.read":  true,
+			"resources.write": true,
 			"config.read":     true,
 			"config.write":    true,
 			"audit.read":      true,
@@ -1813,22 +1814,13 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
-	builtinRoles := []map[string]any{
-		{
-			"name":        "admin",
-			"description": "Full platform access",
-			"permissions": []string{"*"},
-		},
-		{
-			"name":        "operator",
-			"description": "Operate sessions and runtimes",
-			"permissions": []string{"status.read", "chat.send", "tasks.read", "tasks.write", "approvals.read", "approvals.write", "sessions.read", "sessions.write", "memory.read", "runtimes.read", "runtimes.write", "events.read", "tools.read"},
-		},
-		{
-			"name":        "viewer",
-			"description": "Read-only governance and monitoring",
-			"permissions": []string{"status.read", "sessions.read", "events.read", "audit.read", "plugins.read", "channels.read", "routing.read", "runtimes.read", "resources.read"},
-		},
+	builtinRoles := make([]map[string]any, 0, len(builtinRoleTemplates()))
+	for _, role := range builtinRoleTemplates() {
+		builtinRoles = append(builtinRoles, map[string]any{
+			"name":        role.Name,
+			"description": role.Description,
+			"permissions": role.Permissions,
+		})
 	}
 	switch r.Method {
 	case http.MethodGet:
@@ -1910,7 +1902,7 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 func builtinRoleTemplates() []config.SecurityRole {
 	return []config.SecurityRole{
 		{Name: "admin", Description: "Full platform access", Permissions: []string{"*"}},
-		{Name: "operator", Description: "Operate sessions and runtimes", Permissions: []string{"status.read", "chat.send", "tasks.read", "tasks.write", "approvals.read", "approvals.write", "sessions.read", "sessions.write", "memory.read", "runtimes.read", "runtimes.write", "events.read", "tools.read"}},
+		{Name: "operator", Description: "Operate sessions, runtimes, and workspace resources", Permissions: []string{"status.read", "chat.send", "tasks.read", "tasks.write", "approvals.read", "approvals.write", "sessions.read", "sessions.write", "memory.read", "runtimes.read", "runtimes.write", "events.read", "tools.read", "resources.read", "resources.write"}},
 		{Name: "viewer", Description: "Read-only governance and monitoring", Permissions: []string{"status.read", "sessions.read", "events.read", "audit.read", "plugins.read", "channels.read", "routing.read", "runtimes.read", "resources.read"}},
 	}
 }
@@ -2031,7 +2023,7 @@ func (s *Server) handleRetryJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "job is not retriable"})
 		return
 	}
-	clone := &Job{ID: fmt.Sprintf("job_%d", time.Now().UnixNano()), Kind: job.Kind, Status: "queued", Summary: job.Summary + " (retry)", CreatedAt: time.Now().UTC(), RetryOf: job.ID, Cancellable: true, Retriable: true, Payload: job.Payload}
+	clone := &Job{ID: uniqueID("job"), Kind: job.Kind, Status: "queued", Summary: job.Summary + " (retry)", CreatedAt: time.Now().UTC(), RetryOf: job.ID, Cancellable: true, Retriable: true, Payload: job.Payload}
 	_ = s.store.AppendJob(clone)
 	s.enqueueJobFromPayload(clone)
 	s.appendAudit(UserFromContext(r.Context()), "jobs.retry", job.ID, map[string]any{"new_job": clone.ID})
@@ -2155,8 +2147,8 @@ func (s *Server) handleResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
-		if !HasPermission(UserFromContext(r.Context()), "resources.read") {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "resources.read"})
+		if !HasPermission(UserFromContext(r.Context()), "resources.write") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "resources.write"})
 			return
 		}
 		var req struct {
@@ -2191,8 +2183,8 @@ func (s *Server) handleResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPatch {
-		if !HasPermission(UserFromContext(r.Context()), "resources.read") {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "resources.read"})
+		if !HasPermission(UserFromContext(r.Context()), "resources.write") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "resources.write"})
 			return
 		}
 		var req struct {
@@ -2242,8 +2234,8 @@ func (s *Server) handleResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete {
-		if !HasPermission(UserFromContext(r.Context()), "resources.read") {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "resources.read"})
+		if !HasPermission(UserFromContext(r.Context()), "resources.write") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "resources.write"})
 			return
 		}
 		kind := strings.TrimSpace(r.URL.Query().Get("kind"))
@@ -2607,7 +2599,7 @@ func (s *Server) handleMoveSessionsBatch(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	payload := map[string]any{"session_ids": req.SessionIDs, "org": org.ID, "project": project.ID, "workspace": workspace.ID, "agent": req.Agent}
-	job := &Job{ID: fmt.Sprintf("job_%d", time.Now().UnixNano()), Kind: "sessions.move.batch", Status: "queued", Summary: fmt.Sprintf("Moving %d sessions", len(req.SessionIDs)), CreatedAt: time.Now().UTC(), Payload: payload, MaxAttempts: s.jobMaxAttempts}
+	job := &Job{ID: uniqueID("job"), Kind: "sessions.move.batch", Status: "queued", Summary: fmt.Sprintf("Moving %d sessions", len(req.SessionIDs)), CreatedAt: time.Now().UTC(), Payload: payload, MaxAttempts: s.jobMaxAttempts}
 	job.Cancellable = true
 	job.Retriable = true
 	_ = s.store.AppendJob(job)

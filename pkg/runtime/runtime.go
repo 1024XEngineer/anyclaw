@@ -230,7 +230,9 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	tools.RegisterBuiltins(registry, tools.BuiltinOptions{
 		WorkingDir:            workingDir,
 		PermissionLevel:       app.Config.Agent.PermissionLevel,
+		ExecutionMode:         app.Config.Sandbox.ExecutionMode,
 		DangerousPatterns:     app.Config.Security.DangerousCommandPatterns,
+		ProtectedPaths:        app.Config.Security.ProtectedPaths,
 		CommandTimeoutSeconds: app.Config.Security.CommandTimeoutSeconds,
 		AuditLogger:           auditLogger,
 		Sandbox:               sandboxManager,
@@ -334,14 +336,7 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 
 		// Also add from legacy sub_agents config (backward compat)
 		for _, saCfg := range app.Config.Orchestrator.SubAgents {
-			agentDefs = append(agentDefs, orchestrator.AgentDefinition{
-				Name:            saCfg.Name,
-				Description:     saCfg.Description,
-				Persona:         saCfg.Personality,
-				PrivateSkills:   saCfg.PrivateSkills,
-				PermissionLevel: saCfg.PermissionLevel,
-				WorkingDir:      saCfg.WorkingDir,
-			})
+			agentDefs = append(agentDefs, resolveSubAgentDefinition(saCfg, app.Config.LLM))
 		}
 
 		// If no agents defined, auto-create from enabled profiles
@@ -488,4 +483,60 @@ func ResolveConfigPath(path string) string {
 		return path
 	}
 	return abs
+}
+
+func resolveSubAgentDefinition(saCfg config.SubAgentConfig, global config.LLMConfig) orchestrator.AgentDefinition {
+	def := orchestrator.AgentDefinition{
+		Name:            saCfg.Name,
+		Description:     saCfg.Description,
+		Persona:         saCfg.Personality,
+		PrivateSkills:   saCfg.PrivateSkills,
+		PermissionLevel: saCfg.PermissionLevel,
+		WorkingDir:      saCfg.WorkingDir,
+		LLMProvider:     saCfg.LLMProvider,
+		LLMModel:        saCfg.LLMModel,
+		LLMAPIKey:       saCfg.LLMAPIKey,
+		LLMBaseURL:      saCfg.LLMBaseURL,
+		LLMMaxTokens:    copyIntPtr(saCfg.LLMMaxTokens),
+		LLMTemperature:  copyFloat64Ptr(saCfg.LLMTemperature),
+		LLMProxy:        saCfg.LLMProxy,
+	}
+	if def.LLMProvider == "" {
+		def.LLMProvider = global.Provider
+	}
+	if def.LLMModel == "" {
+		def.LLMModel = global.Model
+	}
+	if def.LLMAPIKey == "" {
+		def.LLMAPIKey = global.APIKey
+	}
+	if def.LLMBaseURL == "" {
+		def.LLMBaseURL = global.BaseURL
+	}
+	if def.LLMProxy == "" {
+		def.LLMProxy = global.Proxy
+	}
+	if def.LLMMaxTokens == nil {
+		def.LLMMaxTokens = copyIntPtr(&global.MaxTokens)
+	}
+	if def.LLMTemperature == nil {
+		def.LLMTemperature = copyFloat64Ptr(&global.Temperature)
+	}
+	return def
+}
+
+func copyIntPtr(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func copyFloat64Ptr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }

@@ -44,13 +44,17 @@ func NewSandboxManager(cfg config.SandboxConfig, workingDir string) *SandboxMana
 	return &SandboxManager{config: cfg, workingDir: workingDir, dockerNames: map[string]string{}}
 }
 
-func (m *SandboxManager) ResolveExecution(ctx context.Context, requestedCwd string) (string, func(context.Context, string) *exec.Cmd, error) {
+func (m *SandboxManager) Enabled() bool {
+	return m != nil && m.config.Enabled
+}
+
+func (m *SandboxManager) ResolveExecution(ctx context.Context, requestedCwd string) (string, func(context.Context, string) (*exec.Cmd, error), error) {
 	if m == nil || !m.config.Enabled {
 		cwd := strings.TrimSpace(requestedCwd)
 		if cwd == "" {
 			cwd = m.workingDir
 		}
-		return cwd, shellCommand, nil
+		return cwd, nil, nil
 	}
 	scope := sandboxScopeFromContext(ctx)
 	key := sanitizeSandboxKey(scope)
@@ -61,15 +65,15 @@ func (m *SandboxManager) ResolveExecution(ctx context.Context, requestedCwd stri
 			return "", nil, err
 		}
 		cwd := "/workspace"
-		return cwd, func(cmdCtx context.Context, command string) *exec.Cmd {
-			return exec.CommandContext(cmdCtx, "docker", "exec", container, "sh", "-lc", "cd /workspace && "+command)
+		return cwd, func(cmdCtx context.Context, command string) (*exec.Cmd, error) {
+			return exec.CommandContext(cmdCtx, "docker", "exec", container, "sh", "-lc", "cd /workspace && "+command), nil
 		}, nil
 	case "local", "filesystem", "fs":
 		root, err := m.ensureLocalSandbox(key)
 		if err != nil {
 			return "", nil, err
 		}
-		return root, shellCommand, nil
+		return root, nil, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported sandbox backend: %s", m.config.Backend)
 	}

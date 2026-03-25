@@ -262,6 +262,87 @@ func TestSandboxBackendValidation(t *testing.T) {
 	}
 }
 
+func TestSandboxExecutionModeValidation(t *testing.T) {
+	validModes := []string{"sandbox", "host-reviewed"}
+	for _, mode := range validModes {
+		cfg := DefaultConfig()
+		cfg.Sandbox.ExecutionMode = mode
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("sandbox.execution_mode %q should be valid: %v", mode, err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Sandbox.ExecutionMode = "host"
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid sandbox.execution_mode")
+	}
+	if !strings.Contains(err.Error(), "sandbox.execution_mode") {
+		t.Fatalf("error should mention sandbox.execution_mode: %v", err)
+	}
+}
+
+func TestSubAgentLLMValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Orchestrator.SubAgents = []SubAgentConfig{
+		{
+			Name:            "worker",
+			PermissionLevel: "full",
+			LLMMaxTokens:    IntPtr(-1),
+			LLMTemperature:  Float64Ptr(3),
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid sub-agent llm overrides")
+	}
+	if !strings.Contains(err.Error(), "orchestrator.sub_agents[0].llm_max_tokens") {
+		t.Fatalf("error should mention llm_max_tokens: %v", err)
+	}
+	if !strings.Contains(err.Error(), "orchestrator.sub_agents[0].llm_temperature") {
+		t.Fatalf("error should mention llm_temperature: %v", err)
+	}
+}
+
+func TestLoadSubAgentExplicitZeroOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data := []byte(`{
+  "llm": {"provider":"openai","model":"gpt-4o-mini"},
+  "agent": {"name":"AnyClaw","description":"test","work_dir":".anyclaw","working_dir":"workflows","permission_level":"limited"},
+  "skills": {"dir":"skills","auto_load":true},
+  "memory": {"dir":"memory","max_history":100,"format":"markdown","auto_save":true},
+  "gateway": {"host":"127.0.0.1","port":18789,"bind":"loopback"},
+  "daemon": {"pid_file":".anyclaw/gateway.pid","log_file":".anyclaw/gateway.log"},
+  "channels": {},
+  "plugins": {"dir":"plugins"},
+  "sandbox": {"execution_mode":"sandbox","backend":"local"},
+  "security": {},
+  "orchestrator": {
+    "enabled": true,
+    "sub_agents": [
+      {"name":"worker","description":"worker","permission_level":"limited","llm_max_tokens":0,"llm_temperature":0}
+    ]
+  }
+}`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected config to load: %v", err)
+	}
+	sub := cfg.Orchestrator.SubAgents[0]
+	if sub.LLMMaxTokens == nil || *sub.LLMMaxTokens != 0 {
+		t.Fatalf("expected explicit llm_max_tokens=0 to be preserved, got %v", sub.LLMMaxTokens)
+	}
+	if sub.LLMTemperature == nil || *sub.LLMTemperature != 0 {
+		t.Fatalf("expected explicit llm_temperature=0 to be preserved, got %v", sub.LLMTemperature)
+	}
+}
+
 func TestGatewayBindValidation(t *testing.T) {
 	validBinds := []string{"", "loopback", "all", "127.0.0.1", "0.0.0.0", "::1"}
 	for _, bind := range validBinds {

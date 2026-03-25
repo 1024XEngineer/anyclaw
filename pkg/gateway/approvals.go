@@ -17,7 +17,7 @@ func newApprovalManager(store *Store) *approvalManager {
 	return &approvalManager{
 		store: store,
 		nextID: func() string {
-			return fmt.Sprintf("approval_%d", time.Now().UnixNano())
+			return uniqueID("approval")
 		},
 		nowFunc: func() time.Time {
 			return time.Now().UTC()

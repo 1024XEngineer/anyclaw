@@ -294,6 +294,41 @@
       "论文助手",
       "数据分析师",
       "翻译专家"
+    ],
+    "sub_agents": [
+      {
+        "name": "代码专家",
+        "description": "通用代码专家，使用 GPT-4o",
+        "personality": "资深软件工程师，精通多种编程语言",
+        "private_skills": ["coder"],
+        "permission_level": "full",
+        "llm_provider": "openai",
+        "llm_model": "gpt-4o",
+        "llm_api_key": "",
+        "llm_temperature": 0.3
+      },
+      {
+        "name": "创意写作",
+        "description": "创意写作专家，使用 Claude",
+        "personality": "富有创意的作家和内容创作者",
+        "private_skills": ["writer"],
+        "permission_level": "read-only",
+        "llm_provider": "anthropic",
+        "llm_model": "claude-sonnet-4-7",
+        "llm_api_key": "",
+        "llm_temperature": 0.9
+      },
+      {
+        "name": "本地助手",
+        "description": "使用本地 Ollama 模型的助手",
+        "personality": "注重隐私的本地AI助手",
+        "private_skills": [],
+        "permission_level": "limited",
+        "llm_provider": "ollama",
+        "llm_model": "llama3.2",
+        "llm_base_url": "http://localhost:11434",
+        "llm_temperature": 0.5
+      }
     ]
   }
 }

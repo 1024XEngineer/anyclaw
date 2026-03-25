@@ -1,534 +1,306 @@
-# AnyClaw - File-first Memory AI Agent
+# AnyClaw - 本地优先 AI 智能体平台
 
-A lightweight, transparent AI Agent system focused on file-based memory and skills-as-plugins architecture.
+[![GitHub](https://img.shields.io/badge/GitHub-1024XEngineer/anyclaw-blue)](https://github.com/1024XEngineer/anyclaw)
+[![Version](https://img.shields.io/badge/version-2026.3.13-green)]()
+[![Go](https://img.shields.io/badge/Go-1.21+-blue)]()
 
-## Philosophy
+一个轻量级、透明的 AI Agent 系统，专注于文件记忆和技能插件架构。
 
-- **File-first Memory**: No opaque vector databases. Every conversation, reflection, and fact is stored in human-readable Markdown/JSON files.
-- **Skills as Plugins**: Follow Anthropic's Agent Skills paradigm. Drop a folder, it's ready to use.
-- **Transparent & Controllable**: All system prompt logic, tool calls, and memory operations are visible to developers.
+## 核心理念
 
-## Features
+- **文件优先记忆**: 不使用不透明的向量数据库。所有对话、反思和事实都存储在人类可读的 Markdown/JSON 文件中。
+- **技能即插件**: 遵循 Anthropic 的 Agent Skills 范式。放入文件夹即可使用。
+- **透明可控**: 所有系统提示词逻辑、工具调用和内存操作对开发者可见。
 
-- **File-based Memory System**: All memories stored as readable Markdown/JSON files
-- **Skills Plugin System**: Load capabilities from folder structures
-- **Built-in Tools**: read_file, write_file, list_directory, search_files, run_command, get_time, web_search
-- **Browser Automation**: navigate pages, click/type, upload files, take screenshots, inspect HTML, export PDFs
-- **Sandboxed Execution**: session/channel isolated command execution with local sandbox directories or Docker backends
-- **Multi-Provider LLM Support**: OpenAI, Anthropic, Ollama, Qwen, and compatible APIs
-- **Conversation History**: Automatic storage with reflection capabilities
-- **Channel Integrations**: Telegram, Slack, Discord, Signal, and WhatsApp webhook
-- **Session Governance**: main/group session isolation, queue modes, reply-back, presence, and typing indicators
-- **Skill Platform**: installable/versioned skills with permissions, entrypoints, source metadata, and registry/catalog support
+## 核心功能
 
-## Quick Start
+### 🤖 多智能体系统
+
+- 支持配置多个不同领域的专家智能体
+- 每个智能体可独立配置 LLM 供应商和模型
+- 智能体之间可以协作完成复杂任务
 
 ```bash
-# Set your API key
-export OPENAI_API_KEY=sk-...
+# 查看所有智能体
+anyclaw agent list
 
-# Build
-go build -o anyclaw ./cmd/anyclaw
+# 切换智能体
+anyclaw agent use Go编码专家
 
-# Run in interactive mode
-./anyclaw
-
-# Or with a single message
-./anyclaw "Hello, what can you do?"
+# 与特定智能体对话
+anyclaw agent chat Go编码专家
 ```
 
-## Configuration
+### 📺 频道系统
 
-Edit `anyclaw.json`:
-
-```json
-{
-  "agent": {
-    "name": "AnyClaw",
-    "description": "Your AI assistant"
-  },
-  "llm": {
-    "provider": "openai",
-    "model": "gpt-4o-mini",
-    "api_key": "your-api-key"
-  }
-}
-```
-
-## Switching Providers & Models
-
-### Command Line
+- **私聊频道**: 用户与单个智能体对话
+- **群聊频道**: 多个智能体协作完成任务
+- **动态拉人**: 随时添加/移除智能体
 
 ```bash
-# Set provider
-./anyclaw --provider anthropic
+# 创建私聊
+anyclaw ch create --name "Go专家" --type dm --agent Go编码专家
 
-# Set model
-./anyclaw --model claude-sonnet-4-7
+# 创建群聊
+anyclaw ch create --name "项目组" --type group --agents "Go编码专家,Python编码专家"
 
-# Set API key
-./anyclaw --api-key sk-ant-...
+# 添加智能体
+anyclaw ch add --channel ch_xxx --agent 数据分析师
 
-# Show available providers
-./anyclaw --providers
-
-# Show models for a provider
-./anyclaw --models openai
-./anyclaw --models anthropic
+# 交互式聊天
+anyclaw ch chat
 ```
 
-### Interactive Mode Commands
+### 🛠️ 内置工具 (27个)
 
-```
-/provider        - Show current provider/model
-/set provider    - Switch LLM provider
-/set model      - Switch model
-/set apikey     - Set API key
-/set temperature - Set temperature
-/providers      - Show available providers
-/models <name>  - Show models for provider
-```
+| 类别 | 工具 |
+|------|------|
+| **文件操作** | read_file, write_file, list_directory, search_files |
+| **命令执行** | run_command |
+| **网络** | web_search, fetch_url |
+| **浏览器** | browser_navigate, browser_click, browser_type, browser_screenshot, browser_snapshot, browser_eval, browser_pdf, browser_upload, browser_download, browser_wait, browser_select, browser_press, browser_scroll, browser_close |
+| **标签页** | browser_tab_new, browser_tab_list, browser_tab_switch, browser_tab_close |
 
-### Supported Providers & Models
+### 🧠 文件记忆系统
 
-**OpenAI:**
-- gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-4, gpt-3.5-turbo
-
-**Anthropic:**
-- claude-opus-4-5, claude-sonnet-4-7, claude-haiku-3-5
-
-**Qwen (通义千问):**
-- qwen-plus, qwen-turbo, qwen-max
-- qwen2.5-72b-instruct, qwen2.5-32b-instruct, qwen2.5-14b-instruct
-- qwq-32b-preview, qwen-coder-plus
-
-**Ollama (local):**
-- llama3.2, llama3.1, codellama, mistral
-
-**OpenAI-Compatible:**
-- Any API compatible with OpenAI format
-
-## Working Directory
-
-AnyClaw can manage files in the `working/` directory to complete your tasks:
-
-```
-working/           # Your working files
-├── projects/     # Project folders
-├── docs/         # Documents
-├── scripts/      # Scripts
-└── data/        # Data files
-```
-
-Example tasks:
-```
-> 请在 working 目录下创建一个 Python 项目
-> 帮我整理 working 目录中的文件
-> 把代码保存到 working/project.py
-```
-
-## Memory System
-
-All memories are stored in `.anyclaw/memory/`:
+所有记忆存储在 `.anyclaw/memory/`:
 
 ```
 .anyclaw/
 └── memory/
-    ├── conversations/    # User/assistant exchanges
-    ├── reflections/      # Agent self-reflections
-    ├── facts/           # User-provided facts
-    └── index.json       # Memory index
+    ├── conversations/    # 用户/助手对话
+    ├── reflections/      # 智能体自我反思
+    ├── facts/           # 用户提供的事实
+    └── index.json       # 记忆索引
 ```
 
-## Skills System
+### 🔌 多 LLM 供应商支持
 
-Skills are loaded from the `skills/` directory:
+| 供应商 | 模型示例 |
+|--------|----------|
+| **OpenAI** | gpt-4o, gpt-4o-mini, gpt-3.5-turbo |
+| **Anthropic** | claude-sonnet-4-7, claude-haiku-3-5 |
+| **Qwen (通义千问)** | qwen-plus, qwen-turbo, qwen-max |
+| **Ollama** | llama3.2, llama3.1, codellama |
+| **兼容API** | 任何 OpenAI 兼容的 API |
 
+每个智能体可独立配置 LLM:
+
+```json
+{
+  "orchestrator": {
+    "sub_agents": [
+      {
+        "name": "代码专家",
+        "llm_provider": "openai",
+        "llm_model": "gpt-4o",
+        "llm_temperature": 0.3
+      },
+      {
+        "name": "本地助手",
+        "llm_provider": "ollama",
+        "llm_model": "llama3.2",
+        "llm_base_url": "http://localhost:11434"
+      }
+    ]
+  }
+}
 ```
-skills/
-├── file-operations/
-│   └── skill.json
-└── coder/
-    └── skill.json
-```
 
-### SkillHub Store (skills.sh)
-
-AnyClaw supports the [skills.sh](https://skills.sh) ecosystem:
+### 📦 技能系统
 
 ```bash
-# Search for skills
-anyclaw skill search react
+# 搜索技能
+anyclaw skill search coder
 
-# Install from skills.sh
-anyclaw skill install vercel-labs/agent-skills/web-design-guidelines
-
-# Install built-in skills
+# 安装技能
 anyclaw skill install coder
 
-# List installed skills
+# 列出已安装技能
 anyclaw skill list
+
+# Skillhub 商店
+anyclaw skillhub search calendar
+anyclaw skillhub install calendar
 ```
 
-### Built-in Skills
+### 已安装技能
 
-| Skill | Description |
-|-------|-------------|
-| coder | Code generation and analysis assistant |
-| researcher | Web research and information gathering |
-| writer | Content writing and editing assistant |
-| analyst | Data analysis and visualization |
-| translator | Multilingual translation assistant |
+| 技能 | 功能 |
+|------|------|
+| coder | 代码生成和分析 |
+| weather | 天气查询 |
+| calendar | 日历管理 |
+| file-operations | 文件操作 |
+| find-skills | 技能推荐 |
+| skillhub | 技能商店集成 |
 
-### Popular skills.sh Skills
+## 快速开始
 
-| Skill | Installs | Description |
-|-------|----------|-------------|
-| vercel-react-best-practices | 225.9K | React best practices |
-| web-design-guidelines | 179.8K | Web design guidelines |
-| remotion-best-practices | 156.8K | Remotion animation |
-| pdf | 43.0K | PDF processing |
-| docx | 33.9K | Word document handling |
+```bash
+# 克隆仓库
+git clone https://github.com/1024XEngineer/anyclaw.git
+cd anyclaw
 
-### Skill Definition
+# 构建
+go build -o anyclaw ./cmd/anyclaw
 
-A skill.json example:
+# 配置
+cp anyclaw.json.example anyclaw.json
+# 编辑 anyclaw.json，设置 LLM API Key
+
+# 运行
+./anyclaw -i
+```
+
+## 配置
+
+编辑 `anyclaw.json`:
 
 ```json
 {
-  "name": "my-skill",
-  "description": "What this skill does",
-  "prompts": {
-    "system": "Instructions for the agent when this skill is active"
-  }
-}
-```
-
-## Available Tools
-
-| Tool | Description |
-|------|-------------|
-| read_file | Read file contents |
-| write_file | Write content to a file |
-| list_directory | List directory contents |
-| search_files | Search for files by pattern |
-| run_command | Execute shell commands |
-| get_time | Get current date/time |
-| web_search | Search the web using DuckDuckGo |
-| fetch_url | Fetch and extract text content from a URL |
-| browser_navigate | Open a page in a browser session |
-| browser_click | Click a page element |
-| browser_type | Type into a field |
-| browser_upload | Upload a local file |
-| browser_wait | Wait for page or element readiness |
-| browser_select | Set/select a form value |
-| browser_press | Press a keyboard key |
-| browser_scroll | Scroll page or element |
-| browser_download | Download a linked resource |
-| browser_screenshot | Save a screenshot |
-| browser_snapshot | Inspect title/URL/HTML |
-| browser_eval | Run JavaScript in page context |
-| browser_pdf | Export page to PDF |
-| browser_tab_new | Create a new browser tab |
-| browser_tab_list | List browser tabs |
-| browser_tab_switch | Switch active tab |
-| browser_tab_close | Close a specific tab |
-| browser_close | Close browser session |
-
-Browser session behavior:
-
-- browser tools now default to the active chat/session id when `session_id` is omitted
-- gateway and channel sessions automatically run agent browser actions inside a session-bound browser context
-- this makes each AnyClaw session behave like its own browser tab/workflow unless you explicitly override `session_id`
-- each browser session now supports multiple tabs/pages; most browser tools accept optional `tab_id`
-- if `tab_id` is omitted, the active tab for that chat session is used automatically
-
-Sandbox behavior:
-
-- `run_command` can be isolated per session/channel when `sandbox.enabled` is turned on
-- `sandbox.backend: local` runs commands inside per-scope filesystem sandboxes under `sandbox.base_dir`
-- `sandbox.backend: docker` runs commands via `docker exec` inside per-scope containers
-- gateway/channel requests automatically inject session and channel scope into tool execution
-
-Example sandbox config:
-
-```json
-{
-  "sandbox": {
+  "llm": {
+    "provider": "qwen",
+    "model": "qwen-plus",
+    "api_key": "your-api-key"
+  },
+  "agent": {
+    "name": "个人助手",
+    "profiles": [
+      {
+        "name": "Go编码专家",
+        "domain": "Go语言开发",
+        "expertise": ["Go并发编程", "微服务架构"]
+      }
+    ]
+  },
+  "orchestrator": {
     "enabled": true,
-    "backend": "docker",
-    "base_dir": ".anyclaw/sandboxes",
-    "docker_image": "alpine:3.20",
-    "docker_network": "none",
-    "reuse_per_scope": true
+    "agent_names": ["Go编码专家", "Python编码专家"]
   }
 }
 ```
 
-## Architecture
+## CLI 命令
 
-AnyClaw is moving from a single-agent runtime into a local-first AI agent platform. The optimized architecture keeps the existing Go runtime, file memory, gateway, channels, and tool system, then layers assistant management, permission governance, execution orchestration, and auditability on top.
+| 命令 | 功能 |
+|------|------|
+| `anyclaw` | 交互模式 |
+| `anyclaw agent` | 智能体管理 |
+| `anyclaw skill` | 技能管理 |
+| `anyclaw skillhub` | Skillhub 商店 |
+| `anyclaw ch` | 频道管理 |
+| `anyclaw task` | 任务执行 |
+| `anyclaw group` | 群聊管理 |
+| `anyclaw gateway` | 网关服务 |
+| `anyclaw doctor` | 系统诊断 |
+| `anyclaw shell` | 命令执行 |
 
-### Target architecture
+### 交互模式命令
 
-```text
-┌──────────────────────────────────────────────────────────────────────┐
-│                         AnyClaw Control Plane                       │
-├──────────────────────────────────────────────────────────────────────┤
-│  CLI / Open APIs / Channel Connectors                               │
-└───────────────┬───────────────────────────────┬──────────────────────┘
-                │                               │
-                ▼                               ▼
-┌──────────────────────────────┐   ┌──────────────────────────────────┐
-│ Assistant Management Layer   │   │ Task & Session Orchestration     │
-│ - assistant profiles         │   │ - session lifecycle              │
-│ - persona + skill binding    │   │ - plan / execute / recover       │
-│ - model selection            │   │ - queue / job workers            │
-│ - workspace binding          │   │ - runtime pool                   │
-└───────────────┬──────────────┘   └───────────────┬──────────────────┘
-                │                                  │
-                └───────────────┬──────────────────┘
+```
+/exit, /quit, /q   - 退出程序
+/clear             - 清除对话历史
+/memory            - 查看记忆内容
+/skills            - 查看可用技能
+/tools             - 查看可用工具
+/provider          - 显示当前提供商/模型
+/providers         - 显示可用提供商
+/models <名称>     - 显示提供商模型
+/agents            - 显示智能体配置
+/agent use <名称>  - 切换智能体
+/audit             - 查看审计日志
+/set provider <值> - 切换 LLM 提供商
+/set model <值>    - 切换模型
+/set apikey <值>   - 设置 API 密钥
+/set temp <值>     - 设置温度
+/help, /?          - 显示帮助
+```
+
+## 渠道集成
+
+- Telegram Bot
+- Slack
+- Discord
+- WhatsApp
+- Signal
+
+## 架构
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                      控制平面                               │
+│  CLI / API / 渠道连接器                                     │
+└───────────────┬────────────────────────────┬───────────────┘
+                │                            │
+                ▼                            ▼
+┌──────────────────────────┐  ┌──────────────────────────────┐
+│    智能体管理层           │  │    任务编排层                 │
+│  - 智能体配置             │  │  - 会话生命周期              │
+│  - 性格绑定              │  │  - 计划/执行/恢复            │
+│  - 模型选择              │  │  - 队列/任务工作器           │
+└───────────────┬──────────┘  └───────────────┬──────────────┘
+                │                              │
+                └───────────────┬──────────────┘
                                 ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                         Agent Runtime Core                          │
-├──────────────────────────────────────────────────────────────────────┤
-│ Prompt Builder | LLM Router | Tool Registry | Skill Runtime         │
-│ Context Assembly | Memory Access | Observer Hooks | Safety Guards   │
-└───────────────┬───────────────────────────────┬──────────────────────┘
-                │                               │
-                ▼                               ▼
-┌──────────────────────────────┐   ┌──────────────────────────────────┐
-│ Permission & Security Layer  │   │ Memory & Data Layer              │
-│ - scope / workspace ACL      │   │ - conversations                  │
-│ - dangerous command policy   │   │ - facts / reflections            │
-│ - confirmation checkpoints   │   │ - task records                   │
-│ - sandbox isolation          │   │ - assistant config               │
-└───────────────┬──────────────┘   │ - audit/event indexes            │
-                │                  └──────────────────────────────────┘
-                ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                     Execution & Integration Layer                   │
-├──────────────────────────────────────────────────────────────────────┤
-│ File tools | Command tools | Browser tools | Web tools | Plugins    │
-│ Telegram | Slack | Discord | WhatsApp | Signal                      │
-└──────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                      运行时核心                             │
+│  提示词构建 | LLM路由 | 工具注册 | 技能运行时               │
+│  上下文组装 | 记忆访问 | 观察者钩子 | 安全防护              │
+└───────────────┬────────────────────────────┬───────────────┘
+                │                            │
+                ▼                            ▼
+┌──────────────────────────┐  ┌──────────────────────────────┐
+│   权限与安全层            │  │    记忆与数据层              │
+│  - 作用域/工作区 ACL      │  │  - 对话记录                 │
+│  - 危险命令策略           │  │  - 事实/反思                │
+│  - 确认检查点             │  │  - 任务记录                 │
+│  - 沙箱隔离              │  │  - 智能体配置               │
+└───────────────┬──────────┘  └───────────────┬──────────────┘
+                │                              │
+                ▼                              ▼
+┌────────────────────────────────────────────────────────────┐
+│                    执行与集成层                             │
+│  文件工具 | 命令工具 | 浏览器工具 | Web工具 | 插件          │
+│  Telegram | Slack | Discord | WhatsApp | Signal            │
+└────────────────────────────────────────────────────────────┘
 ```
 
-### Layer responsibilities
+## 项目结构
 
-- `Experience layer`: expose AnyClaw through CLI, APIs, and external channels so the same assistant can participate in chat, task execution, and operational workflows.
-- `Assistant management`: treat assistants as first-class resources with name, role, persona, model, skills, workspace, and permission boundary instead of a single global agent configuration.
-- `Task orchestration`: split work into session state, execution plans, queued jobs, retries, runtime allocation, and long-running task visibility.
-- `Runtime core`: keep `pkg/agent`, `pkg/runtime`, `pkg/tools`, `pkg/skills`, and `pkg/routing` as the execution engine, but make them serve multiple assistants and multiple workspaces consistently.
-- `Security and memory`: enforce least privilege before tool execution and persist everything needed for long-term collaboration, replay, and trust.
-- `Integration layer`: isolate tool adapters and channel adapters so new capabilities can be added without coupling product logic to transport logic.
-
-### Suggested bounded modules
-
-The current codebase already contains the seeds of this architecture. To align it with the project report, the system should be organized around these modules:
-
-| Module | Main responsibility | Current related packages | Recommended evolution |
-|-------|----------------------|--------------------------|-----------------------|
-| Assistant Center | manage assistant definitions, profiles, defaults, status | `pkg/config`, `pkg/runtime` | add persistent assistant registry and assistant-scoped config loading |
-| Persona & Skills Center | persona prompts, skill binding, capability composition | `pkg/skills`, `pkg/prompt` | split built-in persona templates from installable executable skills |
-| Workspace & Permission Center | working directory binding, scope checks, confirmations, sandbox policy | `pkg/tools`, `pkg/gateway/auth.go`, `pkg/gateway/state.go` | add explicit workspace ACL model and per-tool authorization policy |
-| Task Orchestrator | planning, job queue, retries, approval checkpoints, runtime dispatch | `pkg/gateway/gateway.go`, `pkg/gateway/state.go` | promote jobs into a formal task pipeline with status transitions |
-| Memory Center | conversation, fact, reflection, assistant memory, task records | `pkg/memory` | add assistant-scoped and workspace-scoped storage partitions |
-| Audit Center | operation logs, tool trace, approvals, replay | `pkg/audit`, `pkg/gateway/state.go` | unify JSONL audit with gateway event timeline for replay views |
-| Channel & API Gateway | webhook, bot channels, control APIs | `pkg/gateway`, `pkg/channel` | separate user-facing API, control-plane API, and channel ingress |
-| Tool & Integration Hub | built-in tools, browser, command execution, external plugins | `pkg/tools`, `pkg/plugin` | introduce capability tags, risk levels, and approval metadata |
-
-### End-to-end execution flow
-
-1. The user enters AnyClaw from CLI, an API client, or an external channel.
-2. The gateway resolves identity, organization, project, workspace, and target assistant.
-3. Assistant Center loads persona, model strategy, skill set, memory scope, and permission profile.
-4. Task Orchestrator decides whether the request is a direct response, a multi-step task, or a queued/background job.
-5. Agent Runtime builds context from prompt, history, memory, and active skills.
-6. LLM Router selects the appropriate model, then Runtime executes tool calls through the registry.
-7. Permission Center validates tool scope, dangerous command patterns, sandbox policy, and confirmation checkpoints.
-8. Results, tool traces, and audit events are persisted and streamed back to the user interface.
-
-### Data model optimization
-
-To support "create, configure, authorize, execute, audit, collaborate" as product primitives, the platform should gradually shift from runtime-only state to explicit domain entities:
-
-- `Assistant`: id, name, role, persona, default model, enabled skills, permission profile, default workspace, status.
-- `Workspace`: id, org/project relation, local path, allowed tools, sandbox policy, retention rules.
-- `Session`: assistant binding, user/channel metadata, context window, execution state, replay pointers.
-- `Task`: goal, plan, current step, priority, approval state, retry state, final result.
-- `Audit Event`: actor, action, target, risk level, confirmation record, tool result, timestamp.
-- `Memory Item`: conversation, fact, reflection, preference, long-term summary, task artifact.
-
-This structure matches the project goal more closely than a single `agent + memory + tools` runtime view.
-
-### Deployment view
-
-```text
-User / Team
-    |
-    v
-CLI / API Clients / Channel Bots
-    |
-    v
-Gateway API (auth, routing, session, streaming)
-    |
-    +--> Assistant Center
-    +--> Task Orchestrator
-    +--> Audit Center
-    |
-    v
-Runtime Pool
-    |
-    +--> LLM Provider Adapters
-    +--> Tool Registry
-    +--> Skill Runtime
-    +--> Sandbox Manager
-    |
-    v
-Local Storage (.anyclaw)
-    +--> memory/
-    +--> gateway/state.json
-    +--> audit/*.jsonl
-    +--> runtimes/
-    +--> sandboxes/
+```
+anyclaw/
+├── cmd/anyclaw/          # CLI 入口
+├── pkg/
+│   ├── agent/            # 智能体核心
+│   ├── llm/              # LLM 客户端
+│   ├── memory/           # 文件记忆
+│   ├── tools/            # 工具系统
+│   ├── skills/           # 技能管理
+│   ├── orchestrator/     # 任务编排
+│   ├── channel/          # 渠道适配
+│   ├── channel2/         # 用户频道
+│   ├── gateway/          # HTTP 网关
+│   ├── config/           # 配置管理
+│   ├── store/            # 数据存储
+│   ├── audit/            # 审计日志
+│   └── ...
+├── skills/               # 技能目录
+├── anyclaw.json          # 配置文件
+└── README.md
 ```
 
-### Recommended implementation roadmap
-
-- `Phase 1 - domain separation`: extract Assistant, Workspace, Task, and Permission Profile into stable structs and storage files instead of spreading them across config and session state.
-- `Phase 2 - orchestration`: formalize planning, approvals, retries, and background jobs so complex tasks become traceable workflows rather than ad hoc session logic.
-- `Phase 3 - control plane APIs`: build assistant creation, permission management, task monitoring, and audit replay around the existing gateway foundation.
-- `Phase 4 - extension platform`: standardize skill metadata, tool risk labels, plugin trust, and external service adapters for marketplace-style expansion.
-
-### Mapping to current repository
-
-- `pkg/runtime/runtime.go`: good foundation for bootstrapping app dependencies, but currently initializes a single effective agent runtime; next step is assistant-scoped runtime factories.
-- `pkg/agent/agent.go`: already covers prompt assembly, tool calling, and memory integration; next step is to separate planner/executor/observer responsibilities.
-- `pkg/gateway/gateway.go`: already behaves like a control-plane entrypoint; next step is to split transport handlers from domain services.
-- `pkg/gateway/state.go`: already stores sessions, jobs, orgs, projects, workspaces, and audit-like records; next step is to turn this into explicit persistent domain stores.
-- `pkg/memory/memory.go`: keeps the local-first philosophy intact; next step is assistant-scoped memory and task artifact storage.
-- `pkg/audit/audit.go`: good append-only audit basis; next step is richer risk, approval, and replay metadata.
-
-In short, the optimized architecture for AnyClaw should be "control plane + orchestration plane + runtime core + security boundary + local data plane", which is much closer to the platform positioning described in your report than the current "single agent runtime" framing.
-
-## Channels
-
-- `telegram`: bot polling via Bot API
-- `slack`: polling a default channel via Web API
-- `discord`: polling a default channel via REST API
-- `signal`: polling a local `signal-cli-rest-api` compatible endpoint
-- `whatsapp`: Meta WhatsApp Cloud webhook receive + send replies
-
-Production hardening notes:
-
-- inbound channel messages now carry `message_id`, `user_id`, `username`, and `reply_target` metadata into session events
-- Discord / Signal / WhatsApp use in-memory dedupe windows to avoid replaying the same inbound event repeatedly
-- WhatsApp webhook POST requests can validate `X-Hub-Signature-256` with `channels.whatsapp.app_secret`
-- Signal can send authenticated requests with `channels.signal.bearer_token`
-- Discord stores richer transport metadata such as guild/thread style targets
-- Signal now captures group and attachment metadata from inbound payloads
-- WhatsApp webhook status callbacks are recorded as channel events
-- Discord now supports signed interaction/slash-command webhooks at `/channels/discord/interactions`
-- Discord can now use the Gateway WebSocket client for `MESSAGE_CREATE`, thread-style events, typing/presence signals, and interaction events when `discord.use_gateway_ws` is enabled
-
-Example channel config:
-
-```json
-{
-  "channels": {
-    "routing": {
-      "mode": "per-chat",
-      "rules": [
-        {
-          "channel": "discord",
-          "match": "support",
-          "session_mode": "group",
-          "queue_mode": "fifo",
-          "reply_back": true,
-          "title_prefix": "Discord Support"
-        }
-      ]
-    },
-    "discord": {
-      "enabled": true,
-      "bot_token": "discord-bot-token",
-      "default_channel": "1234567890",
-      "guild_id": "0987654321"
-    },
-    "whatsapp": {
-      "enabled": true,
-      "access_token": "meta-access-token",
-      "phone_number_id": "1234567890",
-      "verify_token": "shared-webhook-secret",
-      "app_secret": "meta-app-secret"
-    },
-    "signal": {
-      "enabled": true,
-      "base_url": "http://127.0.0.1:8080",
-      "number": "+15551234567",
-      "bearer_token": "signal-rest-token"
-    }
-  }
-}
-```
-
-## Skills Platform
-
-- `skill.json` now supports platform metadata such as `version`, `permissions`, `entrypoint`, `source`, `registry`, `homepage`, and `install_command`
-- built-in and remote skills can declare capability expectations before installation
-- `anyclaw skill catalog [query]` shows marketplace/registry style results with version, permissions, and install hints
-- `anyclaw skill info <name>` now shows installed skill metadata beyond name/version
-- executable skills can provide a real filesystem `entrypoint`; AnyClaw exposes them as `skill_<name>` tools and executes them with `ANYCLAW_SKILL_*` environment variables
-- executable skills support launcher auto-detection for `.py`, `.js`/`.mjs`/`.cjs`, `.sh`, and `.ps1`; direct binaries still run directly
-
-Example skill manifest:
-
-```json
-{
-  "name": "deploy-helper",
-  "description": "Deployment workflow assistant",
-  "version": "1.3.0",
-  "registry": "skills.sh",
-  "source": "https://skills.sh/deploy-helper",
-  "homepage": "https://example.com/deploy-helper",
-  "entrypoint": "builtin://deploy-helper",
-  "permissions": ["tools:exec", "sandbox:run"],
-  "install_command": "anyclaw skill install deploy-helper",
-  "prompts": {
-    "system": "You help users deploy and validate services safely."
-  }
-}
-```
-
-Executable skill runtime:
-
-- when a skill has a non-`builtin://` `entrypoint`, it is registered as a callable tool named `skill_<name>`
-- the executable receives JSON input via `ANYCLAW_SKILL_INPUT`
-- additional env vars include `ANYCLAW_SKILL_NAME`, `ANYCLAW_SKILL_VERSION`, `ANYCLAW_SKILL_DIR`, `ANYCLAW_SKILL_TIMEOUT_SECONDS`, and `ANYCLAW_SKILL_PERMISSIONS`
-- executable skill invocation follows the same `plugins.allow_exec` and timeout guardrails used for executable integrations
-- launcher resolution order:
-  - `.py` -> `python3`, then `python`
-  - `.js` / `.mjs` / `.cjs` -> `node`
-  - `.sh` -> `sh` on Unix, `bash` on Windows
-  - `.ps1` -> `pwsh`, then `powershell`
-
-Workspace model:
-
-- AnyClaw now bootstraps a default local org/project/workspace from `agent.working_dir`, similar to OpenClaw's local workspace-first model
-- the gateway ensures a concrete workspace resource exists instead of relying on placeholder ids like `default-org` and `default-project`
-- `agent.working_dir` is normalized to an absolute path at startup so workspace identity stays stable across sessions and runtimes
-
-Session model notes:
-
-- `session_mode: main` keeps direct conversations isolated as primary sessions
-- `session_mode: group` or `group-shared` lets multiple inbound messages land in group-scoped sessions
-- `queue_mode` is stored per session so channels can coordinate FIFO-style turn handling
-- `reply_back: true` marks sessions intended to echo responses back to the originating channel
-- presence/typing state changes are emitted as gateway events during request handling
-
-## Version
+## 版本
 
 ```
 anyclaw version 2026.3.13
 ```
+
+## 许可证
+
+MIT License
+
+## 链接
+
+- [GitHub 仓库](https://github.com/1024XEngineer/anyclaw)
+- [问题反馈](https://github.com/1024XEngineer/anyclaw/issues)

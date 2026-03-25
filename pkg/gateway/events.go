@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"fmt"
 	"sync"
 	"time"
 )
@@ -48,7 +47,7 @@ func (b *Bus) Publish(event *Event) {
 
 func NewEvent(eventType string, sessionID string, payload map[string]any) *Event {
 	return &Event{
-		ID:        fmt.Sprintf("evt_%d", time.Now().UnixNano()),
+		ID:        uniqueID("evt"),
 		Type:      eventType,
 		SessionID: sessionID,
 		Timestamp: time.Now().UTC(),

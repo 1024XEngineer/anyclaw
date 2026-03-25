@@ -1353,7 +1353,9 @@ func rebindBuiltins(state *RuntimeState) {
 	tools.RegisterBuiltins(registry, tools.BuiltinOptions{
 		WorkingDir:            state.workingDir,
 		PermissionLevel:       state.cfg.Agent.PermissionLevel,
+		ExecutionMode:         state.cfg.Sandbox.ExecutionMode,
 		DangerousPatterns:     state.cfg.Security.DangerousCommandPatterns,
+		ProtectedPaths:        state.cfg.Security.ProtectedPaths,
 		CommandTimeoutSeconds: state.cfg.Security.CommandTimeoutSeconds,
 		AuditLogger:           state.audit,
 		Sandbox:               sandboxManager,

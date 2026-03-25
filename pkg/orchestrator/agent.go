@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/anyclaw/anyclaw/pkg/agent"
+	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/memory"
 	"github.com/anyclaw/anyclaw/pkg/skills"
 	"github.com/anyclaw/anyclaw/pkg/tools"
@@ -24,11 +25,20 @@ type AgentDefinition struct {
 	PrivateSkills     []string `json:"private_skills,omitempty"`
 	PermissionLevel   string   `json:"permission_level"`
 	WorkingDir        string   `json:"working_dir,omitempty"`
+
+	LLMProvider    string   `json:"llm_provider,omitempty"`
+	LLMModel       string   `json:"llm_model,omitempty"`
+	LLMAPIKey      string   `json:"llm_api_key,omitempty"`
+	LLMBaseURL     string   `json:"llm_base_url,omitempty"`
+	LLMMaxTokens   *int     `json:"llm_max_tokens,omitempty"`
+	LLMTemperature *float64 `json:"llm_temperature,omitempty"`
+	LLMProxy       string   `json:"llm_proxy,omitempty"`
 }
 
 type SubAgent struct {
 	definition AgentDefinition
 	agent      *agent.Agent
+	llmClient  agent.LLMCaller
 	skills     *skills.SkillsManager
 	tools      *tools.Registry
 	memory     *memory.FileMemory
@@ -36,6 +46,16 @@ type SubAgent struct {
 	lastResult string
 	lastError  error
 	execCount  int
+}
+
+type LLMConfig struct {
+	Provider    string
+	Model       string
+	APIKey      string
+	BaseURL     string
+	MaxTokens   int
+	Temperature float64
+	Proxy       string
 }
 
 func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem *memory.FileMemory) (*SubAgent, error) {
@@ -46,6 +66,35 @@ func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skil
 	permLevel := strings.TrimSpace(def.PermissionLevel)
 	if permLevel == "" {
 		permLevel = "limited"
+	}
+
+	effectiveLLM := llmClient
+	if def.LLMProvider != "" {
+		maxTokens := 0
+		if def.LLMMaxTokens != nil {
+			maxTokens = *def.LLMMaxTokens
+		}
+		temperature := 0.0
+		if def.LLMTemperature != nil {
+			temperature = *def.LLMTemperature
+		}
+		cfg := llm.Config{
+			Provider:    def.LLMProvider,
+			Model:       def.LLMModel,
+			APIKey:      def.LLMAPIKey,
+			BaseURL:     def.LLMBaseURL,
+			MaxTokens:   maxTokens,
+			Temperature: temperature,
+			Proxy:       def.LLMProxy,
+		}
+		if cfg.Model == "" {
+			cfg.Model = "gpt-4o-mini"
+		}
+		customClient, err := llm.NewClient(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create LLM client for agent %s: %w", def.Name, err)
+		}
+		effectiveLLM = customClient
 	}
 
 	// Build private skills manager
@@ -94,7 +143,7 @@ func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skil
 		Name:        def.Name,
 		Description: def.Description,
 		Personality: personality,
-		LLM:         llmClient,
+		LLM:         effectiveLLM,
 		Memory:      agentMem,
 		Skills:      privateSkills,
 		Tools:       privateTools,
@@ -104,6 +153,7 @@ func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skil
 	return &SubAgent{
 		definition: def,
 		agent:      ag,
+		llmClient:  effectiveLLM,
 		skills:     privateSkills,
 		tools:      privateTools,
 		memory:     agentMem,
@@ -155,11 +205,13 @@ func isToolAllowedForPermission(toolName string, permLevel string) bool {
 			"browser_navigate", "browser_screenshot", "browser_snapshot",
 			"browser_click", "browser_wait", "browser_scroll",
 			"browser_tab_list", "browser_tab_new", "browser_tab_switch", "browser_tab_close",
-			"browser_close", "browser_eval", "browser_select", "browser_press", "browser_type":
+			"browser_close", "browser_eval", "browser_select", "browser_press", "browser_type",
+			"desktop_screenshot":
 			return true
 		default:
 			return !strings.HasPrefix(toolName, "write_") &&
 				!strings.HasPrefix(toolName, "run_command") &&
+				!strings.HasPrefix(toolName, "desktop_") &&
 				toolName != "browser_upload" &&
 				toolName != "browser_download" &&
 				toolName != "browser_pdf"
@@ -246,6 +298,8 @@ type AgentInfo struct {
 	Expertise       []string `json:"expertise,omitempty"`
 	Skills          []string `json:"skills,omitempty"`
 	PermissionLevel string   `json:"permission_level,omitempty"`
+	LLMProvider     string   `json:"llm_provider,omitempty"`
+	LLMModel        string   `json:"llm_model,omitempty"`
 	ExecCount       int      `json:"exec_count"`
 }
 
@@ -332,7 +386,7 @@ func (p *AgentPool) ListInfos() []AgentInfo {
 	defer p.mu.RUnlock()
 	list := make([]AgentInfo, 0, len(p.agents))
 	for _, sa := range p.agents {
-		list = append(list, AgentInfo{
+		info := AgentInfo{
 			Name:            sa.Name(),
 			Description:     sa.Description(),
 			Persona:         sa.Persona(),
@@ -340,8 +394,11 @@ func (p *AgentPool) ListInfos() []AgentInfo {
 			Expertise:       sa.Expertise(),
 			Skills:          sa.Skills(),
 			PermissionLevel: sa.PermissionLevel(),
+			LLMProvider:     sa.definition.LLMProvider,
+			LLMModel:        sa.definition.LLMModel,
 			ExecCount:       sa.ExecCount(),
-		})
+		}
+		list = append(list, info)
 	}
 	return list
 }
