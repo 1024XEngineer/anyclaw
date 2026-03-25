@@ -169,6 +169,16 @@ func (p *RuntimePool) Invalidate(agentName string, org string, project string, w
 	delete(p.runtimes, runtimeKey(agentName, org, project, workspaceID))
 }
 
+func (p *RuntimePool) InvalidateByAgent(agentName string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key := range p.runtimes {
+		if runtimePart(key, 0) == agentName {
+			delete(p.runtimes, key)
+		}
+	}
+}
+
 func (p *RuntimePool) InvalidateByWorkspace(workspaceID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
