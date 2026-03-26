@@ -19,6 +19,7 @@ type Session struct {
 	ID                string            `json:"id"`
 	Title             string            `json:"title"`
 	Agent             string            `json:"agent,omitempty"`
+	Participants      []string          `json:"participants,omitempty"`
 	Org               string            `json:"org,omitempty"`
 	Project           string            `json:"project,omitempty"`
 	Workspace         string            `json:"workspace,omitempty"`
@@ -27,6 +28,7 @@ type Session struct {
 	MessageCount      int               `json:"message_count"`
 	LastUserText      string            `json:"last_user_text,omitempty"`
 	History           []prompt.Message  `json:"history"`
+	Messages          []SessionMessage  `json:"messages,omitempty"`
 	SessionMode       string            `json:"session_mode,omitempty"`
 	QueueMode         string            `json:"queue_mode,omitempty"`
 	ReplyBack         bool              `json:"reply_back,omitempty"`
@@ -45,6 +47,17 @@ type Session struct {
 	QueueDepth        int               `json:"queue_depth,omitempty"`
 	LastActiveAt      time.Time         `json:"last_active_at,omitempty"`
 	LastAssistantText string            `json:"last_assistant_text,omitempty"`
+}
+
+type SessionMessage struct {
+	ID        string         `json:"id"`
+	Role      string         `json:"role"`
+	Agent     string         `json:"agent,omitempty"`
+	Content   string         `json:"content"`
+	Kind      string         `json:"kind,omitempty"`
+	TaskID    string         `json:"task_id,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	Meta      map[string]any `json:"meta,omitempty"`
 }
 
 type Event struct {
@@ -880,6 +893,7 @@ func (m *SessionManager) Create(title string, agentName string, org string, proj
 type SessionCreateOptions struct {
 	Title           string
 	AgentName       string
+	Participants    []string
 	Org             string
 	Project         string
 	Workspace       string
@@ -902,16 +916,23 @@ func (m *SessionManager) CreateWithOptions(opts SessionCreateOptions) (*Session,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.nowFunc()
+	participants := normalizeParticipants(opts.AgentName, opts.Participants)
+	primaryAgent := opts.AgentName
+	if primaryAgent == "" && len(participants) > 0 {
+		primaryAgent = participants[0]
+	}
 	session := &Session{
 		ID:              m.nextID(),
 		Title:           opts.Title,
-		Agent:           opts.AgentName,
+		Agent:           primaryAgent,
+		Participants:    participants,
 		Org:             opts.Org,
 		Project:         opts.Project,
 		Workspace:       opts.Workspace,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 		History:         []prompt.Message{},
+		Messages:        []SessionMessage{},
 		SessionMode:     defaultSessionMode(opts.SessionMode),
 		QueueMode:       defaultQueueMode(opts.QueueMode),
 		ReplyBack:       opts.ReplyBack,
@@ -947,6 +968,24 @@ func (m *SessionManager) Get(id string) (*Session, bool) {
 }
 
 func (m *SessionManager) AddExchange(sessionID string, userText string, assistantText string) (*Session, error) {
+	messages := []SessionMessage{
+		{
+			ID:        uniqueID("msg"),
+			Role:      "user",
+			Content:   userText,
+			CreatedAt: m.nowFunc(),
+		},
+		{
+			ID:        uniqueID("msg"),
+			Role:      "assistant",
+			Content:   assistantText,
+			CreatedAt: m.nowFunc(),
+		},
+	}
+	return m.AddMessages(sessionID, messages)
+}
+
+func (m *SessionManager) AddMessages(sessionID string, messages []SessionMessage) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -955,13 +994,14 @@ func (m *SessionManager) AddExchange(sessionID string, userText string, assistan
 		return nil, fmt.Errorf("session not found: %s", sessionID)
 	}
 	now := m.nowFunc()
-	session.History = append(session.History,
-		prompt.Message{Role: "user", Content: userText},
-		prompt.Message{Role: "assistant", Content: assistantText},
-	)
-	session.MessageCount = len(session.History)
-	session.LastUserText = userText
-	session.LastAssistantText = assistantText
+	for _, message := range messages {
+		normalized := normalizeSessionMessage(message, now)
+		session.Messages = append(session.Messages, normalized)
+	}
+	session.History = buildPromptHistory(session)
+	session.MessageCount = len(session.Messages)
+	session.LastUserText = lastSessionMessageContent(session.Messages, "user")
+	session.LastAssistantText = lastSessionMessageContent(session.Messages, "assistant")
 	session.UpdatedAt = now
 	session.LastActiveAt = now
 	session.Presence = "idle"
@@ -969,8 +1009,8 @@ func (m *SessionManager) AddExchange(sessionID string, userText string, assistan
 	if session.QueueDepth > 0 {
 		session.QueueDepth--
 	}
-	if session.Title == "New session" && userText != "" {
-		session.Title = shortenTitle(userText)
+	if session.Title == "New session" && session.LastUserText != "" {
+		session.Title = shortenTitle(session.LastUserText)
 	}
 	if err := m.store.SaveSession(session); err != nil {
 		return nil, err
@@ -1109,8 +1149,133 @@ func cloneSession(session *Session) *Session {
 	}
 	clone := *session
 	clone.TransportMeta = cloneStringMap(session.TransportMeta)
+	clone.Participants = append([]string(nil), session.Participants...)
 	clone.History = append([]prompt.Message(nil), session.History...)
+	clone.Messages = cloneSessionMessages(session.Messages)
+	if len(clone.Messages) == 0 && len(clone.History) > 0 {
+		clone.Messages = legacyMessagesFromHistory(&clone)
+	}
+	clone.MessageCount = len(clone.Messages)
+	if clone.MessageCount > 0 {
+		clone.LastUserText = lastSessionMessageContent(clone.Messages, "user")
+		clone.LastAssistantText = lastSessionMessageContent(clone.Messages, "assistant")
+	}
 	return &clone
+}
+
+func cloneSessionMessage(message SessionMessage) SessionMessage {
+	clone := message
+	if message.Meta != nil {
+		clone.Meta = make(map[string]any, len(message.Meta))
+		for k, v := range message.Meta {
+			clone.Meta[k] = v
+		}
+	}
+	return clone
+}
+
+func cloneSessionMessages(messages []SessionMessage) []SessionMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	items := make([]SessionMessage, 0, len(messages))
+	for _, message := range messages {
+		items = append(items, cloneSessionMessage(message))
+	}
+	return items
+}
+
+func normalizeParticipants(primary string, participants []string) []string {
+	seen := make(map[string]bool)
+	items := make([]string, 0, len(participants)+1)
+	appendName := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		items = append(items, name)
+	}
+	appendName(primary)
+	for _, name := range participants {
+		appendName(name)
+	}
+	return items
+}
+
+func normalizeSessionMessage(message SessionMessage, fallbackTime time.Time) SessionMessage {
+	if strings.TrimSpace(message.ID) == "" {
+		message.ID = uniqueID("msg")
+	}
+	message.Role = strings.TrimSpace(strings.ToLower(message.Role))
+	if message.Role == "" {
+		message.Role = "assistant"
+	}
+	message.Agent = strings.TrimSpace(message.Agent)
+	message.Kind = strings.TrimSpace(message.Kind)
+	if message.CreatedAt.IsZero() {
+		message.CreatedAt = fallbackTime
+	}
+	if message.Meta != nil {
+		meta := make(map[string]any, len(message.Meta))
+		for k, v := range message.Meta {
+			meta[k] = v
+		}
+		message.Meta = meta
+	}
+	return message
+}
+
+func buildPromptHistory(session *Session) []prompt.Message {
+	messages := session.Messages
+	if len(messages) == 0 {
+		return append([]prompt.Message(nil), session.History...)
+	}
+	history := make([]prompt.Message, 0, len(messages))
+	group := len(normalizeParticipants(session.Agent, session.Participants)) > 1
+	for _, message := range messages {
+		switch message.Role {
+		case "user":
+			history = append(history, prompt.Message{Role: "user", Content: message.Content})
+		case "assistant":
+			content := message.Content
+			if group && message.Agent != "" {
+				content = fmt.Sprintf("[%s] %s", message.Agent, content)
+			}
+			history = append(history, prompt.Message{Role: "assistant", Content: content})
+		case "system":
+			history = append(history, prompt.Message{Role: "assistant", Content: fmt.Sprintf("[system] %s", message.Content)})
+		}
+	}
+	return history
+}
+
+func lastSessionMessageContent(messages []SessionMessage, role string) string {
+	role = strings.TrimSpace(strings.ToLower(role))
+	for i := len(messages) - 1; i >= 0; i-- {
+		if strings.TrimSpace(strings.ToLower(messages[i].Role)) == role {
+			return messages[i].Content
+		}
+	}
+	return ""
+}
+
+func legacyMessagesFromHistory(session *Session) []SessionMessage {
+	items := make([]SessionMessage, 0, len(session.History))
+	for _, message := range session.History {
+		role := strings.TrimSpace(strings.ToLower(message.Role))
+		sessionMessage := SessionMessage{
+			ID:        uniqueID("msg"),
+			Role:      role,
+			Content:   message.Content,
+			CreatedAt: session.UpdatedAt,
+		}
+		if role == "assistant" {
+			sessionMessage.Agent = session.Agent
+		}
+		items = append(items, sessionMessage)
+	}
+	return items
 }
 
 func cloneStringMap(input map[string]string) map[string]string {

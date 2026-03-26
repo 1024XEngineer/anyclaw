@@ -1,6 +1,539 @@
 {
-  "sessions": [],
-  "events": [],
+  "sessions": [
+    {
+      "id": "sess_1774494941142107900_131",
+      "title": "New session",
+      "agent": "论文助手",
+      "org": "org-local",
+      "project": "project-local",
+      "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
+      "created_at": "2026-03-26T03:15:41.1421079Z",
+      "updated_at": "2026-03-26T03:15:41.1547456Z",
+      "message_count": 0,
+      "history": null,
+      "session_mode": "main",
+      "queue_mode": "fifo",
+      "presence": "typing",
+      "typing": true,
+      "queue_depth": 1,
+      "last_active_at": "2026-03-26T03:15:41.1547456Z"
+    },
+    {
+      "id": "sess_1774494905456656900_116",
+      "title": "New session",
+      "agent": "论文助手",
+      "org": "org-local",
+      "project": "project-local",
+      "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
+      "created_at": "2026-03-26T03:15:05.4566569Z",
+      "updated_at": "2026-03-26T03:15:05.4692279Z",
+      "message_count": 0,
+      "history": null,
+      "session_mode": "main",
+      "queue_mode": "fifo",
+      "presence": "typing",
+      "typing": true,
+      "queue_depth": 1,
+      "last_active_at": "2026-03-26T03:15:05.4692279Z"
+    },
+    {
+      "id": "sess_1774494846461430100_101",
+      "title": "New session",
+      "agent": "论文助手",
+      "org": "org-local",
+      "project": "project-local",
+      "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
+      "created_at": "2026-03-26T03:14:06.4614301Z",
+      "updated_at": "2026-03-26T03:14:06.4737358Z",
+      "message_count": 0,
+      "history": null,
+      "session_mode": "main",
+      "queue_mode": "fifo",
+      "presence": "typing",
+      "typing": true,
+      "queue_depth": 1,
+      "last_active_at": "2026-03-26T03:14:06.4737358Z"
+    },
+    {
+      "id": "sess_1774494778102361000_86",
+      "title": "New session",
+      "agent": "论文助手",
+      "org": "org-local",
+      "project": "project-local",
+      "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
+      "created_at": "2026-03-26T03:12:58.102361Z",
+      "updated_at": "2026-03-26T03:12:58.1166027Z",
+      "message_count": 0,
+      "history": null,
+      "session_mode": "main",
+      "queue_mode": "fifo",
+      "presence": "typing",
+      "typing": true,
+      "queue_depth": 1,
+      "last_active_at": "2026-03-26T03:12:58.1166027Z"
+    },
+    {
+      "id": "sess_1774494720769793300_67",
+      "title": "New session",
+      "agent": "论文助手",
+      "org": "org-local",
+      "project": "project-local",
+      "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
+      "created_at": "2026-03-26T03:12:00.7697933Z",
+      "updated_at": "2026-03-26T03:12:00.7804636Z",
+      "message_count": 0,
+      "history": null,
+      "session_mode": "main",
+      "queue_mode": "fifo",
+      "presence": "typing",
+      "typing": true,
+      "queue_depth": 1,
+      "last_active_at": "2026-03-26T03:12:00.7804636Z"
+    },
+    {
+      "id": "sess_1774494573398107400_46",
+      "title": "New session",
+      "agent": "论文助手",
+      "org": "org-local",
+      "project": "project-local",
+      "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
+      "created_at": "2026-03-26T03:09:33.3981074Z",
+      "updated_at": "2026-03-26T03:09:33.4081014Z",
+      "message_count": 0,
+      "history": null,
+      "session_mode": "main",
+      "queue_mode": "fifo",
+      "presence": "typing",
+      "typing": true,
+      "queue_depth": 1,
+      "last_active_at": "2026-03-26T03:09:33.4081014Z"
+    },
+    {
+      "id": "sess_1774494562435026600_41",
+      "title": "New session",
+      "agent": "Python编码专家",
+      "org": "org-local",
+      "project": "project-local",
+      "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
+      "created_at": "2026-03-26T03:09:22.4350266Z",
+      "updated_at": "2026-03-26T03:09:22.4450948Z",
+      "message_count": 0,
+      "history": null,
+      "session_mode": "main",
+      "queue_mode": "fifo",
+      "presence": "typing",
+      "typing": true,
+      "queue_depth": 1,
+      "last_active_at": "2026-03-26T03:09:22.4450948Z"
+    },
+    {
+      "id": "sess_1774494494483768400_26",
+      "title": "New session",
+      "agent": "Python编码专家",
+      "org": "org-local",
+      "project": "project-local",
+      "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
+      "created_at": "2026-03-26T03:08:14.4837684Z",
+      "updated_at": "2026-03-26T03:08:14.4937454Z",
+      "message_count": 0,
+      "history": null,
+      "session_mode": "main",
+      "queue_mode": "fifo",
+      "presence": "typing",
+      "typing": true,
+      "queue_depth": 1,
+      "last_active_at": "2026-03-26T03:08:14.4937454Z"
+    },
+    {
+      "id": "sess_1774494349283580900_5",
+      "title": "New session",
+      "agent": "Go编码专家",
+      "org": "org-local",
+      "project": "project-local",
+      "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal",
+      "created_at": "2026-03-26T03:05:49.2835809Z",
+      "updated_at": "2026-03-26T03:05:49.2936904Z",
+      "message_count": 0,
+      "history": null,
+      "session_mode": "main",
+      "queue_mode": "fifo",
+      "presence": "typing",
+      "typing": true,
+      "queue_depth": 1,
+      "last_active_at": "2026-03-26T03:05:49.2936904Z"
+    }
+  ],
+  "events": [
+    {
+      "id": "evt_1774494349286409400_6",
+      "type": "session.created",
+      "session_id": "sess_1774494349283580900_5",
+      "timestamp": "2026-03-26T03:05:49.2864094Z",
+      "payload": {
+        "org": "org-local",
+        "project": "project-local",
+        "title": "New session",
+        "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal"
+      }
+    },
+    {
+      "id": "evt_1774494349291019400_7",
+      "type": "session.queue.updated",
+      "session_id": "sess_1774494349283580900_5",
+      "timestamp": "2026-03-26T03:05:49.2910194Z",
+      "payload": {
+        "queue_mode": "fifo",
+        "source": "api"
+      }
+    },
+    {
+      "id": "evt_1774494349296184500_8",
+      "type": "session.typing",
+      "session_id": "sess_1774494349283580900_5",
+      "timestamp": "2026-03-26T03:05:49.2961845Z",
+      "payload": {
+        "source": "api",
+        "typing": true
+      }
+    },
+    {
+      "id": "evt_1774494349299296500_9",
+      "type": "chat.started",
+      "session_id": "sess_1774494349283580900_5",
+      "timestamp": "2026-03-26T03:05:49.2992965Z",
+      "payload": {
+        "message": "你好"
+      }
+    },
+    {
+      "id": "evt_1774494494486402400_27",
+      "type": "session.created",
+      "session_id": "sess_1774494494483768400_26",
+      "timestamp": "2026-03-26T03:08:14.4864024Z",
+      "payload": {
+        "org": "org-local",
+        "project": "project-local",
+        "title": "New session",
+        "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal"
+      }
+    },
+    {
+      "id": "evt_1774494494490804300_28",
+      "type": "session.queue.updated",
+      "session_id": "sess_1774494494483768400_26",
+      "timestamp": "2026-03-26T03:08:14.4908043Z",
+      "payload": {
+        "queue_mode": "fifo",
+        "source": "api"
+      }
+    },
+    {
+      "id": "evt_1774494494496050800_29",
+      "type": "session.typing",
+      "session_id": "sess_1774494494483768400_26",
+      "timestamp": "2026-03-26T03:08:14.4960508Z",
+      "payload": {
+        "source": "api",
+        "typing": true
+      }
+    },
+    {
+      "id": "evt_1774494494498731200_30",
+      "type": "chat.started",
+      "session_id": "sess_1774494494483768400_26",
+      "timestamp": "2026-03-26T03:08:14.4987312Z",
+      "payload": {
+        "message": "你好"
+      }
+    },
+    {
+      "id": "evt_1774494562437660400_42",
+      "type": "session.created",
+      "session_id": "sess_1774494562435026600_41",
+      "timestamp": "2026-03-26T03:09:22.4376604Z",
+      "payload": {
+        "org": "org-local",
+        "project": "project-local",
+        "title": "New session",
+        "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal"
+      }
+    },
+    {
+      "id": "evt_1774494562442287500_43",
+      "type": "session.queue.updated",
+      "session_id": "sess_1774494562435026600_41",
+      "timestamp": "2026-03-26T03:09:22.4422875Z",
+      "payload": {
+        "queue_mode": "fifo",
+        "source": "api"
+      }
+    },
+    {
+      "id": "evt_1774494562447436200_44",
+      "type": "session.typing",
+      "session_id": "sess_1774494562435026600_41",
+      "timestamp": "2026-03-26T03:09:22.4474362Z",
+      "payload": {
+        "source": "api",
+        "typing": true
+      }
+    },
+    {
+      "id": "evt_1774494562449805100_45",
+      "type": "chat.started",
+      "session_id": "sess_1774494562435026600_41",
+      "timestamp": "2026-03-26T03:09:22.4498051Z",
+      "payload": {
+        "message": "你好"
+      }
+    },
+    {
+      "id": "evt_1774494573400624900_47",
+      "type": "session.created",
+      "session_id": "sess_1774494573398107400_46",
+      "timestamp": "2026-03-26T03:09:33.4006249Z",
+      "payload": {
+        "org": "org-local",
+        "project": "project-local",
+        "title": "New session",
+        "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal"
+      }
+    },
+    {
+      "id": "evt_1774494573405775500_48",
+      "type": "session.queue.updated",
+      "session_id": "sess_1774494573398107400_46",
+      "timestamp": "2026-03-26T03:09:33.4057755Z",
+      "payload": {
+        "queue_mode": "fifo",
+        "source": "api"
+      }
+    },
+    {
+      "id": "evt_1774494573410516900_49",
+      "type": "session.typing",
+      "session_id": "sess_1774494573398107400_46",
+      "timestamp": "2026-03-26T03:09:33.4105169Z",
+      "payload": {
+        "source": "api",
+        "typing": true
+      }
+    },
+    {
+      "id": "evt_1774494573412844300_50",
+      "type": "chat.started",
+      "session_id": "sess_1774494573398107400_46",
+      "timestamp": "2026-03-26T03:09:33.4128443Z",
+      "payload": {
+        "message": "你好"
+      }
+    },
+    {
+      "id": "evt_1774494720773282800_68",
+      "type": "session.created",
+      "session_id": "sess_1774494720769793300_67",
+      "timestamp": "2026-03-26T03:12:00.7732828Z",
+      "payload": {
+        "org": "org-local",
+        "project": "project-local",
+        "title": "New session",
+        "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal"
+      }
+    },
+    {
+      "id": "evt_1774494720778142200_69",
+      "type": "session.queue.updated",
+      "session_id": "sess_1774494720769793300_67",
+      "timestamp": "2026-03-26T03:12:00.7781422Z",
+      "payload": {
+        "queue_mode": "fifo",
+        "source": "api"
+      }
+    },
+    {
+      "id": "evt_1774494720783406000_70",
+      "type": "session.typing",
+      "session_id": "sess_1774494720769793300_67",
+      "timestamp": "2026-03-26T03:12:00.783406Z",
+      "payload": {
+        "source": "api",
+        "typing": true
+      }
+    },
+    {
+      "id": "evt_1774494720786743000_71",
+      "type": "chat.started",
+      "session_id": "sess_1774494720769793300_67",
+      "timestamp": "2026-03-26T03:12:00.786743Z",
+      "payload": {
+        "message": "你好"
+      }
+    },
+    {
+      "id": "evt_1774494778107795400_87",
+      "type": "session.created",
+      "session_id": "sess_1774494778102361000_86",
+      "timestamp": "2026-03-26T03:12:58.1077954Z",
+      "payload": {
+        "org": "org-local",
+        "project": "project-local",
+        "title": "New session",
+        "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal"
+      }
+    },
+    {
+      "id": "evt_1774494778113891300_88",
+      "type": "session.queue.updated",
+      "session_id": "sess_1774494778102361000_86",
+      "timestamp": "2026-03-26T03:12:58.1138913Z",
+      "payload": {
+        "queue_mode": "fifo",
+        "source": "api"
+      }
+    },
+    {
+      "id": "evt_1774494778119513900_89",
+      "type": "session.typing",
+      "session_id": "sess_1774494778102361000_86",
+      "timestamp": "2026-03-26T03:12:58.1195139Z",
+      "payload": {
+        "source": "api",
+        "typing": true
+      }
+    },
+    {
+      "id": "evt_1774494778121731600_90",
+      "type": "chat.started",
+      "session_id": "sess_1774494778102361000_86",
+      "timestamp": "2026-03-26T03:12:58.1217316Z",
+      "payload": {
+        "message": "你好"
+      }
+    },
+    {
+      "id": "evt_1774494846464769000_102",
+      "type": "session.created",
+      "session_id": "sess_1774494846461430100_101",
+      "timestamp": "2026-03-26T03:14:06.464769Z",
+      "payload": {
+        "org": "org-local",
+        "project": "project-local",
+        "title": "New session",
+        "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal"
+      }
+    },
+    {
+      "id": "evt_1774494846470537600_103",
+      "type": "session.queue.updated",
+      "session_id": "sess_1774494846461430100_101",
+      "timestamp": "2026-03-26T03:14:06.4705376Z",
+      "payload": {
+        "queue_mode": "fifo",
+        "source": "api"
+      }
+    },
+    {
+      "id": "evt_1774494846477156600_104",
+      "type": "session.typing",
+      "session_id": "sess_1774494846461430100_101",
+      "timestamp": "2026-03-26T03:14:06.4771566Z",
+      "payload": {
+        "source": "api",
+        "typing": true
+      }
+    },
+    {
+      "id": "evt_1774494846480056400_105",
+      "type": "chat.started",
+      "session_id": "sess_1774494846461430100_101",
+      "timestamp": "2026-03-26T03:14:06.4800564Z",
+      "payload": {
+        "message": "你好"
+      }
+    },
+    {
+      "id": "evt_1774494905459268500_117",
+      "type": "session.created",
+      "session_id": "sess_1774494905456656900_116",
+      "timestamp": "2026-03-26T03:15:05.4592685Z",
+      "payload": {
+        "org": "org-local",
+        "project": "project-local",
+        "title": "New session",
+        "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal"
+      }
+    },
+    {
+      "id": "evt_1774494905466469300_118",
+      "type": "session.queue.updated",
+      "session_id": "sess_1774494905456656900_116",
+      "timestamp": "2026-03-26T03:15:05.4664693Z",
+      "payload": {
+        "queue_mode": "fifo",
+        "source": "api"
+      }
+    },
+    {
+      "id": "evt_1774494905471854700_119",
+      "type": "session.typing",
+      "session_id": "sess_1774494905456656900_116",
+      "timestamp": "2026-03-26T03:15:05.4718547Z",
+      "payload": {
+        "source": "api",
+        "typing": true
+      }
+    },
+    {
+      "id": "evt_1774494905474153900_120",
+      "type": "chat.started",
+      "session_id": "sess_1774494905456656900_116",
+      "timestamp": "2026-03-26T03:15:05.4741539Z",
+      "payload": {
+        "message": "你好"
+      }
+    },
+    {
+      "id": "evt_1774494941145487700_132",
+      "type": "session.created",
+      "session_id": "sess_1774494941142107900_131",
+      "timestamp": "2026-03-26T03:15:41.1454877Z",
+      "payload": {
+        "org": "org-local",
+        "project": "project-local",
+        "title": "New session",
+        "workspace": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw-workflows-personal"
+      }
+    },
+    {
+      "id": "evt_1774494941151441700_133",
+      "type": "session.queue.updated",
+      "session_id": "sess_1774494941142107900_131",
+      "timestamp": "2026-03-26T03:15:41.1514417Z",
+      "payload": {
+        "queue_mode": "fifo",
+        "source": "api"
+      }
+    },
+    {
+      "id": "evt_1774494941157687500_134",
+      "type": "session.typing",
+      "session_id": "sess_1774494941142107900_131",
+      "timestamp": "2026-03-26T03:15:41.1576875Z",
+      "payload": {
+        "source": "api",
+        "typing": true
+      }
+    },
+    {
+      "id": "evt_1774494941160306500_135",
+      "type": "chat.started",
+      "session_id": "sess_1774494941142107900_131",
+      "timestamp": "2026-03-26T03:15:41.1603065Z",
+      "payload": {
+        "message": "你好"
+      }
+    }
+  ],
   "tools": [],
   "audit": [
     {
@@ -845,6 +1378,896 @@
       "action": "status.read",
       "target": "status",
       "timestamp": "2026-03-23T11:47:48.7396371Z"
+    },
+    {
+      "id": "aud_1774494336702401900_1",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:05:36.7024019Z"
+    },
+    {
+      "id": "aud_1774494336708567500_2",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:05:36.7085675Z"
+    },
+    {
+      "id": "aud_1774494336708567500_3",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:05:36.7085675Z"
+    },
+    {
+      "id": "aud_1774494336708567500_4",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:05:36.7085675Z"
+    },
+    {
+      "id": "aud_1774494353170742300_10",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:05:53.1707423Z"
+    },
+    {
+      "id": "aud_1774494353171391000_11",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "auth.users.read",
+      "target": "users",
+      "timestamp": "2026-03-26T03:05:53.171391Z"
+    },
+    {
+      "id": "aud_1774494395065288900_12",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:06:35.0652889Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494420695964700_13",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:07:00.6959647Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494420699022100_15",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:07:00.6990221Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494420696680300_14",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "runtimes.read",
+      "target": "runtimes",
+      "timestamp": "2026-03-26T03:07:00.6966803Z"
+    },
+    {
+      "id": "aud_1774494437964734600_16",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "agent-bindings.write",
+      "target": "Go编码专家",
+      "timestamp": "2026-03-26T03:07:17.9647346Z",
+      "meta": {
+        "model": "qwen-plus",
+        "provider_ref": ""
+      }
+    },
+    {
+      "id": "aud_1774494437974785600_17",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:07:17.9747856Z"
+    },
+    {
+      "id": "aud_1774494437974785600_18",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:07:17.9747856Z"
+    },
+    {
+      "id": "aud_1774494437974785600_20",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:07:17.9747856Z"
+    },
+    {
+      "id": "aud_1774494437974785600_19",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:07:17.9747856Z"
+    },
+    {
+      "id": "aud_1774494489418524100_21",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "providers.write",
+      "target": "qwen",
+      "timestamp": "2026-03-26T03:08:09.4185241Z"
+    },
+    {
+      "id": "aud_1774494489428032500_22",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:08:09.4280325Z"
+    },
+    {
+      "id": "aud_1774494489428032500_23",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:08:09.4280325Z"
+    },
+    {
+      "id": "aud_1774494489428032500_25",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:08:09.4280325Z"
+    },
+    {
+      "id": "aud_1774494489428032500_24",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:08:09.4280325Z"
+    },
+    {
+      "id": "aud_1774494515412273500_31",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "agent-bindings.write",
+      "target": "Go编码专家",
+      "timestamp": "2026-03-26T03:08:35.4122735Z",
+      "meta": {
+        "model": "qwen-plus",
+        "provider_ref": ""
+      }
+    },
+    {
+      "id": "aud_1774494515423179900_32",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:08:35.4231799Z"
+    },
+    {
+      "id": "aud_1774494515423179900_33",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:08:35.4231799Z"
+    },
+    {
+      "id": "aud_1774494515423970000_34",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:08:35.42397Z"
+    },
+    {
+      "id": "aud_1774494515423970000_35",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:08:35.42397Z"
+    },
+    {
+      "id": "aud_1774494553640540600_36",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "agent-bindings.write",
+      "target": "Go编码专家,Python编码专家,健身教练,论文助手,数据分析师,翻译专家",
+      "timestamp": "2026-03-26T03:09:13.6405406Z",
+      "meta": {
+        "model": "qwen-plus",
+        "provider_ref": "qwen"
+      }
+    },
+    {
+      "id": "aud_1774494553649134900_37",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:09:13.6491349Z"
+    },
+    {
+      "id": "aud_1774494553649134900_38",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:09:13.6491349Z"
+    },
+    {
+      "id": "aud_1774494553649134900_39",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:09:13.6491349Z"
+    },
+    {
+      "id": "aud_1774494553649643800_40",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:09:13.6496438Z"
+    },
+    {
+      "id": "aud_1774494614920925300_51",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:10:14.9209253Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494630168964000_52",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:10:30.168964Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494633164171500_53",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:10:33.1641715Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494655437706900_54",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:10:55.4377069Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494655439205300_55",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "runtimes.read",
+      "target": "runtimes",
+      "timestamp": "2026-03-26T03:10:55.4392053Z"
+    },
+    {
+      "id": "aud_1774494655441581800_56",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:10:55.4415818Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494660100358400_57",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:11:00.1003584Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494660103609200_59",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:11:00.1036092Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494660100864600_58",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "runtimes.read",
+      "target": "runtimes",
+      "timestamp": "2026-03-26T03:11:00.1008646Z"
+    },
+    {
+      "id": "aud_1774494662486921100_60",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:11:02.4869211Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494663449603900_61",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:11:03.4496039Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494717527740700_62",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "agent-bindings.write",
+      "target": "Go编码专家,Python编码专家,健身教练,论文助手,数据分析师,翻译专家",
+      "timestamp": "2026-03-26T03:11:57.5277407Z",
+      "meta": {
+        "model": "qwen-turbo",
+        "provider_ref": "qwen"
+      }
+    },
+    {
+      "id": "aud_1774494717537145000_63",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:11:57.537145Z"
+    },
+    {
+      "id": "aud_1774494717537145000_64",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:11:57.537145Z"
+    },
+    {
+      "id": "aud_1774494717537145000_65",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:11:57.537145Z"
+    },
+    {
+      "id": "aud_1774494717537652800_66",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:11:57.5376528Z"
+    },
+    {
+      "id": "aud_1774494743573657500_72",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:12:23.5736575Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494743573657500_73",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "runtimes.read",
+      "target": "runtimes",
+      "timestamp": "2026-03-26T03:12:23.5736575Z"
+    },
+    {
+      "id": "aud_1774494743578744800_74",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:12:23.5787448Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494745811996400_75",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:12:25.8119964Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494746797165900_76",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:12:26.7971659Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494746800469700_78",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:12:26.8004697Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494746797857200_77",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "runtimes.read",
+      "target": "runtimes",
+      "timestamp": "2026-03-26T03:12:26.7978572Z"
+    },
+    {
+      "id": "aud_1774494749455195800_79",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:12:29.4551958Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494751155225900_80",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:12:31.1552259Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494774253944700_81",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "providers.write",
+      "target": "qwen",
+      "timestamp": "2026-03-26T03:12:54.2539447Z"
+    },
+    {
+      "id": "aud_1774494774262452900_82",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:12:54.2624529Z"
+    },
+    {
+      "id": "aud_1774494774262452900_83",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:12:54.2624529Z"
+    },
+    {
+      "id": "aud_1774494774262452900_84",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:12:54.2624529Z"
+    },
+    {
+      "id": "aud_1774494774262452900_85",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:12:54.2624529Z"
+    },
+    {
+      "id": "aud_1774494814332389300_91",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "providers.write",
+      "target": "qwen",
+      "timestamp": "2026-03-26T03:13:34.3323893Z"
+    },
+    {
+      "id": "aud_1774494814341451200_92",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:13:34.3414512Z"
+    },
+    {
+      "id": "aud_1774494814341451200_93",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:13:34.3414512Z"
+    },
+    {
+      "id": "aud_1774494814341978700_94",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:13:34.3419787Z"
+    },
+    {
+      "id": "aud_1774494814341978700_95",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:13:34.3419787Z"
+    },
+    {
+      "id": "aud_1774494836193229700_96",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "agent-bindings.write",
+      "target": "Go编码专家,Python编码专家,健身教练,论文助手,数据分析师,翻译专家",
+      "timestamp": "2026-03-26T03:13:56.1932297Z",
+      "meta": {
+        "model": "qwen-max",
+        "provider_ref": "qwen"
+      }
+    },
+    {
+      "id": "aud_1774494836202058900_97",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:13:56.2020589Z"
+    },
+    {
+      "id": "aud_1774494836202058900_98",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:13:56.2020589Z"
+    },
+    {
+      "id": "aud_1774494836202565200_99",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:13:56.2025652Z"
+    },
+    {
+      "id": "aud_1774494836203106300_100",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:13:56.2031063Z"
+    },
+    {
+      "id": "aud_1774494851198476500_106",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:14:11.1984765Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494851202320000_108",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:14:11.20232Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494851198476500_107",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "runtimes.read",
+      "target": "runtimes",
+      "timestamp": "2026-03-26T03:14:11.1984765Z"
+    },
+    {
+      "id": "aud_1774494852658321400_109",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:14:12.6583214Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494853802653800_110",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:14:13.8026538Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494901931357200_111",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "providers.write",
+      "target": "qwen",
+      "timestamp": "2026-03-26T03:15:01.9313572Z"
+    },
+    {
+      "id": "aud_1774494901941083600_113",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:15:01.9410836Z"
+    },
+    {
+      "id": "aud_1774494901941083600_112",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:15:01.9410836Z"
+    },
+    {
+      "id": "aud_1774494901941083600_114",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:15:01.9410836Z"
+    },
+    {
+      "id": "aud_1774494901941649400_115",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:15:01.9416494Z"
+    },
+    {
+      "id": "aud_1774494907901217000_122",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:15:07.901217Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494907901217000_121",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:15:07.901217Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494907901217000_123",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "runtimes.read",
+      "target": "runtimes",
+      "timestamp": "2026-03-26T03:15:07.901217Z"
+    },
+    {
+      "id": "aud_1774494909417857600_124",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:15:09.4178576Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494910411877200_125",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:15:10.4118772Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494936241750400_126",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "agent-bindings.write",
+      "target": "Go编码专家,Python编码专家,健身教练,论文助手,数据分析师,翻译专家",
+      "timestamp": "2026-03-26T03:15:36.2417504Z",
+      "meta": {
+        "model": "qwen-max",
+        "provider_ref": "qwen"
+      }
+    },
+    {
+      "id": "aud_1774494936252708300_127",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "resources.read",
+      "target": "resources",
+      "timestamp": "2026-03-26T03:15:36.2527083Z"
+    },
+    {
+      "id": "aud_1774494936252708300_128",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "assistants.read",
+      "target": "assistants",
+      "timestamp": "2026-03-26T03:15:36.2527083Z"
+    },
+    {
+      "id": "aud_1774494936252708300_129",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "control-plane.read",
+      "target": "control-plane",
+      "timestamp": "2026-03-26T03:15:36.2527083Z"
+    },
+    {
+      "id": "aud_1774494936252708300_130",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-03-26T03:15:36.2532161Z"
+    },
+    {
+      "id": "aud_1774494969452872900_136",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:16:09.4528729Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494969457841700_138",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:16:09.4578417Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
+    },
+    {
+      "id": "aud_1774494969452872900_137",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "runtimes.read",
+      "target": "runtimes",
+      "timestamp": "2026-03-26T03:16:09.4528729Z"
+    },
+    {
+      "id": "aud_1774494988815891400_139",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "tasks.read",
+      "target": "tasks",
+      "timestamp": "2026-03-26T03:16:28.8158914Z",
+      "meta": {
+        "count": 0
+      }
+    },
+    {
+      "id": "aud_1774494989950736000_140",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "approvals.read",
+      "target": "approvals",
+      "timestamp": "2026-03-26T03:16:29.950736Z",
+      "meta": {
+        "count": 0,
+        "status": "pending"
+      }
     }
   ],
   "orgs": [
@@ -873,5 +2296,5 @@
     }
   ],
   "jobs": [],
-  "updated": "2026-03-23T11:47:48.7396371Z"
+  "updated": "2026-03-26T03:16:29.9516936Z"
 }

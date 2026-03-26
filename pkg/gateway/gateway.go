@@ -1228,6 +1228,17 @@ func (s *Server) runSessionMessage(ctx context.Context, sessionID string, title 
 	if !ok {
 		return "", nil, fmt.Errorf("session not found: %s", sessionID)
 	}
+	if len(sessionAgentNames(session)) > 1 || session.IsGroup {
+		response, updatedSession, err := s.runGroupSessionMessage(ctx, session, message)
+		if err != nil {
+			return "", nil, err
+		}
+		if _, err := s.sessions.SetPresence(sessionID, "idle", false); err == nil {
+			s.appendEvent("session.presence", sessionID, map[string]any{"presence": "idle", "source": "api"})
+		}
+		s.appendEvent("chat.completed", sessionID, map[string]any{"message": message, "response_length": len(response), "mode": "group"})
+		return response, updatedSession, nil
+	}
 	targetApp, err := s.runtimePool.GetOrCreate(session.Agent, session.Org, session.Project, session.Workspace)
 	if err != nil {
 		return "", nil, err
@@ -2524,13 +2535,14 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, sessions)
 	case http.MethodPost:
 		var req struct {
-			Title       string `json:"title"`
-			Assistant   string `json:"assistant"`
-			SessionMode string `json:"session_mode"`
-			QueueMode   string `json:"queue_mode"`
-			ReplyBack   bool   `json:"reply_back"`
-			IsGroup     bool   `json:"is_group"`
-			GroupKey    string `json:"group_key"`
+			Title        string   `json:"title"`
+			Assistant    string   `json:"assistant"`
+			Participants []string `json:"participants"`
+			SessionMode  string   `json:"session_mode"`
+			QueueMode    string   `json:"queue_mode"`
+			ReplyBack    bool     `json:"reply_back"`
+			IsGroup      bool     `json:"is_group"`
+			GroupKey     string   `json:"group_key"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, context.Canceled) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -2541,6 +2553,16 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
+		participants, err := s.resolveAssistantNames(req.Participants)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		participants = normalizeParticipants(agentName, participants)
+		if req.IsGroup && len(participants) < 2 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group channels require at least two agents"})
+			return
+		}
 		orgID, projectID, workspaceID := s.resolveResourceSelection(r)
 		org, project, workspace, err := s.validateResourceSelection(orgID, projectID, workspaceID)
 		if err != nil {
@@ -2548,16 +2570,17 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		session, err := s.sessions.CreateWithOptions(SessionCreateOptions{
-			Title:       req.Title,
-			AgentName:   agentName,
-			Org:         org.ID,
-			Project:     project.ID,
-			Workspace:   workspace.ID,
-			SessionMode: req.SessionMode,
-			QueueMode:   req.QueueMode,
-			ReplyBack:   req.ReplyBack,
-			IsGroup:     req.IsGroup,
-			GroupKey:    req.GroupKey,
+			Title:        req.Title,
+			AgentName:    agentName,
+			Participants: participants,
+			Org:          org.ID,
+			Project:      project.ID,
+			Workspace:    workspace.ID,
+			SessionMode:  req.SessionMode,
+			QueueMode:    req.QueueMode,
+			ReplyBack:    req.ReplyBack,
+			IsGroup:      req.IsGroup,
+			GroupKey:     req.GroupKey,
 		})
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

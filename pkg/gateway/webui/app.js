@@ -1086,7 +1086,7 @@ function resolveWorkbenchSession(sessions) {
 function resolveWorkbenchAssistant(selectedSession) {
   const assistants = enabledAssistants();
   const fallback = assistants[0]?.name || "";
-  const preferred = String(state.selectedWorkbenchAssistant || selectedSession?.agent || fallback).trim();
+  const preferred = String(state.selectedWorkbenchAssistant || sessionPrimaryAssistant(selectedSession) || fallback).trim();
   if (preferred && preferred !== state.selectedWorkbenchAssistant) {
     setWorkbenchAssistant(preferred);
   }
@@ -1192,12 +1192,39 @@ function findProvider(ref) {
 
 function messageRole(message) {
   const raw = String(message?.role ?? message?.Role ?? "").trim().toLowerCase();
-  return raw === "assistant" ? "assistant" : "user";
+  return raw === "assistant" || raw === "system" ? "assistant" : "user";
 }
 
 function messageContent(message) {
   if (message == null) return "";
   return message.content ?? message.Content ?? "";
+}
+
+function sessionParticipants(session) {
+  const participants = Array.isArray(session?.participants) ? session.participants.filter(Boolean) : [];
+  if (participants.length) return participants;
+  return session?.agent ? [session.agent] : [];
+}
+
+function sessionPrimaryAssistant(session) {
+  return sessionParticipants(session)[0] || session?.agent || "";
+}
+
+function sessionMemberSummary(session) {
+  const participants = sessionParticipants(session);
+  if (!participants.length) return "未指定智能体";
+  if (participants.length === 1) return participants[0];
+  if (participants.length === 2) return participants.join("、");
+  return `${participants[0]} 等 ${participants.length} 个 Agent`;
+}
+
+function sessionKindLabel(session) {
+  return (session?.is_group || sessionParticipants(session).length > 1) ? "群聊频道" : "私聊频道";
+}
+
+function sessionMessages(session) {
+  if (Array.isArray(session?.messages) && session.messages.length) return session.messages;
+  return Array.isArray(session?.history) ? session.history : [];
 }
 
 function clearWorkbenchPendingState() {
@@ -1307,6 +1334,34 @@ function renderWorkbenchMessage(message, options = {}) {
   const author = role === "assistant"
     ? (options.assistantName || "智能体")
     : "你";
+  const stateLabel = thinking
+    ? "处理中"
+    : pending
+      ? "发送中"
+      : "";
+  return `
+    <article class="message ${role} ${pending ? "is-pending" : ""} ${thinking ? "is-thinking" : ""}">
+      <div class="message-head">
+        <div class="message-meta-row">
+          <span class="message-author">${escapeHTML(author)}</span>
+          ${stateLabel ? `<span class="message-state">${escapeHTML(stateLabel)}</span>` : ""}
+        </div>
+      </div>
+      <div class="message-body">${thinking ? renderThinkingDots() : formatMessageBody(options.content ?? messageContent(message))}</div>
+    </article>
+  `;
+}
+
+function renderChannelMessage(message, options = {}) {
+  const role = options.role || messageRole(message);
+  const pending = Boolean(options.pending);
+  const thinking = Boolean(options.thinking);
+  const rawRole = String(message?.role ?? message?.Role ?? "").trim().toLowerCase();
+  const author = rawRole === "system"
+    ? "系统"
+    : role === "assistant"
+      ? (message?.agent || message?.Agent || options.assistantName || "智能体")
+      : "你";
   const stateLabel = thinking
     ? "处理中"
     : pending
@@ -2584,6 +2639,13 @@ async function handleClick(target, event) {
         setWorkbenchSessionsOpen(!state.workbenchSessionsOpen);
         await renderWorkbench();
         break;
+      case "open-channel":
+        state.workbenchDraft = false;
+        state.selectedSessionId = target.dataset.id || "";
+        setWorkbenchSessionsOpen(false);
+        setRoute("workbench");
+        await renderApp();
+        break;
       case "select-approval":
         state.selectedApprovalId = target.dataset.id || "";
         await renderApprovals();
@@ -2613,7 +2675,8 @@ async function handleClick(target, event) {
         await deleteAgent(target.dataset.name || "");
         break;
       case "open-task-detail":
-        await openTaskDetail(target.dataset.id || "");
+      case "open-channel-detail":
+        await openChannelDetail(target.dataset.id || "");
         break;
       case "open-store-detail":
         await openStoreDetail(target.dataset.id || "");
@@ -2730,6 +2793,35 @@ async function handleSubmit(event) {
           await renderWorkbench();
           throw error;
         }
+        break;
+      }
+      case "channel": {
+        const assistant = String(formData.get("assistant") || "").trim();
+        const type = String(formData.get("channel_type") || "dm").trim().toLowerCase();
+        const participants = type === "group"
+          ? Array.from(new Set([assistant, ...formData.getAll("participants").map((value) => String(value || "").trim()).filter(Boolean)]))
+          : [assistant];
+        if (!assistant) throw new Error("请选择默认智能体。");
+        if (type === "group" && participants.length < 2) {
+          throw new Error("群聊频道至少需要两个智能体。");
+        }
+        const payload = await apiFetch(withWorkspaceQuery("/sessions"), {
+          method: "POST",
+          body: {
+            title: String(formData.get("title") || "").trim(),
+            assistant,
+            participants,
+            is_group: type === "group",
+            session_mode: type === "group" ? "channel-group" : "channel-dm",
+            queue_mode: "fifo",
+          },
+        });
+        state.selectedSessionId = payload?.id || "";
+        state.workbenchDraft = false;
+        await refreshCoreData();
+        setRoute("workbench");
+        await renderApp();
+        showToast(type === "group" ? "群聊频道已创建。" : "私聊频道已创建。", "success");
         break;
       }
       case "task": {
@@ -2960,6 +3052,39 @@ function fillWorkbenchPrompt(prompt) {
   textarea.value = state.workbenchDraftMessage;
   textarea.focus();
   textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
+async function openChannelDetail(id) {
+  if (!id) return;
+  const channel = await apiFetch(`/sessions/${encodeURIComponent(id)}`);
+  const messages = sessionMessages(channel);
+  openModal({
+    title: channel.title || id,
+    description: `${sessionKindLabel(channel)} · ${sessionMemberSummary(channel)}`,
+    body: `
+      <div class="stack">
+        <article class="list-row">
+          <div class="event-header">
+            <span class="event-title">频道状态</span>
+            ${statusChip(channel.presence || "idle", channel.presence || "idle", true)}
+          </div>
+          <div class="muted">${escapeHTML(channel.last_user_text || channel.last_assistant_text || "暂无消息")}</div>
+        </article>
+        <div>
+          <div class="muted">频道消息</div>
+          ${messages.length
+            ? `<div class="stack">${messages.slice(-8).map((message) => renderChannelMessage(message, {
+              assistantName: sessionPrimaryAssistant(channel),
+            })).join("")}</div>`
+            : emptyState("暂无消息", "这个频道还没有任何聊天或任务记录。")}
+        </div>
+        <div>
+          <div class="muted">频道数据</div>
+          ${renderJSON(channel)}
+        </div>
+      </div>
+    `,
+  });
 }
 
 async function openTaskDetail(id) {
@@ -3541,7 +3666,7 @@ async function renderWorkbench() {
   const selectedSession = resolveWorkbenchSession(state.sessions);
   const activeAssistantName = resolveWorkbenchAssistant(selectedSession);
   const sessionCount = state.sessions.length;
-  const selectedMessages = Array.isArray(selectedSession?.history) ? selectedSession.history : [];
+  const selectedMessages = sessionMessages(selectedSession);
   const pendingAssistantName = state.workbenchPendingAssistant || activeAssistantName || "智能体";
   const optimisticMessages = [...selectedMessages];
   const optimisticOnSession =
@@ -3602,7 +3727,7 @@ async function renderWorkbench() {
           ${optimisticMessages.length
         ? `
           <div class="message-thread workbench-thread">
-            ${optimisticMessages.map((message) => renderWorkbenchMessage(message, {
+            ${optimisticMessages.map((message) => renderChannelMessage(message, {
           assistantName: pendingAssistantName,
           pending: Boolean(message?.pending),
           thinking: Boolean(message?.thinking),
@@ -3814,4 +3939,215 @@ async function openJobDetail(id) {
       </div>
     `,
   });
+}
+
+const taskNavItem = NAV_ITEMS.find((item) => item.id === "tasks");
+if (taskNavItem) {
+  taskNavItem.label = "频道";
+  taskNavItem.hint = "创建私聊频道、群聊频道，并在同一个频道里持续推进聊天和任务";
+  taskNavItem.aliases = ["tasks", "频道", "channels", "channel", "群聊", "私聊"];
+}
+
+function renderWorkbenchComposer(options) {
+  const {
+    assistantName = "",
+    sessionId = "",
+    hero = false,
+  } = options || {};
+  const submitting = state.workbenchSubmitting;
+  const composerClass = hero
+    ? "composer workbench-composer workbench-composer-home"
+    : "composer workbench-composer workbench-composer-docked";
+  const textareaClass = hero ? "textarea textarea-home" : "textarea textarea-chat";
+  const textareaValue = escapeHTML(state.workbenchDraftMessage || "");
+  const actionLabel = submitting ? "发送中..." : hero ? "开始频道对话" : "发送消息";
+  const secondaryButton = sessionId
+    ? `<button type="button" class="btn btn-ghost" data-action="new-session" ${submitting ? "disabled" : ""}>新频道</button>`
+    : `<button type="button" class="btn btn-ghost" data-action="navigate" data-route="tasks" ${submitting ? "disabled" : ""}>管理频道</button>`;
+  const placeholder = hero ? "输入你的目标、问题，或者想在频道里推进的任务..." : "继续在这个频道里补充消息或任务...";
+  const statusText = submitting
+    ? sessionId
+      ? "频道成员正在协作回复..."
+      : "正在创建频道并发送首条消息..."
+    : "";
+  const formClass = `${composerClass}${submitting ? " is-submitting" : ""}`;
+
+  return `
+    <form class="${formClass}" data-form="chat" aria-busy="${submitting ? "true" : "false"}">
+      ${sessionId ? `<input type="hidden" name="session_id" value="${escapeHTML(sessionId)}" />` : ""}
+      <input type="hidden" name="assistant" value="${escapeHTML(assistantName)}" />
+      <label class="field field-composer">
+        <span class="sr-only">${hero ? "输入你的目标、问题或频道任务" : "输入频道消息"}</span>
+        <textarea class="${textareaClass}" name="message" placeholder="${placeholder}" required ${submitting ? "disabled" : ""}>${textareaValue}</textarea>
+      </label>
+      <div class="composer-actions">
+        <div class="badge-row">
+          ${secondaryButton}
+          ${statusText ? `<span class="composer-status" aria-live="polite">${escapeHTML(statusText)}</span>` : ""}
+        </div>
+        <button type="submit" class="btn btn-primary" ${submitting ? "disabled" : ""}>${actionLabel}</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderWorkbenchSessionsDrawer(sessions, selectedSession, sessionCount) {
+  if (!state.workbenchSessionsOpen) return "";
+  return `
+    <div class="workbench-session-layer is-open">
+      <button
+        type="button"
+        class="workbench-session-backdrop"
+        data-action="toggle-workbench-sessions"
+        aria-label="关闭频道列表"
+      ></button>
+      <aside class="panel workbench-session-drawer">
+        <div class="section-header workbench-session-head">
+          <div>
+            <h3>频道列表</h3>
+            <p class="muted">${sessionCount ? `共 ${sessionCount} 个频道` : "还没有历史频道"}</p>
+          </div>
+          <div class="inline-actions workbench-session-actions">
+            <button class="btn btn-ghost" data-action="new-session">新频道</button>
+          </div>
+        </div>
+        ${sessions.length
+          ? `
+            <div class="stack session-list">
+              ${sessions.map((session) => `
+                <button class="session-item ${session.id === selectedSession?.id ? "is-active" : ""}" data-action="select-session" data-id="${escapeHTML(session.id)}">
+                  <div class="event-header">
+                    <span class="event-title">${escapeHTML(session.title || "未命名频道")}</span>
+                    <span class="muted">${escapeHTML(sessionKindLabel(session))}</span>
+                  </div>
+                  <div class="muted session-preview">${escapeHTML(session.last_user_text || session.last_assistant_text || "暂无消息")}</div>
+                  <div class="badge-row">
+                    ${statusChip(session.presence || "idle", session.presence || "idle", true)}
+                    <span class="provider-chip">${escapeHTML(sessionMemberSummary(session))}</span>
+                  </div>
+                </button>
+              `).join("")}
+            </div>
+          `
+          : `
+            <div class="workbench-empty-note">
+              <h4>还没有频道</h4>
+              <p>从主输入区开始，发送第一条消息后会自动生成私聊频道；你也可以去频道页创建群聊频道。</p>
+            </div>
+          `}
+      </aside>
+    </div>
+  `;
+}
+
+async function renderTasks() {
+  const workspace = currentWorkspace();
+  if (!workspace) {
+    pageEl.innerHTML = localizeHTML(emptyState("No workspace selected", "Select a workspace before creating channels."));
+    return;
+  }
+
+  state.sessions = (await safeFetch(`/sessions?workspace=${encodeURIComponent(workspace.id)}`, {}, [])) || [];
+  const channels = state.sessions;
+  const dmCount = channels.filter((session) => !session.is_group && sessionParticipants(session).length <= 1).length;
+  const groupCount = channels.filter((session) => session.is_group || sessionParticipants(session).length > 1).length;
+  const assistantOptions = enabledAssistants().map((assistant) => `<option value="${escapeHTML(assistant.name)}">${escapeHTML(assistant.name)}</option>`).join("");
+
+  pageEl.innerHTML = localizeHTML(`
+    <div class="page-grid tasks-page">
+      <div class="stats-grid tasks-stats-grid">
+        ${metricCard("频道总数", channels.length, workspace.name, "info")}
+        ${metricCard("私聊频道", dmCount, "用户与单个 Agent", "success")}
+        ${metricCard("群聊频道", groupCount, "多个 Agent 协作", "warning")}
+        ${metricCard("活跃频道", channels.filter((session) => (session.message_count || 0) > 0).length, "已有消息记录", "info")}
+      </div>
+
+      <div class="two-col tasks-layout">
+        <section class="panel tasks-panel tasks-form-panel">
+          <div class="section-header section-header-tight">
+            <div>
+              <h3>创建频道</h3>
+              <p class="muted">把聊天和任务统一放进频道里。私聊频道适合单个 Agent 跟进，群聊频道适合多个 Agent 共享上下文协作完成任务。</p>
+            </div>
+          </div>
+          <form class="stack tasks-form" data-form="channel">
+            <label class="field">
+              <span>频道名称</span>
+              <input class="input" type="text" name="title" placeholder="例如：接口联调群、前端私聊、Bug 排查频道" />
+            </label>
+            <label class="field">
+              <span>频道类型</span>
+              <select class="select" name="channel_type">
+                <option value="dm">私聊频道</option>
+                <option value="group">群聊频道</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>默认智能体</span>
+              <select class="select" name="assistant">
+                ${renderAssistantOptions(state.assistants[0]?.name || "")}
+              </select>
+            </label>
+            <label class="field">
+              <span>群聊成员</span>
+              <select class="select" name="participants" multiple size="6">
+                ${assistantOptions}
+              </select>
+              <div class="muted">群聊时可额外选择多个 Agent。默认智能体会自动加入成员列表。</div>
+            </label>
+            <div class="inline-actions">
+              <button type="submit" class="btn btn-primary">创建频道</button>
+              <button type="button" class="btn btn-ghost" data-action="navigate" data-route="workbench">进入工作台</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel tasks-panel tasks-list-panel">
+          <div class="section-header section-header-tight">
+            <div>
+              <h3>最近频道</h3>
+              <p class="muted">选择已有频道继续聊天、补充任务，或者直接查看频道详情。</p>
+            </div>
+            <span class="provider-chip">${channels.length}</span>
+          </div>
+          ${channels.length
+            ? `
+              <div class="table-wrap tasks-table-wrap">
+                <table class="tasks-table">
+                  <thead>
+                    <tr>
+                      <th>频道</th>
+                      <th>类型</th>
+                      <th>成员</th>
+                      <th>更新</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${channels.map((session) => `
+                      <tr>
+                        <td>
+                          <div class="event-title">${escapeHTML(session.title || session.id)}</div>
+                          <div class="muted">${escapeHTML(session.last_user_text || session.last_assistant_text || "暂无消息")}</div>
+                        </td>
+                        <td>${statusChip(sessionKindLabel(session), sessionKindLabel(session), true)}</td>
+                        <td>${escapeHTML(sessionMemberSummary(session))}</td>
+                        <td>${formatTime(session.updated_at || session.created_at)}</td>
+                        <td>
+                          <div class="inline-actions">
+                            <button class="btn btn-ghost" data-action="open-channel" data-id="${escapeHTML(session.id)}">进入</button>
+                            <button class="btn btn-ghost" data-action="open-channel-detail" data-id="${escapeHTML(session.id)}">详情</button>
+                          </div>
+                        </td>
+                      </tr>
+                    `).join("")}
+                  </tbody>
+                </table>
+              </div>
+            `
+            : emptyState("暂无频道", "创建第一个私聊或群聊频道，然后直接在频道里聊天、发任务、协作推进。")}
+        </section>
+      </div>
+    </div>
+  `);
 }

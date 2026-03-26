@@ -74,7 +74,6 @@ type AgentProfile struct {
 	Enabled         *bool           `json:"enabled,omitempty"`
 	Personality     PersonalitySpec `json:"personality,omitempty"`
 	Skills          []AgentSkillRef `json:"skills,omitempty"`
-	ProviderRef     string          `json:"provider_ref,omitempty"`
 }
 
 type ProviderProfile struct {
