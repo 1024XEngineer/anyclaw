@@ -23,6 +23,7 @@ type Config struct {
 	Sandbox      SandboxConfig      `json:"sandbox"`
 	Security     SecurityConfig     `json:"security"`
 	Orchestrator OrchestratorConfig `json:"orchestrator"`
+	Providers    []ProviderProfile  `json:"providers,omitempty"`
 }
 
 type LLMConfig struct {
@@ -71,6 +72,7 @@ type AgentProfile struct {
 	Enabled         *bool           `json:"enabled,omitempty"`
 	Personality     PersonalitySpec `json:"personality,omitempty"`
 	Skills          []AgentSkillRef `json:"skills,omitempty"`
+	ProviderRef     string          `json:"provider_ref,omitempty"`
 }
 
 type PersonalitySpec struct {
@@ -89,6 +91,23 @@ type AgentSkillRef struct {
 	Enabled     bool     `json:"enabled"`
 	Permissions []string `json:"permissions,omitempty"`
 	Version     string   `json:"version,omitempty"`
+}
+
+type ProviderProfile struct {
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Type         string            `json:"type,omitempty"`
+	Provider     string            `json:"provider"`
+	BaseURL      string            `json:"base_url,omitempty"`
+	APIKey       string            `json:"api_key,omitempty"`
+	DefaultModel string            `json:"default_model,omitempty"`
+	Capabilities []string          `json:"capabilities,omitempty"`
+	Enabled      *bool             `json:"enabled,omitempty"`
+	Extra        map[string]string `json:"extra,omitempty"`
+}
+
+func (p ProviderProfile) IsEnabled() bool {
+	return p.Enabled == nil || *p.Enabled
 }
 
 type SkillsConfig struct {
@@ -550,6 +569,52 @@ func (c *Config) FindAgentProfile(name string) (AgentProfile, bool) {
 
 func (p AgentProfile) IsEnabled() bool {
 	return p.Enabled == nil || *p.Enabled
+}
+
+func (c *Config) FindProviderProfile(idOrName string) (ProviderProfile, bool) {
+	needle := strings.TrimSpace(strings.ToLower(idOrName))
+	for _, p := range c.Providers {
+		if strings.ToLower(strings.TrimSpace(p.ID)) == needle || strings.ToLower(strings.TrimSpace(p.Name)) == needle {
+			return p, true
+		}
+	}
+	return ProviderProfile{}, false
+}
+
+func (c *Config) UpsertProviderProfile(provider ProviderProfile) error {
+	provider.Name = strings.TrimSpace(provider.Name)
+	provider.ID = strings.TrimSpace(provider.ID)
+	if provider.ID == "" {
+		provider.ID = provider.Name
+	}
+	if provider.Name == "" {
+		provider.Name = provider.ID
+	}
+	if provider.ID == "" {
+		return os.ErrInvalid
+	}
+	for i, existing := range c.Providers {
+		if strings.EqualFold(strings.TrimSpace(existing.ID), provider.ID) || strings.EqualFold(strings.TrimSpace(existing.Name), provider.Name) {
+			if provider.ID == "" {
+				provider.ID = existing.ID
+			}
+			c.Providers[i] = provider
+			return nil
+		}
+	}
+	c.Providers = append(c.Providers, provider)
+	return nil
+}
+
+func (c *Config) DeleteProviderProfile(idOrName string) bool {
+	needle := strings.TrimSpace(strings.ToLower(idOrName))
+	for i, p := range c.Providers {
+		if strings.ToLower(strings.TrimSpace(p.ID)) == needle || strings.ToLower(strings.TrimSpace(p.Name)) == needle {
+			c.Providers = append(c.Providers[:i], c.Providers[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 func BoolPtr(value bool) *bool {
