@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AnyClaw 控制台</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <aside id="sidebar" class="sidebar"></aside>
+      <div class="shell-main">
+        <header id="header" class="topbar"></header>
+        <main id="page" class="page-shell">
+          <section class="loading-state">
+            <div class="spinner-ring"></div>
+            <p>正在加载 AnyClaw 控制台...</p>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div id="modal-root"></div>
+    <div id="toast-root" class="toast-stack" aria-live="polite"></div>
+
+    <div id="auth-overlay" class="auth-overlay hidden">
+      <div class="auth-card">
+        <div class="eyebrow">AnyClaw 控制台</div>
+        <h1>连接到网关</h1>
+        <p>
+          当前网关已启用鉴权。请输入 API 令牌，浏览器会将其保存在本地，供后续请求复用。
+        </p>
+        <form id="auth-form" data-form="auth">
+          <label class="field">
+            <span>API 令牌</span>
+            <input
+              type="password"
+              name="token"
+              placeholder="Bearer 令牌"
+              autocomplete="off"
+            />
+          </label>
+          <div class="auth-actions">
+            <button type="submit" class="btn btn-primary">保存并进入</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script type="module" src="/app/app.js"></script>
+  </body>
+</html>

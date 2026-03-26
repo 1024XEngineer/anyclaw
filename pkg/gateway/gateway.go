@@ -446,6 +446,9 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/assistants", s.wrap("/assistants", s.handleAssistants))
 	mux.HandleFunc("/assistants/personality-templates", s.wrap("/assistants/personality-templates", requirePermission("config.read", s.handlePersonalityTemplates)))
 	mux.HandleFunc("/assistants/skill-catalog", s.wrap("/assistants/skill-catalog", requirePermission("skills.read", s.handleAssistantSkillCatalog)))
+	mux.HandleFunc("/providers", s.wrap("/providers", s.handleProviders))
+	mux.HandleFunc("/providers/test", s.wrap("/providers/test", s.handleProviderTest))
+	mux.HandleFunc("/agent-bindings", s.wrap("/agent-bindings", s.handleAgentBindings))
 	mux.HandleFunc("/runtimes", s.wrap("/runtimes", requirePermission("runtimes.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.handleRuntimes))))
 	mux.HandleFunc("/runtimes/refresh", s.wrap("/runtimes/refresh", requirePermission("runtimes.write", s.handleRefreshRuntime)))
 	mux.HandleFunc("/runtimes/refresh-batch", s.wrap("/runtimes/refresh-batch", requirePermission("runtimes.write", s.handleRefreshRuntimesBatch)))
@@ -487,6 +490,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/channels/discord/interactions", s.rateLimit.Wrap(s.handleDiscordInteractions))
 	mux.HandleFunc("/ingress/web", s.rateLimit.Wrap(s.handleSignedIngress))
 	mux.HandleFunc("/ingress/plugins/", s.rateLimit.Wrap(s.handlePluginIngress))
+	mux.HandleFunc("/", s.handleRootUI)
 
 	s.startedAt = time.Now().UTC()
 	s.httpServer = &http.Server{
@@ -1445,6 +1449,14 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(personality.Template) == "" && len(personality.Traits) == 0 && strings.TrimSpace(personality.Tone) == "" && strings.TrimSpace(personality.Style) == "" {
 				personality = defaultPersonalitySpec()
 			}
+			providerName := ""
+			providerType := ""
+			providerRuntime := ""
+			if provider, ok := s.app.Config.FindProviderProfile(profile.ProviderRef); ok {
+				providerName = provider.Name
+				providerType = provider.Type
+				providerRuntime = provider.Provider
+			}
 			items = append(items, map[string]any{
 				"name":             profile.Name,
 				"description":      profile.Description,
@@ -1452,6 +1464,10 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 				"persona":          profile.Persona,
 				"working_dir":      profile.WorkingDir,
 				"permission_level": profile.PermissionLevel,
+				"provider_ref":     profile.ProviderRef,
+				"provider_name":    providerName,
+				"provider_type":    providerType,
+				"provider":         firstNonEmpty(providerRuntime, s.app.Config.LLM.Provider),
 				"default_model":    profile.DefaultModel,
 				"enabled":          profile.IsEnabled(),
 				"active":           strings.EqualFold(strings.TrimSpace(s.app.Config.Agent.ActiveProfile), strings.TrimSpace(profile.Name)),
@@ -1473,6 +1489,7 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 			Persona         string                 `json:"persona"`
 			WorkingDir      string                 `json:"working_dir"`
 			PermissionLevel string                 `json:"permission_level"`
+			ProviderRef     string                 `json:"provider_ref"`
 			DefaultModel    string                 `json:"default_model"`
 			Enabled         *bool                  `json:"enabled"`
 			Personality     config.PersonalitySpec `json:"personality"`
@@ -1489,16 +1506,38 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 			Persona:         req.Persona,
 			WorkingDir:      req.WorkingDir,
 			PermissionLevel: req.PermissionLevel,
+			ProviderRef:     req.ProviderRef,
 			DefaultModel:    req.DefaultModel,
 			Enabled:         req.Enabled,
 			Personality:     req.Personality,
 			Skills:          req.Skills,
+		}
+		if existing, ok := s.app.Config.FindAgentProfile(profile.Name); ok {
+			profile.Domain = existing.Domain
+			profile.Expertise = append([]string{}, existing.Expertise...)
+			profile.SystemPrompt = existing.SystemPrompt
+			if strings.TrimSpace(profile.Personality.Template) == "" &&
+				strings.TrimSpace(profile.Personality.Tone) == "" &&
+				strings.TrimSpace(profile.Personality.Style) == "" &&
+				strings.TrimSpace(profile.Personality.GoalOrientation) == "" &&
+				strings.TrimSpace(profile.Personality.ConstraintMode) == "" &&
+				strings.TrimSpace(profile.Personality.ResponseVerbosity) == "" &&
+				strings.TrimSpace(profile.Personality.CustomInstructions) == "" &&
+				len(profile.Personality.Traits) == 0 {
+				profile.Personality = existing.Personality
+			}
 		}
 		if profile.Enabled == nil {
 			profile.Enabled = config.BoolPtr(true)
 		}
 		if strings.TrimSpace(profile.PermissionLevel) == "" {
 			profile.PermissionLevel = "limited"
+		}
+		if strings.TrimSpace(profile.ProviderRef) != "" {
+			if _, ok := s.app.Config.FindProviderProfile(profile.ProviderRef); !ok {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider not found"})
+				return
+			}
 		}
 		if err := s.app.Config.UpsertAgentProfile(profile); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "assistant name is required"})
