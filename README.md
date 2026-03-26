@@ -1,6 +1,6 @@
 # AnyClaw - 本地优先 AI 智能体平台
 
-[![GitHub](https://img.shields.io/badge/GitHub-1024XEngineer/anyclaw-blue)](https://github.com/1024XEngineer/anyclaw)
+[![Github](https://img.shields.io/badge/GitHub-1024XEngineer/anyclaw-blue)](https://github.com/1024XEngineer/anyclaw)
 [![Version](https://img.shields.io/badge/version-2026.3.13-green)]()
 [![Go](https://img.shields.io/badge/Go-1.21+-blue)]()
 
