@@ -14,6 +14,7 @@ import (
 type Config struct {
 	LLM          LLMConfig          `json:"llm"`
 	Agent        AgentConfig        `json:"agent"`
+	Providers    []ProviderProfile  `json:"providers,omitempty"`
 	Skills       SkillsConfig       `json:"skills"`
 	Memory       MemoryConfig       `json:"memory"`
 	Gateway      GatewayConfig      `json:"gateway"`
@@ -67,10 +68,24 @@ type AgentProfile struct {
 	SystemPrompt    string          `json:"system_prompt,omitempty"`
 	WorkingDir      string          `json:"working_dir"`
 	PermissionLevel string          `json:"permission_level"`
+	ProviderRef     string          `json:"provider_ref,omitempty"`
 	DefaultModel    string          `json:"default_model,omitempty"`
 	Enabled         *bool           `json:"enabled,omitempty"`
 	Personality     PersonalitySpec `json:"personality,omitempty"`
 	Skills          []AgentSkillRef `json:"skills,omitempty"`
+}
+
+type ProviderProfile struct {
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Type         string            `json:"type,omitempty"`
+	Provider     string            `json:"provider"`
+	BaseURL      string            `json:"base_url,omitempty"`
+	APIKey       string            `json:"api_key,omitempty"`
+	DefaultModel string            `json:"default_model,omitempty"`
+	Capabilities []string          `json:"capabilities,omitempty"`
+	Enabled      *bool             `json:"enabled,omitempty"`
+	Extra        map[string]string `json:"extra,omitempty"`
 }
 
 type PersonalitySpec struct {
@@ -422,6 +437,14 @@ func (c *Config) Validate() error {
 	if c.Agent.PermissionLevel != "" && !validPermLevels[c.Agent.PermissionLevel] {
 		errs = append(errs, fmt.Sprintf("agent.permission_level must be one of: full, limited, read-only (got %q)", c.Agent.PermissionLevel))
 	}
+	for i, provider := range c.Providers {
+		if strings.TrimSpace(provider.Name) == "" {
+			errs = append(errs, fmt.Sprintf("providers[%d].name is required", i))
+		}
+		if strings.TrimSpace(provider.Provider) == "" {
+			errs = append(errs, fmt.Sprintf("providers[%d].provider is required", i))
+		}
+	}
 
 	// Validate Gateway config
 	if c.Gateway.Port < 0 || c.Gateway.Port > 65535 {
@@ -552,6 +575,10 @@ func (p AgentProfile) IsEnabled() bool {
 	return p.Enabled == nil || *p.Enabled
 }
 
+func (p ProviderProfile) IsEnabled() bool {
+	return p.Enabled == nil || *p.Enabled
+}
+
 func BoolPtr(value bool) *bool {
 	return &value
 }
@@ -585,11 +612,40 @@ func (c *Config) ApplyAgentProfile(name string) bool {
 	if profile.PermissionLevel != "" {
 		c.Agent.PermissionLevel = profile.PermissionLevel
 	}
+	if profile.ProviderRef != "" {
+		_ = c.ApplyProviderProfile(profile.ProviderRef)
+	}
 	if profile.DefaultModel != "" {
 		c.LLM.Model = profile.DefaultModel
 	}
 	if strings.TrimSpace(profile.Persona) != "" {
 		c.Agent.Description = strings.TrimSpace(strings.Join([]string{c.Agent.Description, "Persona: " + profile.Persona}, "\n"))
+	}
+	return true
+}
+
+func (c *Config) ApplyAgentRuntimeProfile(name string) bool {
+	profile, ok := c.FindAgentProfile(name)
+	if !ok {
+		return false
+	}
+	if !profile.IsEnabled() {
+		return false
+	}
+	if profile.Name != "" {
+		c.Agent.Name = profile.Name
+	}
+	if profile.Description != "" {
+		c.Agent.Description = profile.Description
+	}
+	if profile.PermissionLevel != "" {
+		c.Agent.PermissionLevel = profile.PermissionLevel
+	}
+	if profile.ProviderRef != "" {
+		_ = c.ApplyProviderProfile(profile.ProviderRef)
+	}
+	if profile.DefaultModel != "" {
+		c.LLM.Model = profile.DefaultModel
 	}
 	return true
 }
@@ -603,6 +659,7 @@ func (c *Config) UpsertAgentProfile(profile AgentProfile) error {
 	profile.SystemPrompt = strings.TrimSpace(profile.SystemPrompt)
 	profile.WorkingDir = strings.TrimSpace(profile.WorkingDir)
 	profile.PermissionLevel = strings.TrimSpace(profile.PermissionLevel)
+	profile.ProviderRef = strings.TrimSpace(profile.ProviderRef)
 	profile.DefaultModel = strings.TrimSpace(profile.DefaultModel)
 	profile.Personality.Template = strings.TrimSpace(profile.Personality.Template)
 	profile.Personality.Tone = strings.TrimSpace(profile.Personality.Tone)
@@ -672,6 +729,123 @@ func (c *Config) DeleteAgentProfile(name string) bool {
 		return true
 	}
 	return false
+}
+
+func (c *Config) FindProviderProfile(ref string) (ProviderProfile, bool) {
+	needle := strings.TrimSpace(strings.ToLower(ref))
+	for _, provider := range c.Providers {
+		if strings.ToLower(strings.TrimSpace(provider.ID)) == needle || strings.ToLower(strings.TrimSpace(provider.Name)) == needle {
+			return provider, true
+		}
+	}
+	return ProviderProfile{}, false
+}
+
+func (c *Config) ApplyProviderProfile(ref string) bool {
+	provider, ok := c.FindProviderProfile(ref)
+	if !ok {
+		return false
+	}
+	if !provider.IsEnabled() {
+		return false
+	}
+	if provider.Provider != "" {
+		c.LLM.Provider = provider.Provider
+	}
+	if provider.BaseURL != "" {
+		c.LLM.BaseURL = provider.BaseURL
+	}
+	if provider.APIKey != "" {
+		c.LLM.APIKey = provider.APIKey
+	}
+	if provider.DefaultModel != "" {
+		c.LLM.Model = provider.DefaultModel
+	}
+	if len(provider.Extra) > 0 {
+		if c.LLM.Extra == nil {
+			c.LLM.Extra = map[string]string{}
+		}
+		for k, v := range provider.Extra {
+			if strings.TrimSpace(k) != "" && strings.TrimSpace(v) != "" {
+				c.LLM.Extra[k] = v
+			}
+		}
+	}
+	return true
+}
+
+func (c *Config) UpsertProviderProfile(provider ProviderProfile) error {
+	provider.ID = normalizeProviderID(provider.ID, provider.Name)
+	provider.Name = strings.TrimSpace(provider.Name)
+	provider.Type = strings.TrimSpace(provider.Type)
+	provider.Provider = strings.TrimSpace(provider.Provider)
+	provider.BaseURL = strings.TrimSpace(provider.BaseURL)
+	provider.APIKey = strings.TrimSpace(provider.APIKey)
+	provider.DefaultModel = strings.TrimSpace(provider.DefaultModel)
+	filteredCaps := make([]string, 0, len(provider.Capabilities))
+	for _, capability := range provider.Capabilities {
+		capability = strings.TrimSpace(capability)
+		if capability != "" {
+			filteredCaps = append(filteredCaps, capability)
+		}
+	}
+	provider.Capabilities = filteredCaps
+	if provider.ID == "" || provider.Name == "" || provider.Provider == "" {
+		return os.ErrInvalid
+	}
+	if provider.Extra != nil {
+		clean := make(map[string]string, len(provider.Extra))
+		for k, v := range provider.Extra {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if k != "" && v != "" {
+				clean[k] = v
+			}
+		}
+		provider.Extra = clean
+	}
+	for i, existing := range c.Providers {
+		if strings.EqualFold(strings.TrimSpace(existing.ID), provider.ID) {
+			c.Providers[i] = provider
+			return nil
+		}
+	}
+	c.Providers = append(c.Providers, provider)
+	return nil
+}
+
+func (c *Config) DeleteProviderProfile(ref string) bool {
+	needle := strings.TrimSpace(strings.ToLower(ref))
+	for i, provider := range c.Providers {
+		if strings.ToLower(strings.TrimSpace(provider.ID)) != needle && strings.ToLower(strings.TrimSpace(provider.Name)) != needle {
+			continue
+		}
+		deletedID := provider.ID
+		c.Providers = append(c.Providers[:i], c.Providers[i+1:]...)
+		for idx := range c.Agent.Profiles {
+			if strings.EqualFold(strings.TrimSpace(c.Agent.Profiles[idx].ProviderRef), strings.TrimSpace(deletedID)) {
+				c.Agent.Profiles[idx].ProviderRef = ""
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func normalizeProviderID(id string, fallbackName string) string {
+	id = strings.TrimSpace(strings.ToLower(id))
+	if id == "" {
+		id = strings.TrimSpace(strings.ToLower(fallbackName))
+	}
+	if id == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(" ", "-", "_", "-", "/", "-", "\\", "-", ":", "-", ".", "-")
+	id = replacer.Replace(id)
+	for strings.Contains(id, "--") {
+		id = strings.ReplaceAll(id, "--", "-")
+	}
+	return strings.Trim(id, "-")
 }
 
 func applyEnvOverrides(cfg *Config) {
