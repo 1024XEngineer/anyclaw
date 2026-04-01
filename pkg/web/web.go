@@ -153,6 +153,9 @@ func extractTitle(text string) string {
 	if idx := strings.Index(text, " - "); idx > 0 {
 		return text[:idx]
 	}
+	if idx := strings.Index(text, " – "); idx > 0 {
+		return text[:idx]
+	}
 	if idx := strings.Index(text, " — "); idx > 0 {
 		return text[:idx]
 	}

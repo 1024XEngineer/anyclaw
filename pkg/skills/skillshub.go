@@ -2,14 +2,12 @@ package skills
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"strconv"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 const SKILLSH_API = "https://skills.sh"
@@ -24,6 +22,7 @@ type SkillSearchResult struct {
 	Version     string   `json:"version,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
 	Entrypoint  string   `json:"entrypoint,omitempty"`
+	Source      string   `json:"source,omitempty"`
 }
 
 type SkillDetail struct {
@@ -66,38 +65,15 @@ func SearchCatalog(ctx context.Context, query string, limit int) ([]SkillCatalog
 }
 
 func SearchSkills(ctx context.Context, query string, limit int) ([]SkillSearchResult, error) {
-	if limit <= 0 {
-		limit = 10
-	}
+	limit = normalizeSearchLimit(limit)
 
 	searchURL := fmt.Sprintf("%s/api/search?q=%s&limit=%d", SKILLSH_API, url.QueryEscape(query), limit)
 
-	client := &http.Client{Timeout: 30 * 1000000000}
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "AnyClaw-SkillHub/1.0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search failed: status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
+	client := newRemoteClient(30 * time.Second)
 	var results struct {
 		Skills []SkillSearchResult `json:"skills"`
 	}
-	if err := json.Unmarshal(body, &results); err != nil {
+	if err := fetchRemoteJSON(ctx, client, searchURL, &results); err != nil {
 		return nil, err
 	}
 
@@ -107,30 +83,9 @@ func SearchSkills(ctx context.Context, query string, limit int) ([]SkillSearchRe
 func GetSkillDetail(ctx context.Context, owner, repo, skillName string) (*SkillDetail, error) {
 	detailURL := fmt.Sprintf("%s/api/skills/%s/%s/%s", SKILLSH_API, owner, repo, skillName)
 
-	client := &http.Client{Timeout: 30 * 1000000000}
-	req, err := http.NewRequestWithContext(ctx, "GET", detailURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "AnyClaw-SkillHub/1.0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("skill not found: %s/%s", owner, repo)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
+	client := newRemoteClient(30 * time.Second)
 	var detail SkillDetail
-	if err := json.Unmarshal(body, &detail); err != nil {
+	if err := fetchRemoteJSON(ctx, client, detailURL, &detail); err != nil {
 		return nil, err
 	}
 
@@ -138,41 +93,28 @@ func GetSkillDetail(ctx context.Context, owner, repo, skillName string) (*SkillD
 }
 
 func GetSkillMarkdown(ctx context.Context, owner, repo, skillName string) (string, error) {
-	rawURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/SKILL.md", owner, repo)
-
-	client := &http.Client{Timeout: 30 * 1000000000}
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
-	if err != nil {
-		return "", err
+	client := newRemoteClient(30 * time.Second)
+	candidates := []string{
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/skills/%s/SKILL.md", owner, repo, skillName),
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/skills/%s/SKILL.md", owner, repo, skillName),
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/SKILL.md", owner, repo),
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/SKILL.md", owner, repo),
 	}
-	req.Header.Set("User-Agent", "AnyClaw-SkillHub/1.0")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		rawURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/SKILL.md", owner, repo)
-		req, _ = http.NewRequestWithContext(ctx, "GET", rawURL, nil)
-		req.Header.Set("User-Agent", "AnyClaw-SkillHub/1.0")
-		resp, err = client.Do(req)
+	for _, rawURL := range candidates {
+		content, status, err := fetchRemoteText(ctx, client, rawURL)
 		if err != nil {
 			return "", err
 		}
+		if status == http.StatusOK {
+			return content, nil
+		}
+		if status != http.StatusNotFound {
+			return "", fmt.Errorf("SKILL.md request failed: status %d", status)
+		}
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("SKILL.md not found")
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	return string(body), nil
+	return "", fmt.Errorf("SKILL.md not found")
 }
 
 func InstallSkillFromGitHub(ctx context.Context, owner, repo, skillName string, destDir string) error {
@@ -187,15 +129,20 @@ func InstallSkillFromGitHub(ctx context.Context, owner, repo, skillName string, 
 		return fmt.Errorf("failed to convert skill: %w", err)
 	}
 
-	skillDir := fmt.Sprintf("%s/%s", destDir, skillName)
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
-		return err
-	}
-
-	return os.WriteFile(skillDir+"/skill.json", []byte(skillJSON), 0644)
+	skillDir := filepath.Join(destDir, skillName)
+	return writeSkillJSONFile(skillDir, []byte(skillJSON))
 }
 
 func ConvertMarkdownToSkillJSON(md, name string, detail *SkillDetail) (string, error) {
+	definition := buildMarkdownSkillFileDefinition(md, name, detail)
+	data, err := marshalSkillJSON(definition)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func buildMarkdownSkillFileDefinition(md, name string, detail *SkillDetail) skillFileDefinition {
 	lines := strings.Split(md, "\n")
 
 	var description string
@@ -251,22 +198,23 @@ func ConvertMarkdownToSkillJSON(md, name string, detail *SkillDetail) (string, e
 		if strings.TrimSpace(detail.Registry) != "" {
 			registry = strings.TrimSpace(detail.Registry)
 		}
+		if description == "" {
+			description = firstNonEmpty(detail.Description, detail.Summary)
+		}
 	}
-	permissionsJSON, _ := json.Marshal(permissions)
-	result := fmt.Sprintf(`{
-  "name": "%s",
-  "description": "%s",
-  "version": %q,
-  "source": "skills.sh",
-  "registry": %q,
-  "homepage": %q,
-  "entrypoint": %q,
-  "permissions": %s,
-  "install_command": %q,
-  "prompts": {
-    "system": %s
-  }
-}`, name, description, version, registry, homepage, entrypoint, string(permissionsJSON), "anyclaw skill install "+name, strconv.Quote(strings.TrimSpace(systemPrompt.String())))
 
-	return result, nil
+	return skillFileDefinition{
+		Name:           name,
+		Description:    description,
+		Version:        version,
+		Source:         "skills.sh",
+		Registry:       registry,
+		Homepage:       homepage,
+		Entrypoint:     entrypoint,
+		Permissions:    permissions,
+		InstallCommand: "anyclaw skill install " + name,
+		Prompts: map[string]string{
+			"system": strings.TrimSpace(systemPrompt.String()),
+		},
+	}
 }

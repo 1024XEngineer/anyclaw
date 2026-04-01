@@ -58,8 +58,16 @@ func runSkillCommand() {
 }
 
 func runSkillhubCommand() {
+	runHubRegistryCommand("skillhub")
+}
+
+func runClawhubCommand() {
+	runHubRegistryCommand("clawhub")
+}
+
+func runHubRegistryCommand(commandName string) {
 	if len(os.Args) < 3 {
-		printSkillhubUsage()
+		printSkillhubUsage(commandName)
 		return
 	}
 
@@ -70,20 +78,26 @@ func runSkillhubCommand() {
 		if len(args) > 1 {
 			query = strings.Join(args[1:], " ")
 		}
-		searchSkillhubFromCLI(query)
+		searchSkillhubFromCLI(query, commandName)
 	case "install":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: anyclaw skillhub install <name>")
+			fmt.Fprintf(os.Stderr, "usage: anyclaw %s install <name>\n", commandName)
 			os.Exit(1)
 		}
-		installSkillhubFromCLI(args[1])
+		installSkillhubFromCLI(args[1], commandName)
 	case "list":
-		listSkillhubSkills()
+		listSkillhubSkills(commandName)
 	case "check":
-		checkSkillhubCLI()
+		checkSkillhubCLI(commandName)
+	case "update":
+		target := ""
+		if len(args) > 1 {
+			target = strings.TrimSpace(args[1])
+		}
+		updateSkillhubSkills(target, commandName)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown skillhub command: %s\n", args[0])
-		printSkillhubUsage()
+		fmt.Fprintf(os.Stderr, "unknown %s command: %s\n", commandName, args[0])
+		printSkillhubUsage(commandName)
 		os.Exit(1)
 	}
 }
@@ -101,19 +115,20 @@ Usage:
 `)
 }
 
-func printSkillhubUsage() {
-	fmt.Print(`AnyClaw skillhub commands:
+func printSkillhubUsage(commandName string) {
+	fmt.Printf(`AnyClaw %s commands:
 
 Usage:
-  anyclaw skillhub search <query>
-  anyclaw skillhub install <name>
-  anyclaw skillhub list
-  anyclaw skillhub check
-`)
+  anyclaw %s search <query>
+  anyclaw %s install <name>
+  anyclaw %s list
+  anyclaw %s check
+  anyclaw %s update [name]
+`, commandName, commandName, commandName, commandName, commandName, commandName)
 }
 
-func searchSkillhubFromCLI(query string) {
-	fmt.Printf("Searching Skillhub: %s\n", query)
+func searchSkillhubFromCLI(query string, commandName string) {
+	fmt.Printf("Searching %s: %s\n", strings.Title(commandName), query)
 	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
 
 	ctx := context.Background()
@@ -129,27 +144,19 @@ func searchSkillhubFromCLI(query string) {
 
 	fmt.Printf("Found %d skills\n\n", len(results))
 	for i, r := range results {
-		fullName := r.FullName
-		if fullName == "" {
-			fullName = r.Name
-		}
-		desc := r.Description
-		if desc == "" {
-			desc = "No description"
-		}
-		fmt.Printf("%d. %s\n", i+1, fullName)
-		fmt.Printf("   %s\n", desc)
+		fmt.Printf("%d. %s\n", i+1, skillDisplayName(r.Name, r.FullName))
+		fmt.Printf("   %s\n", skillDescription(r.Description))
 		if r.Category != "" {
 			fmt.Printf("   category: %s\n", r.Category)
 		}
-		fmt.Printf("   install: anyclaw skillhub install %s\n\n", r.Name)
+		fmt.Printf("   install: anyclaw %s install %s\n\n", commandName, r.Name)
 	}
 }
 
-func installSkillhubFromCLI(skillName string) {
-	fmt.Printf("Installing skillhub skill: %s\n", skillName)
+func installSkillhubFromCLI(skillName string, commandName string) {
+	fmt.Printf("Installing %s skill: %s\n", commandName, skillName)
 	ctx := context.Background()
-	skillsDir := "skills"
+	skillsDir := resolveSkillsDir()
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		printError("failed to create skills dir: %v", err)
 		return
@@ -158,11 +165,12 @@ func installSkillhubFromCLI(skillName string) {
 		printError("install failed: %v", err)
 		return
 	}
-	printSuccess("Installed skillhub skill: %s", skillName)
+	printSuccess("Installed %s skill: %s", commandName, skillName)
 }
 
-func listSkillhubSkills() {
-	entries, err := os.ReadDir("skills")
+func listSkillhubSkills(commandName string) {
+	skillsDir := resolveSkillsDir()
+	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
 		printInfo("No installed skills.")
 		return
@@ -172,7 +180,7 @@ func listSkillhubSkills() {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join("skills", entry.Name(), "skill.json")); err == nil {
+		if _, err := os.Stat(filepath.Join(skillsDir, entry.Name(), "skill.json")); err == nil {
 			list = append(list, entry.Name())
 		}
 	}
@@ -180,15 +188,62 @@ func listSkillhubSkills() {
 		printInfo("No installed skills.")
 		return
 	}
-	fmt.Printf("%s\n\n", ui.Bold.Sprint("Installed skills"))
+	fmt.Printf("%s\n\n", ui.Bold.Sprint(strings.Title(commandName)+" skills"))
 	for _, name := range list {
 		fmt.Printf("  - %s\n", name)
 	}
 }
 
-func checkSkillhubCLI() {
-	printSuccess("Skillhub CLI is available")
-	printInfo("Use `anyclaw skillhub search <query>` to search")
+func checkSkillhubCLI(commandName string) {
+	printSuccess("%s CLI is available", strings.Title(commandName))
+	printInfo("Use `anyclaw %s search <query>` to search", commandName)
+}
+
+func updateSkillhubSkills(target string, commandName string) {
+	manager := skills.NewSkillsManager(resolveSkillsDir())
+	if err := manager.Load(); err != nil {
+		printInfo("No installed skills to update.")
+		return
+	}
+	selected := make([]string, 0)
+	if target != "" {
+		skill, ok := manager.Get(target)
+		if !ok {
+			printError("skill not found: %s", target)
+			return
+		}
+		if !isHubInstalledSkill(skill) {
+			printError("skill %s is not installed from %s", target, commandName)
+			return
+		}
+		selected = append(selected, skill.Name)
+	} else {
+		for _, skill := range manager.List() {
+			if isHubInstalledSkill(skill) {
+				selected = append(selected, skill.Name)
+			}
+		}
+	}
+	if len(selected) == 0 {
+		printInfo("No %s-installed skills to update.", commandName)
+		return
+	}
+	ctx := context.Background()
+	skillsDir := resolveSkillsDir()
+	for _, name := range selected {
+		if err := skills.InstallSkillhubSkill(ctx, name, skillsDir); err != nil {
+			printError("update failed for %s: %v", name, err)
+			return
+		}
+	}
+	printSuccess("Updated %d %s skill(s)", len(selected), commandName)
+}
+
+func isHubInstalledSkill(skill *skills.Skill) bool {
+	if skill == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(skill.Source), "skillhub") || strings.EqualFold(strings.TrimSpace(skill.Registry), "skillhub")
 }
 
 func searchSkillsFromHub(query string) {
@@ -204,17 +259,9 @@ func searchSkillsFromHub(query string) {
 
 	fmt.Printf("Found %d skills\n\n", len(results))
 	for i, r := range results {
-		fullName := r.FullName
-		if fullName == "" {
-			fullName = r.Name
-		}
-		desc := r.Description
-		if desc == "" {
-			desc = "No description"
-		}
 		installs := formatInstalls(r.Installs)
-		fmt.Printf("%d. %s\n", i+1, fullName)
-		fmt.Printf("   %s\n", desc)
+		fmt.Printf("%d. %s\n", i+1, skillDisplayName(r.Name, r.FullName))
+		fmt.Printf("   %s\n", skillDescription(r.Description))
 		fmt.Printf("   installs: %s  stars: %d  %s\n", installs, r.Stars, getQualityBadge(r.Installs, r.Stars))
 		fmt.Printf("   install: anyclaw skill install %s\n\n", r.Name)
 	}
@@ -252,10 +299,7 @@ func formatInstalls(n int64) string {
 }
 
 func installSkillFromHub(name string) {
-	skillsDir := "skills"
-	if envDir := os.Getenv("ANYCLAW_SKILLS_DIR"); envDir != "" {
-		skillsDir = envDir
-	}
+	skillsDir := resolveSkillsDir()
 
 	if content, ok := skills.BuiltinSkills[name]; ok {
 		installBuiltinSkill(name, content, skillsDir)
@@ -271,6 +315,29 @@ func installSkillFromHub(name string) {
 		}
 		printSuccess("Installed: %s", name)
 		return
+	}
+
+	// Search skills.sh for the skill
+	ctx := context.Background()
+	results, err := skills.SearchSkills(ctx, name, 1)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "search error: %v\n", err)
+	} else if len(results) > 0 {
+		skill := results[0]
+		// Use Source field which contains owner/repo format
+		if skill.Source != "" {
+			sourceParts := strings.Split(skill.Source, "/")
+			if len(sourceParts) == 2 {
+				// Source is owner/repo, need to get skill name from URL or Name
+				skillName := skill.Name
+				if err := skills.InstallSkillFromGitHub(ctx, sourceParts[0], sourceParts[1], skillName, skillsDir); err != nil {
+					fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+					os.Exit(1)
+				}
+				printSuccess("Installed: %s", skill.Name)
+				return
+			}
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "skill not found: %s\n", name)
@@ -292,11 +359,7 @@ func installBuiltinSkill(name, content, skillsDir string) {
 }
 
 func listInstalledSkills() {
-	skillsDir := "skills"
-	if envDir := os.Getenv("ANYCLAW_SKILLS_DIR"); envDir != "" {
-		skillsDir = envDir
-	}
-	manager := skills.NewSkillsManager(skillsDir)
+	manager := skills.NewSkillsManager(resolveSkillsDir())
 	if err := manager.Load(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load skills: %v\n", err)
 		os.Exit(1)
@@ -313,11 +376,7 @@ func listInstalledSkills() {
 }
 
 func showSkillInfo(name string) {
-	skillsDir := "skills"
-	if envDir := os.Getenv("ANYCLAW_SKILLS_DIR"); envDir != "" {
-		skillsDir = envDir
-	}
-	manager := skills.NewSkillsManager(skillsDir)
+	manager := skills.NewSkillsManager(resolveSkillsDir())
 	_ = manager.Load()
 	if skill, ok := manager.Get(name); ok {
 		fmt.Printf("Name: %s\nVersion: %s\nDescription: %s\n", skill.Name, skill.Version, skill.Description)
@@ -341,12 +400,8 @@ func showSkillCatalog(query string) {
 	}
 	fmt.Println("Skill catalog:")
 	for _, entry := range entries {
-		name := entry.FullName
-		if name == "" {
-			name = entry.Name
-		}
-		fmt.Printf("- %s v%s\n", name, entry.Version)
-		fmt.Printf("  %s\n", entry.Description)
+		fmt.Printf("- %s v%s\n", skillDisplayName(entry.Name, entry.FullName), entry.Version)
+		fmt.Printf("  %s\n", skillDescription(entry.Description))
 	}
 }
 
@@ -383,11 +438,7 @@ func createNewSkill() {
 		return
 	}
 
-	skillsDir := "skills"
-	if envDir := os.Getenv("ANYCLAW_SKILLS_DIR"); envDir != "" {
-		skillsDir = envDir
-	}
-	skillPath := filepath.Join(skillsDir, name)
+	skillPath := filepath.Join(resolveSkillsDir(), name)
 	if err := os.MkdirAll(skillPath, 0o755); err != nil {
 		printError("failed to create skill dir: %v", err)
 		return
@@ -398,4 +449,25 @@ func createNewSkill() {
 		return
 	}
 	printSuccess("Skill created: %s", filePath)
+}
+
+func resolveSkillsDir() string {
+	if envDir := strings.TrimSpace(os.Getenv("ANYCLAW_SKILLS_DIR")); envDir != "" {
+		return envDir
+	}
+	return "skills"
+}
+
+func skillDisplayName(name, fullName string) string {
+	if fullName = strings.TrimSpace(fullName); fullName != "" {
+		return fullName
+	}
+	return strings.TrimSpace(name)
+}
+
+func skillDescription(description string) string {
+	if description = strings.TrimSpace(description); description != "" {
+		return description
+	}
+	return "No description"
 }

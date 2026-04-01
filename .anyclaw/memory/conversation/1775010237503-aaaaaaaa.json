@@ -1,0 +1,7 @@
+{
+  "id": "1775010237503-aaaaaaaa",
+  "timestamp": "2026-04-01T10:23:57.5033091+08:00",
+  "type": "conversation",
+  "role": "user",
+  "content": "use read_file tool to read test.md"
+}

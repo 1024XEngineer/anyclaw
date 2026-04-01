@@ -24,6 +24,7 @@ type Config struct {
 
 type Client interface {
 	Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error)
+	StreamChat(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error
 	Name() string
 }
 
@@ -90,6 +91,19 @@ type client struct {
 	httpClient  *http.Client
 }
 
+func NormalizeProviderName(provider string) string {
+	return normalizeProvider(provider)
+}
+
+func ProviderRequiresAPIKey(provider string) bool {
+	switch normalizeProvider(provider) {
+	case "ollama":
+		return false
+	default:
+		return true
+	}
+}
+
 func newHTTPClient(proxyURL string) *http.Client {
 	transport := &http.Transport{}
 
@@ -118,7 +132,7 @@ func NewClient(cfg Config) (Client, error) {
 		httpClient:  newHTTPClient(cfg.Proxy),
 	}
 
-	if c.apiKey == "" {
+	if ProviderRequiresAPIKey(c.provider) && c.apiKey == "" {
 		return nil, fmt.Errorf("API key is required")
 	}
 
@@ -175,6 +189,18 @@ func (c *client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		return c.chatAnthropic(ctx, messages, tools)
 	default:
 		return c.chatOpenAICompatible(ctx, messages, tools)
+	}
+}
+
+func (c *client) StreamChat(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
+	provider := normalizeProvider(c.provider)
+	switch provider {
+	case "openai", "ollama", "compatible", "qwen":
+		return c.streamOpenAICompatible(ctx, messages, tools, onChunk)
+	case "anthropic":
+		return c.streamAnthropic(ctx, messages, tools, onChunk)
+	default:
+		return c.streamOpenAICompatible(ctx, messages, tools, onChunk)
 	}
 }
 
@@ -244,6 +270,121 @@ func (c *client) chatOpenAICompatible(ctx context.Context, messages []Message, t
 		},
 		StopReason: result.Choices[0].FinishReason,
 	}, nil
+}
+
+func (c *client) streamOpenAICompatible(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
+	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
+
+	payload := map[string]any{
+		"model":       c.model,
+		"messages":    messages,
+		"max_tokens":  c.maxTokens,
+		"temperature": c.temperature,
+		"stream":      true,
+	}
+	if len(tools) > 0 {
+		payload["tools"] = tools
+		payload["tool_choice"] = "auto"
+	}
+
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	decoder := NewDecoder(resp.Body)
+	for {
+		data, err := decoder.Decode()
+		if err != nil {
+			break
+		}
+		if data.Type == "chunk" && data.Delta.Content != "" {
+			onChunk(data.Delta.Content)
+		}
+		if data.Type == "done" {
+			break
+		}
+	}
+
+	return nil
+}
+
+func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
+	url := "https://api.anthropic.com/v1/messages"
+
+	systemPrompt := ""
+	filteredMessages := []Message{}
+	for _, msg := range messages {
+		if msg.Role == "system" {
+			systemPrompt += msg.Content + "\n"
+		} else {
+			filteredMessages = append(filteredMessages, msg)
+		}
+	}
+
+	payload := map[string]any{
+		"model":       c.model,
+		"messages":    filteredMessages,
+		"max_tokens":  c.maxTokens,
+		"temperature": c.temperature,
+		"stream":      true,
+	}
+	if systemPrompt != "" {
+		payload["system"] = systemPrompt
+	}
+	if len(tools) > 0 {
+		payloadTools := make([]map[string]any, 0, len(tools))
+		for _, tool := range tools {
+			payloadTools = append(payloadTools, map[string]any{
+				"name":         tool.Function.Name,
+				"description":  tool.Function.Description,
+				"input_schema": tool.Function.Parameters,
+			})
+		}
+		payload["tools"] = payloadTools
+	}
+
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", c.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	decoder := NewAnthropicDecoder(resp.Body)
+	for {
+		data, err := decoder.Decode()
+		if err != nil {
+			break
+		}
+		if data.Type == "content_block_delta" && data.Delta.Type == "text_delta" && data.Delta.Text != "" {
+			onChunk(data.Delta.Text)
+		}
+		if data.Type == "message_stop" {
+			break
+		}
+	}
+
+	return nil
 }
 
 func (c *client) chatAnthropic(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
@@ -394,6 +535,10 @@ func (w *ClientWrapper) initClient() error {
 
 func (w *ClientWrapper) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
 	return w.client.Chat(ctx, messages, tools)
+}
+
+func (w *ClientWrapper) StreamChat(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
+	return w.client.StreamChat(ctx, messages, tools, onChunk)
 }
 
 func (w *ClientWrapper) Name() string {

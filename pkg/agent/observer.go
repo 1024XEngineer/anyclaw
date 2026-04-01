@@ -1,7 +1,5 @@
 package agent
 
-import ()
-
 type ToolActivity struct {
 	ToolName string         `json:"tool_name"`
 	Args     map[string]any `json:"args"`

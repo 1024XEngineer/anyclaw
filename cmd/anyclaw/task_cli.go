@@ -9,7 +9,6 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/agentstore"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	taskModule "github.com/anyclaw/anyclaw/pkg/task"
 	"github.com/anyclaw/anyclaw/pkg/ui"
 )
 
@@ -35,7 +34,6 @@ func printTaskUsage() {
 
 Usage:
   anyclaw task run <description>
-  anyclaw task run --multi <description>
   anyclaw task run --agent <name> <description>
   anyclaw task list
 `)
@@ -54,58 +52,29 @@ func runTaskRun(ctx context.Context, args []string) error {
 	if input == "" {
 		return fmt.Errorf("please provide a task description")
 	}
+	if *multi {
+		return fmt.Errorf("multi-agent mode has been removed; run the task with a single agent")
+	}
 
-	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
-		ConfigPath: "anyclaw.json",
-		Progress:   func(ev appRuntime.BootEvent) {},
-	})
+	app, err := appRuntime.NewTargetApp("anyclaw.json", *agentName, "")
 	if err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
-
-	if app.Orchestrator == nil {
-		return fmt.Errorf("orchestrator is disabled; set orchestrator.enabled=true in anyclaw.json")
+	selectedAgent := app.Config.Agent.Name
+	if *agentName != "" {
+		selectedAgent = *agentName
 	}
-
-	taskMgr := taskModule.NewTaskManager(app.Orchestrator)
-
-	mode := taskModule.ModeSingle
-	if *multi {
-		mode = taskModule.ModeMulti
-	}
-
-	req := taskModule.TaskRequest{
-		Input:         input,
-		Mode:          mode,
-		SelectedAgent: *agentName,
-	}
-
-	if *multi {
-		fmt.Printf("%s\n", ui.Bold.Sprint("Multi-agent mode"))
-	} else if *agentName != "" {
-		fmt.Printf("%s %s\n", ui.Bold.Sprint("Single-agent mode:"), *agentName)
-	} else {
-		fmt.Printf("%s\n", ui.Bold.Sprint("Single-agent mode"))
-	}
+	fmt.Printf("%s %s\n", ui.Bold.Sprint("Single-agent mode:"), selectedAgent)
 	fmt.Printf("Task: %s\n\n", input)
 
-	task, err := taskMgr.CreateTask(req)
-	if err != nil {
-		return err
-	}
-
 	fmt.Printf("%s Running...\n\n", ui.Cyan.Sprint(">"))
-	result, err := taskMgr.ExecuteTask(ctx, task.ID)
+	result, err := app.Agent.Run(ctx, input)
 	if err != nil {
-		if result != nil && result.Output != "" {
-			fmt.Printf("%s\n\n", result.Output)
-		}
 		printError("%v", err)
 		return nil
 	}
 
-	fmt.Printf("%s\n", result.Output)
-	fmt.Printf("\n%s Duration: %s\n", ui.Dim.Sprint(""), result.Duration)
+	fmt.Printf("%s\n", result)
 	return nil
 }
 

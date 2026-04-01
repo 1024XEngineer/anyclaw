@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/anyclaw/anyclaw/pkg/llm"
 )
 
 type providerHealth struct {
@@ -24,6 +25,7 @@ type providerView struct {
 	Name            string         `json:"name"`
 	Type            string         `json:"type,omitempty"`
 	Provider        string         `json:"provider"`
+	IsDefault       bool           `json:"is_default"`
 	BaseURL         string         `json:"base_url,omitempty"`
 	DefaultModel    string         `json:"default_model,omitempty"`
 	Capabilities    []string       `json:"capabilities,omitempty"`
@@ -36,20 +38,23 @@ type providerView struct {
 }
 
 type agentBindingView struct {
-	Name            string                 `json:"name"`
-	Description     string                 `json:"description"`
-	Role            string                 `json:"role,omitempty"`
-	WorkingDir      string                 `json:"working_dir"`
-	PermissionLevel string                 `json:"permission_level"`
-	Enabled         bool                   `json:"enabled"`
-	ProviderRef     string                 `json:"provider_ref,omitempty"`
-	ProviderName    string                 `json:"provider_name"`
-	ProviderType    string                 `json:"provider_type,omitempty"`
-	Provider        string                 `json:"provider"`
-	Model           string                 `json:"model"`
-	Health          providerHealth         `json:"health"`
-	Skills          []config.AgentSkillRef `json:"skills,omitempty"`
-	Active          bool                   `json:"active"`
+	Name                string                 `json:"name"`
+	Description         string                 `json:"description"`
+	Role                string                 `json:"role,omitempty"`
+	WorkingDir          string                 `json:"working_dir"`
+	PermissionLevel     string                 `json:"permission_level"`
+	Enabled             bool                   `json:"enabled"`
+	ProviderRef         string                 `json:"provider_ref,omitempty"`
+	ResolvedProviderRef string                 `json:"resolved_provider_ref,omitempty"`
+	ProviderName        string                 `json:"provider_name"`
+	ProviderType        string                 `json:"provider_type,omitempty"`
+	Provider            string                 `json:"provider"`
+	Model               string                 `json:"model"`
+	InheritsDefault     bool                   `json:"inherits_default,omitempty"`
+	RoutingMode         string                 `json:"routing_mode,omitempty"`
+	Health              providerHealth         `json:"health"`
+	Skills              []config.AgentSkillRef `json:"skills,omitempty"`
+	Active              bool                   `json:"active"`
 }
 
 func providerRequiresAPIKey(provider string) bool {
@@ -72,7 +77,7 @@ func maskSecret(secret string) string {
 	return secret[:4] + strings.Repeat("*", len(secret)-8) + secret[len(secret)-4:]
 }
 
-func providerToView(provider config.ProviderProfile, profiles []config.AgentProfile) providerView {
+func providerToView(provider config.ProviderProfile, profiles []config.AgentProfile, defaultRef string) providerView {
 	boundAgents := make([]string, 0, len(profiles))
 	for _, profile := range profiles {
 		if strings.EqualFold(strings.TrimSpace(profile.ProviderRef), strings.TrimSpace(provider.ID)) {
@@ -84,6 +89,7 @@ func providerToView(provider config.ProviderProfile, profiles []config.AgentProf
 		Name:            provider.Name,
 		Type:            provider.Type,
 		Provider:        provider.Provider,
+		IsDefault:       strings.EqualFold(strings.TrimSpace(defaultRef), strings.TrimSpace(provider.ID)),
 		BaseURL:         provider.BaseURL,
 		DefaultModel:    provider.DefaultModel,
 		Capabilities:    append([]string{}, provider.Capabilities...),
@@ -94,6 +100,29 @@ func providerToView(provider config.ProviderProfile, profiles []config.AgentProf
 		BoundAgentCount: len(boundAgents),
 		Health:          quickProviderHealth(provider),
 	}
+}
+
+func (s *Server) listProviderViews() []providerView {
+	if s == nil || s.app == nil || s.app.Config == nil {
+		return nil
+	}
+	items := make([]providerView, 0, len(s.app.Config.Providers))
+	defaultRef := strings.TrimSpace(s.app.Config.LLM.DefaultProviderRef)
+	for _, provider := range s.app.Config.Providers {
+		items = append(items, providerToView(provider, s.app.Config.Agent.Profiles, defaultRef))
+	}
+	return items
+}
+
+func (s *Server) listAgentBindingViews() []agentBindingView {
+	if s == nil || s.app == nil || s.app.Config == nil {
+		return nil
+	}
+	items := make([]agentBindingView, 0, len(s.app.Config.Agent.Profiles))
+	for _, profile := range s.app.Config.Agent.Profiles {
+		items = append(items, s.buildAgentBindingView(profile))
+	}
+	return items
 }
 
 func quickProviderHealth(provider config.ProviderProfile) providerHealth {
@@ -112,6 +141,54 @@ func quickProviderHealth(provider config.ProviderProfile) providerHealth {
 		}
 	}
 	return providerHealth{OK: true, Status: "ready", Message: "Ready to use."}
+}
+
+func (s *Server) currentDefaultProvider() (config.ProviderProfile, bool) {
+	if s == nil || s.app == nil || s.app.Config == nil {
+		return config.ProviderProfile{}, false
+	}
+	return s.app.Config.FindDefaultProviderProfile()
+}
+
+func (s *Server) applyDefaultProvider(ref string) (config.ProviderProfile, error) {
+	if s == nil || s.app == nil || s.app.Config == nil {
+		return config.ProviderProfile{}, fmt.Errorf("server is not initialized")
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return config.ProviderProfile{}, fmt.Errorf("provider_ref is required")
+	}
+	provider, ok := s.app.Config.FindProviderProfile(ref)
+	if !ok {
+		return config.ProviderProfile{}, fmt.Errorf("provider not found")
+	}
+	if !provider.IsEnabled() {
+		return config.ProviderProfile{}, fmt.Errorf("provider is disabled")
+	}
+	if !s.app.Config.SetDefaultProviderProfile(provider.ID) {
+		return config.ProviderProfile{}, fmt.Errorf("unable to apply provider")
+	}
+	client, err := llm.NewClientWrapper(llm.Config{
+		Provider:    s.app.Config.LLM.Provider,
+		Model:       s.app.Config.LLM.Model,
+		APIKey:      s.app.Config.LLM.APIKey,
+		BaseURL:     s.app.Config.LLM.BaseURL,
+		Proxy:       s.app.Config.LLM.Proxy,
+		MaxTokens:   s.app.Config.LLM.MaxTokens,
+		Temperature: s.app.Config.LLM.Temperature,
+	})
+	if err != nil {
+		return config.ProviderProfile{}, err
+	}
+	s.app.LLM = client
+	if s.tasks != nil {
+		s.tasks.planner = client
+	}
+	if s.runtimePool != nil {
+		s.runtimePool.InvalidateAll()
+	}
+	updated, _ := s.app.Config.FindProviderProfile(provider.ID)
+	return updated, nil
 }
 
 func activeProviderTest(ctx context.Context, provider config.ProviderProfile) providerHealth {
@@ -158,9 +235,11 @@ func (s *Server) buildAgentBindingView(profile config.AgentProfile) agentBinding
 		ProviderRef:     profile.ProviderRef,
 		Model:           firstNonEmpty(profile.DefaultModel, s.app.Config.LLM.Model),
 		Skills:          append([]config.AgentSkillRef{}, profile.Skills...),
-		Active:          strings.EqualFold(strings.TrimSpace(s.app.Config.Agent.ActiveProfile), strings.TrimSpace(profile.Name)),
+		Active:          s.app.Config.IsCurrentAgentProfile(profile.Name),
+		RoutingMode:     "override",
 	}
 	if provider, ok := s.app.Config.FindProviderProfile(profile.ProviderRef); ok {
+		view.ResolvedProviderRef = provider.ID
 		view.ProviderName = provider.Name
 		view.ProviderType = provider.Type
 		view.Provider = provider.Provider
@@ -168,11 +247,24 @@ func (s *Server) buildAgentBindingView(profile config.AgentProfile) agentBinding
 			view.Model = firstNonEmpty(provider.DefaultModel, s.app.Config.LLM.Model)
 		}
 		view.Health = quickProviderHealth(provider)
+	} else if provider, ok := s.currentDefaultProvider(); ok {
+		view.ResolvedProviderRef = provider.ID
+		view.ProviderName = provider.Name
+		view.ProviderType = provider.Type
+		view.Provider = provider.Provider
+		view.InheritsDefault = true
+		view.RoutingMode = "inherit"
+		if strings.TrimSpace(profile.DefaultModel) == "" {
+			view.Model = firstNonEmpty(provider.DefaultModel, s.app.Config.LLM.Model)
+		}
+		view.Health = quickProviderHealth(provider)
 	} else {
-		view.ProviderName = "Global Default"
+		view.ProviderName = "Legacy Global"
 		view.Provider = s.app.Config.LLM.Provider
 		view.ProviderType = "global"
-		view.Health = providerHealth{OK: true, Status: "global_default", Message: "Using global runtime provider."}
+		view.InheritsDefault = true
+		view.RoutingMode = "legacy"
+		view.Health = providerHealth{OK: true, Status: "global_default", Message: "Using legacy global runtime provider."}
 	}
 	return view
 }
@@ -192,11 +284,7 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "config.read"})
 			return
 		}
-		items := make([]providerView, 0, len(s.app.Config.Providers))
-		for _, provider := range s.app.Config.Providers {
-			items = append(items, providerToView(provider, s.app.Config.Agent.Profiles))
-		}
-		writeJSON(w, http.StatusOK, items)
+		writeJSON(w, http.StatusOK, s.listProviderViews())
 	case http.MethodPost:
 		if !HasPermission(UserFromContext(r.Context()), "config.write") {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "config.write"})
@@ -222,20 +310,30 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		wasDefaultRef := strings.TrimSpace(s.app.Config.LLM.DefaultProviderRef)
 		if err := s.app.Config.UpsertProviderProfile(provider); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
+		}
+		updated, _ := s.app.Config.FindProviderProfile(firstNonEmpty(provider.ID, provider.Name))
+		if strings.TrimSpace(s.app.Config.LLM.DefaultProviderRef) == "" && updated.IsEnabled() {
+			_ = s.app.Config.SetDefaultProviderProfile(updated.ID)
+		} else if strings.EqualFold(wasDefaultRef, firstNonEmpty(existing.ID, updated.ID)) || strings.EqualFold(wasDefaultRef, updated.ID) {
+			_ = s.app.Config.SetDefaultProviderProfile(updated.ID)
 		}
 		if err := s.app.Config.Save(s.app.ConfigPath); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		if hadExisting {
+		if strings.EqualFold(strings.TrimSpace(s.app.Config.LLM.DefaultProviderRef), strings.TrimSpace(updated.ID)) {
+			if s.runtimePool != nil {
+				s.runtimePool.InvalidateAll()
+			}
+		} else if hadExisting {
 			s.invalidateProviderConsumers(existing.ID)
 		}
-		updated, _ := s.app.Config.FindProviderProfile(firstNonEmpty(provider.ID, provider.Name))
 		s.appendAudit(UserFromContext(r.Context()), "providers.write", updated.ID, nil)
-		writeJSON(w, http.StatusOK, providerToView(updated, s.app.Config.Agent.Profiles))
+		writeJSON(w, http.StatusOK, providerToView(updated, s.app.Config.Agent.Profiles, s.app.Config.LLM.DefaultProviderRef))
 	case http.MethodDelete:
 		if !HasPermission(UserFromContext(r.Context()), "config.write") {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "config.write"})
@@ -251,9 +349,16 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
 			return
 		}
+		if strings.EqualFold(strings.TrimSpace(s.app.Config.LLM.DefaultProviderRef), strings.TrimSpace(existing.ID)) && len(s.app.Config.Providers) > 1 {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "switch the default provider before deleting it"})
+			return
+		}
 		if !s.app.Config.DeleteProviderProfile(id) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
 			return
+		}
+		if strings.EqualFold(strings.TrimSpace(s.app.Config.LLM.DefaultProviderRef), strings.TrimSpace(existing.ID)) {
+			s.app.Config.LLM.DefaultProviderRef = ""
 		}
 		if err := s.app.Config.Save(s.app.ConfigPath); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -265,6 +370,35 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleDefaultProvider(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !HasPermission(UserFromContext(r.Context()), "config.write") {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "config.write"})
+		return
+	}
+	var req struct {
+		ProviderRef string `json:"provider_ref"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	provider, err := s.applyDefaultProvider(req.ProviderRef)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.app.Config.Save(s.app.ConfigPath); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.appendAudit(UserFromContext(r.Context()), "providers.default", provider.ID, nil)
+	writeJSON(w, http.StatusOK, providerToView(provider, s.app.Config.Agent.Profiles, s.app.Config.LLM.DefaultProviderRef))
 }
 
 func (s *Server) handleProviderTest(w http.ResponseWriter, r *http.Request) {
@@ -326,11 +460,7 @@ func (s *Server) handleAgentBindings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "config.read"})
 			return
 		}
-		items := make([]agentBindingView, 0, len(s.app.Config.Agent.Profiles))
-		for _, profile := range s.app.Config.Agent.Profiles {
-			items = append(items, s.buildAgentBindingView(profile))
-		}
-		writeJSON(w, http.StatusOK, items)
+		writeJSON(w, http.StatusOK, s.listAgentBindingViews())
 	case http.MethodPost:
 		if !HasPermission(UserFromContext(r.Context()), "config.write") {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "config.write"})
@@ -369,7 +499,7 @@ func (s *Server) handleAgentBindings(w http.ResponseWriter, r *http.Request) {
 		for _, name := range req.Agents {
 			profile, ok := s.app.Config.FindAgentProfile(name)
 			if !ok {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("assistant not found: %s", name)})
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent not found: %s", name)})
 				return
 			}
 			profile.ProviderRef = providerRef

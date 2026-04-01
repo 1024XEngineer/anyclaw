@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash .anyclaw/delegate.sh \"回复OK两个字母即可\")",
+      "Bash(curl -s --max-time 15 \"https://nowcoding.ai/v1/chat/completions\" -H \"Content-Type: application/json\" -H \"Authorization: Bearer sk-tK4bcRs8DAMOMRvCAz3dA3L6tJa14KidlTAbcVxoAfeVrrAI\" -d \"{\"\"model\"\":\"\"gpt-5.4\"\",\"\"messages\"\":[{\"\"role\"\":\"\"user\"\",\"\"content\"\":\"\"reply OK\"\"}],\"\"temperature\"\":0.3}\")",
+      "Bash(bash .anyclaw/delegate.sh \"Reply with exactly: DELEGATE_OK\")",
+      "Bash(ls -la d:/newanyclaw/anyclaw/.anyclaw/served_app*.js)",
+      "Bash(ls -lh d:/newanyclaw/anyclaw/.anyclaw/*.png)",
+      "Bash(ls -lh d:/newanyclaw/anyclaw/.anyclaw/*.err)",
+      "Bash(sed 's/.*border-radius: *//')",
+      "Bash(grep -oE '#[0-9a-fA-F]{3,8}' d:/newanyclaw/anyclaw/pkg/gateway/webui/redesign.css)",
+      "Bash(curl -s http://localhost:9090/v2/store)",
+      "Bash(curl -s http://127.0.0.1:9090/v2/store)",
+      "Bash(curl -s http://localhost:8080/v2/store)",
+      "Bash(claude mcp:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "Bash(npx -y uipro-cli init)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"test\" --domain style -n 1)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"app store marketplace catalog listing\" --design-system -p \"AnyClaw Store\")",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"marketplace listing grid\" --domain style -n 5)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"catalog navigation category sidebar\" --domain ux -n 5)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"app store\" --domain style -n 3)",
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"app store\" --domain style -n 3)",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"AI agent platform dashboard modern clean professional\" --design-system -p \"AnyClaw\")",
+      "Bash(python3 .claude/skills/ui-ux-pro-max/scripts/search.py \"test\")",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(python3 -c \":*)",
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"AI agent platform dashboard modern clean\" --domain style -n 5)",
+      "Bash(python .claude/skills/ui-ux-pro-max/scripts/search.py \"AI SaaS developer tool professional\" --domain color -n 5)",
+      "Bash(go build:*)",
+      "Bash(tasklist)",
+      "Bash(taskkill //PID 2668 //F)",
+      "Bash(curl -s http://127.0.0.1:18789/app/redesign.css)",
+      "Bash(curl -s http://127.0.0.1:18789/app/)",
+      "Bash(curl -s http://127.0.0.1:18789/app/redesign.css?v=20260328a)",
+      "Bash(curl -s http://127.0.0.1:18789/app/styles.css)"
+    ]
+  }
+}

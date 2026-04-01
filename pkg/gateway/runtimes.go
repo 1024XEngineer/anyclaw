@@ -199,6 +199,12 @@ func (p *RuntimePool) InvalidateByProject(projectID string) {
 	}
 }
 
+func (p *RuntimePool) InvalidateAll() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	clear(p.runtimes)
+}
+
 func (p *RuntimePool) sessionCounts() map[string]int {
 	counts := map[string]int{}
 	if p.store == nil {

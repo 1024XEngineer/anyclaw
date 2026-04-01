@@ -118,6 +118,9 @@ func (m *taskManager) CreateTask(req TaskRequest) (*TaskResponse, error) {
 		req.Mode = ModeSingle
 	}
 	req.CreatedAt = time.Now()
+	if req.Mode == ModeMulti {
+		return nil, fmt.Errorf("multi-agent mode has been removed")
+	}
 
 	// Validate agent selection
 	if req.Mode == ModeSingle {
@@ -129,17 +132,6 @@ func (m *taskManager) CreateTask(req TaskRequest) (*TaskResponse, error) {
 		}
 		if _, ok := m.orch.GetAgent(req.SelectedAgent); !ok {
 			return nil, fmt.Errorf("agent not found: %s", req.SelectedAgent)
-		}
-	}
-
-	if req.Mode == ModeMulti {
-		if len(req.SelectedAgents) == 0 {
-			req.SelectedAgents = m.findBestAgents(req.Input)
-		}
-		for _, name := range req.SelectedAgents {
-			if _, ok := m.orch.GetAgent(name); !ok {
-				return nil, fmt.Errorf("agent not found: %s", name)
-			}
 		}
 	}
 

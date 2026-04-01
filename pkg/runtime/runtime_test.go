@@ -1,55 +1,174 @@
 package runtime
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
 )
 
-func TestResolveSubAgentDefinitionInheritsGlobalLLMDefaults(t *testing.T) {
-	global := config.LLMConfig{
-		Provider:    "openai",
-		Model:       "gpt-4o-mini",
-		APIKey:      "key",
-		BaseURL:     "https://example.com",
-		MaxTokens:   4096,
-		Temperature: 0.7,
-		Proxy:       "http://proxy",
+func TestConfiguredAgentSkillNamesFallsBackToMainAgentSkills(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agent.Name = "Personal Assistant"
+	cfg.Agent.Skills = []config.AgentSkillRef{
+		{Name: "vision-agent", Enabled: true},
+		{Name: "vision-agent", Enabled: true},
+		{Name: "disabled-skill", Enabled: false},
+	}
+	cfg.Agent.Profiles = []config.AgentProfile{
+		{
+			Name:    "Go Expert",
+			Enabled: config.BoolPtr(true),
+			Skills: []config.AgentSkillRef{
+				{Name: "coder", Enabled: true},
+			},
+		},
 	}
 
-	def := resolveSubAgentDefinition(config.SubAgentConfig{
-		Name: "worker",
-	}, global)
-
-	if def.LLMProvider != global.Provider || def.LLMModel != global.Model || def.LLMAPIKey != global.APIKey || def.LLMBaseURL != global.BaseURL || def.LLMProxy != global.Proxy {
-		t.Fatalf("expected sub-agent definition to inherit global llm settings, got %+v", def)
-	}
-	if def.LLMMaxTokens == nil || *def.LLMMaxTokens != global.MaxTokens {
-		t.Fatalf("expected llm_max_tokens=%d, got %v", global.MaxTokens, def.LLMMaxTokens)
-	}
-	if def.LLMTemperature == nil || *def.LLMTemperature != global.Temperature {
-		t.Fatalf("expected llm_temperature=%v, got %v", global.Temperature, def.LLMTemperature)
+	got := configuredAgentSkillNames(cfg)
+	if len(got) != 1 || got[0] != "vision-agent" {
+		t.Fatalf("expected only main-agent skill vision-agent, got %#v", got)
 	}
 }
 
-func TestResolveSubAgentDefinitionPreservesExplicitZeroOverrides(t *testing.T) {
-	global := config.LLMConfig{
-		Provider:    "openai",
-		Model:       "gpt-4o-mini",
-		MaxTokens:   4096,
-		Temperature: 0.7,
+func TestResolveMainAgentPersonalityDoesNotFallbackToFirstEnabledProfile(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agent.Name = "Personal Assistant"
+	cfg.Agent.Profiles = []config.AgentProfile{
+		{
+			Name:        "Go Expert",
+			Enabled:     config.BoolPtr(true),
+			Personality: config.PersonalitySpec{Tone: "严谨", Traits: []string{"精确"}},
+		},
 	}
 
-	def := resolveSubAgentDefinition(config.SubAgentConfig{
-		Name:           "worker",
-		LLMMaxTokens:   config.IntPtr(0),
-		LLMTemperature: config.Float64Ptr(0),
-	}, global)
-
-	if def.LLMMaxTokens == nil || *def.LLMMaxTokens != 0 {
-		t.Fatalf("expected explicit llm_max_tokens=0 to be preserved, got %v", def.LLMMaxTokens)
+	got := resolveMainAgentPersonality(cfg)
+	if !reflect.DeepEqual(got, config.PersonalitySpec{}) {
+		t.Fatalf("expected zero personality when no profile matches main agent, got %#v", got)
 	}
-	if def.LLMTemperature == nil || *def.LLMTemperature != 0 {
-		t.Fatalf("expected explicit llm_temperature=0 to be preserved, got %v", def.LLMTemperature)
+}
+
+func TestBootstrapLoadsMainAgentSkillsWhenNoProfileMatches(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agent.Name = "Personal Assistant"
+	cfg.Agent.WorkDir = filepath.Join(tempDir, ".anyclaw")
+	cfg.Agent.WorkingDir = filepath.Join(tempDir, "workflows", "personal")
+	cfg.LLM.APIKey = "test-key"
+	cfg.Agent.Skills = []config.AgentSkillRef{
+		{Name: "vision-agent", Enabled: true},
+	}
+	cfg.Agent.Profiles = []config.AgentProfile{
+		{
+			Name:    "Go Expert",
+			Enabled: config.BoolPtr(true),
+			Skills: []config.AgentSkillRef{
+				{Name: "coder", Enabled: true},
+			},
+		},
+	}
+	cfg.Skills.Dir = filepath.Join(tempDir, "skills")
+	cfg.Plugins.Dir = filepath.Join(tempDir, "plugins")
+	cfg.Security.AuditLog = filepath.Join(tempDir, ".anyclaw", "audit", "audit.jsonl")
+
+	if err := os.MkdirAll(cfg.Plugins.Dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll plugins dir: %v", err)
+	}
+	writeTestSkill(t, cfg.Skills.Dir, "coder")
+	writeTestSkill(t, cfg.Skills.Dir, "vision-agent")
+
+	app, err := Bootstrap(BootstrapOptions{
+		ConfigPath: filepath.Join(tempDir, "anyclaw.json"),
+		Config:     cfg,
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	skills := app.Agent.ListSkills()
+	if len(skills) != 1 {
+		t.Fatalf("expected exactly 1 loaded skill, got %#v", skills)
+	}
+	if skills[0].Name != "vision-agent" {
+		t.Fatalf("expected vision-agent to be loaded, got %#v", skills)
+	}
+}
+
+func TestBootstrapResolvesRelativePathsFromConfigPath(t *testing.T) {
+	tempDir := t.TempDir()
+	configDir := filepath.Join(tempDir, "config")
+	configPath := filepath.Join(configDir, "anyclaw.json")
+
+	cfg := config.DefaultConfig()
+	cfg.LLM.Provider = "ollama"
+	cfg.LLM.Model = "qwen2.5"
+	cfg.Agent.WorkDir = ".anyclaw"
+	cfg.Agent.WorkingDir = "workspace"
+	cfg.Skills.Dir = "skills"
+	cfg.Plugins.Dir = "plugins"
+	cfg.Security.AuditLog = ".anyclaw/audit/audit.jsonl"
+
+	if err := os.MkdirAll(filepath.Join(configDir, "plugins"), 0o755); err != nil {
+		t.Fatalf("MkdirAll plugins dir: %v", err)
+	}
+	writeTestSkill(t, filepath.Join(configDir, "skills"), "coder")
+
+	app, err := Bootstrap(BootstrapOptions{
+		ConfigPath: configPath,
+		Config:     cfg,
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	wantWorkDir := filepath.Join(configDir, ".anyclaw")
+	if app.WorkDir != wantWorkDir {
+		t.Fatalf("expected work dir %q, got %q", wantWorkDir, app.WorkDir)
+	}
+
+	wantWorkingDir := filepath.Join(configDir, "workspace")
+	if app.WorkingDir != wantWorkingDir {
+		t.Fatalf("expected working dir %q, got %q", wantWorkingDir, app.WorkingDir)
+	}
+
+	wantSkillsDir := filepath.Join(configDir, "skills")
+	if app.Config.Skills.Dir != wantSkillsDir {
+		t.Fatalf("expected skills dir %q, got %q", wantSkillsDir, app.Config.Skills.Dir)
+	}
+
+	wantPluginsDir := filepath.Join(configDir, "plugins")
+	if app.Config.Plugins.Dir != wantPluginsDir {
+		t.Fatalf("expected plugins dir %q, got %q", wantPluginsDir, app.Config.Plugins.Dir)
+	}
+
+	wantAuditLog := filepath.Join(configDir, ".anyclaw", "audit", "audit.jsonl")
+	if app.Config.Security.AuditLog != wantAuditLog {
+		t.Fatalf("expected audit log %q, got %q", wantAuditLog, app.Config.Security.AuditLog)
+	}
+}
+
+func writeTestSkill(t *testing.T, skillsDir string, name string) {
+	t.Helper()
+	skillDir := filepath.Join(skillsDir, name)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll skill dir: %v", err)
+	}
+	payload := map[string]any{
+		"name":        name,
+		"description": name + " test skill",
+		"version":     "1.0.0",
+		"prompts": map[string]string{
+			"system": "test prompt",
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal skill payload: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "skill.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile skill.json: %v", err)
 	}
 }

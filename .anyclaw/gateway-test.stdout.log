@@ -1,0 +1,15 @@
+  [36m...[0m [2mconfig[0m loading configuration  [32mOK[0m [36mconfig[0m provider=openai model=stepfun/step-3.5-flash [2m1ms[0m
+  [36m...[0m [2mstorage[0m initializing storage  [32mOK[0m [36mstorage[0m work_dir=.anyclaw working_dir=D:\anyclaw\anyclaw\anyclaw\anyclaw3\anyclaw\workflows\personal [2m0s[0m
+  [36m...[0m [2msecurity[0m initializing security  [32mOK[0m [36msecurity[0m audit_log=.anyclaw/audit/audit.jsonl secured=false [2m0s[0m
+  [36m...[0m [2mskills[0m loading skills  [32mOK[0m [36mskills[0m 1 skill(s) loaded [2m1ms[0m
+  [36m...[0m [2mtools[0m registering tools  [32mOK[0m [36mtools[0m 60 tool(s) registered [2m0s[0m
+  [36m...[0m [2mplugins[0m loading plugins  [32mOK[0m [36mplugins[0m 6 plugin(s) loaded [2m1ms[0m
+  [36m...[0m [2mllm[0m  connecting to openai/stepfun/step-3.5-flash  [32mOK[0m [36mllm[0m LLM client ready [2m0s[0m
+  [36m...[0m [2magent[0m creating agent "个人助手"  [32mOK[0m [36magent[0m permission=limited [2m0s[0m
+  [2mSKIP[0m [36morchestrator[0m multi-agent orchestrator removed; running in single-agent mode [2m0s[0m
+  [32mOK[0m [36mready[0m bootstrap complete in 18ms [2m0s[0m
+[2m--------------------------------------------------[0m
+[36mi [0mGateway workers: 0
+[32m+ [0mGateway listening on 127.0.0.1:18889
+[36mi [0mHealth: http://127.0.0.1:18889/healthz
+[36mi [0mStatus: http://127.0.0.1:18889/status

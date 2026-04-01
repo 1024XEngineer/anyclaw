@@ -1,0 +1,7 @@
+{
+  "id": "1775011023072-uuuuuuuu",
+  "timestamp": "2026-04-01T10:37:03.0724187+08:00",
+  "type": "conversation",
+  "role": "user",
+  "content": "请使用read_file工具读取skills/coder/SKILL.md文件的内容"
+}

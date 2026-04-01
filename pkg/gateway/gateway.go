@@ -21,11 +21,25 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/chat"
 	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/plugin"
+	"github.com/anyclaw/anyclaw/pkg/routing"
 	"github.com/anyclaw/anyclaw/pkg/runtime"
 	taskModule "github.com/anyclaw/anyclaw/pkg/task"
 	"github.com/anyclaw/anyclaw/pkg/tools"
 )
+
+type llmPlannerAdapter struct {
+	client *llm.ClientWrapper
+}
+
+func (a *llmPlannerAdapter) Chat(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition) (*llm.Response, error) {
+	return a.client.Chat(ctx, messages, tools)
+}
+
+func (a *llmPlannerAdapter) Name() string {
+	return "llm-planner"
+}
 
 type Server struct {
 	app            *runtime.App
@@ -54,6 +68,8 @@ type Server struct {
 	jobQueue       chan func()
 	jobCancel      map[string]bool
 	jobMaxAttempts int
+	webhooks       *WebhookHandler
+	nodes          *NodeManager
 }
 
 type controlPlaneSnapshot struct {
@@ -103,16 +119,25 @@ func New(app *runtime.App) *Server {
 		jobQueue:       make(chan func(), 64),
 		jobCancel:      map[string]bool{},
 		jobMaxAttempts: app.Config.Gateway.JobMaxAttempts,
+		webhooks:       NewWebhookHandler(),
+		nodes:          NewNodeManager(),
 	}
 	server.approvals = newApprovalManager(store)
-	server.tasks = NewTaskManager(store, server.sessions, server.runtimePool, taskAppInfo{Name: app.Config.Agent.Name, WorkingDir: app.WorkingDir}, app.LLM, server.approvals)
 
-	if app.Config.Orchestrator.Enabled && app.Orchestrator != nil {
-		server.taskModule = taskModule.NewTaskManager(app.Orchestrator)
-		server.chatModule = chat.NewChatManager(app.Orchestrator)
-	} else {
-		server.chatModule = chat.NewChatManager(nil)
+	// Initialize routing layer for low-token path optimization
+	var router *routing.Router
+	var registry *plugin.Registry
+	if app.Plugins != nil {
+		registry = app.Plugins
+		cfg := config.DefaultConfig()
+		var planner routing.PlannerClient
+		if app.LLM != nil {
+			planner = &llmPlannerAdapter{client: app.LLM}
+		}
+		router = routing.NewRouter(app.Plugins, cfg, app.LLM, planner)
 	}
+
+	server.tasks = NewTaskManager(store, server.sessions, server.runtimePool, taskAppInfo{Name: app.Config.Agent.Name, WorkingDir: app.WorkingDir, ConfigPath: app.ConfigPath}, app.LLM, server.approvals, router, registry)
 
 	if sm, err := agentstore.NewStoreManager(app.WorkDir, app.ConfigPath); err == nil {
 		server.storeModule = sm
@@ -135,6 +160,18 @@ func (s *Server) initChannels() {
 			s.slack = channel.NewSlackAdapter(s.app.Config.Channels.Slack, s.router, s.appendEvent)
 			return s.slack
 		},
+		"discord-channel": func() channel.Adapter {
+			s.discord = channel.NewDiscordAdapter(s.app.Config.Channels.Discord, s.router, s.appendEvent)
+			return s.discord
+		},
+		"whatsapp-channel": func() channel.Adapter {
+			s.whatsapp = channel.NewWhatsAppAdapter(s.app.Config.Channels.WhatsApp, s.router, s.appendEvent)
+			return s.whatsapp
+		},
+		"signal-channel": func() channel.Adapter {
+			s.signal = channel.NewSignalAdapter(s.app.Config.Channels.Signal, s.router, s.appendEvent)
+			return s.signal
+		},
 	}
 	var adapters []channel.Adapter
 	if s.plugins != nil {
@@ -148,7 +185,13 @@ func (s *Server) initChannels() {
 		}
 	}
 	if len(adapters) == 0 {
-		adapters = []channel.Adapter{builders["telegram-channel"](), builders["slack-channel"]()}
+		adapters = []channel.Adapter{
+			builders["telegram-channel"](),
+			builders["slack-channel"](),
+			builders["discord-channel"](),
+			builders["whatsapp-channel"](),
+			builders["signal-channel"](),
+		}
 	}
 	s.channels = channel.NewManager(adapters...)
 }
@@ -411,19 +454,113 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (s *Server) resolveAssistantName(name string) (string, error) {
+type agentProfileView struct {
+	Name            string                 `json:"name"`
+	Description     string                 `json:"description"`
+	Role            string                 `json:"role,omitempty"`
+	Persona         string                 `json:"persona,omitempty"`
+	AvatarPreset    string                 `json:"avatar_preset,omitempty"`
+	AvatarDataURL   string                 `json:"avatar_data_url,omitempty"`
+	WorkingDir      string                 `json:"working_dir,omitempty"`
+	PermissionLevel string                 `json:"permission_level,omitempty"`
+	ProviderRef     string                 `json:"provider_ref,omitempty"`
+	ProviderName    string                 `json:"provider_name,omitempty"`
+	ProviderType    string                 `json:"provider_type,omitempty"`
+	Provider        string                 `json:"provider,omitempty"`
+	DefaultModel    string                 `json:"default_model,omitempty"`
+	Enabled         bool                   `json:"enabled"`
+	Active          bool                   `json:"active"`
+	Personality     config.PersonalitySpec `json:"personality,omitempty"`
+	Skills          []config.AgentSkillRef `json:"skills,omitempty"`
+}
+
+func (s *Server) buildAgentProfileView(profile config.AgentProfile) agentProfileView {
+	personality := profile.Personality
+	if strings.TrimSpace(personality.Template) == "" &&
+		len(personality.Traits) == 0 &&
+		strings.TrimSpace(personality.Tone) == "" &&
+		strings.TrimSpace(personality.Style) == "" {
+		personality = defaultPersonalitySpec()
+	}
+	providerName := ""
+	providerType := ""
+	providerRuntime := ""
+	if provider, ok := s.app.Config.FindProviderProfile(profile.ProviderRef); ok {
+		providerName = provider.Name
+		providerType = provider.Type
+		providerRuntime = provider.Provider
+	}
+	return agentProfileView{
+		Name:            profile.Name,
+		Description:     profile.Description,
+		Role:            profile.Role,
+		Persona:         profile.Persona,
+		AvatarPreset:    profile.AvatarPreset,
+		AvatarDataURL:   profile.AvatarDataURL,
+		WorkingDir:      profile.WorkingDir,
+		PermissionLevel: profile.PermissionLevel,
+		ProviderRef:     profile.ProviderRef,
+		ProviderName:    providerName,
+		ProviderType:    providerType,
+		Provider:        firstNonEmpty(providerRuntime, s.app.Config.LLM.Provider),
+		DefaultModel:    profile.DefaultModel,
+		Enabled:         profile.IsEnabled(),
+		Active:          s.app.Config.IsCurrentAgentProfile(profile.Name),
+		Personality:     personality,
+		Skills:          append([]config.AgentSkillRef{}, profile.Skills...),
+	}
+}
+
+func (s *Server) listAgentViews() []agentProfileView {
+	items := make([]agentProfileView, 0, len(s.app.Config.Agent.Profiles))
+	for _, profile := range s.app.Config.Agent.Profiles {
+		items = append(items, s.buildAgentProfileView(profile))
+	}
+	return items
+}
+
+func (s *Server) getAgentView(name string) (agentProfileView, bool) {
+	for _, profile := range s.app.Config.Agent.Profiles {
+		if profile.Name == name {
+			return s.buildAgentProfileView(profile), true
+		}
+	}
+	return agentProfileView{}, false
+}
+
+func requestedAgentName(agentName string, assistantName string) string {
+	return firstNonEmpty(agentName, assistantName)
+}
+
+func (s *Server) resolveAgentName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return s.app.Config.Agent.Name, nil
+		if resolved := s.app.Config.ResolveMainAgentName(); resolved != "" {
+			return resolved, nil
+		}
+		return "", fmt.Errorf("agent not configured")
+	}
+	if config.IsMainAgentAlias(name) {
+		if resolved := s.app.Config.ResolveMainAgentName(); resolved != "" {
+			return resolved, nil
+		}
+		return "", fmt.Errorf("agent not configured")
 	}
 	profile, ok := s.app.Config.FindAgentProfile(name)
 	if !ok {
-		return "", fmt.Errorf("assistant not found: %s", name)
+		if strings.EqualFold(name, strings.TrimSpace(s.app.Config.ResolveMainAgentName())) {
+			return s.app.Config.ResolveMainAgentName(), nil
+		}
+		return "", fmt.Errorf("agent not found: %s", name)
 	}
 	if !profile.IsEnabled() {
-		return "", fmt.Errorf("assistant is disabled: %s", name)
+		return "", fmt.Errorf("agent is disabled: %s", name)
 	}
 	return profile.Name, nil
+}
+
+func (s *Server) resolveAssistantName(name string) (string, error) {
+	return s.resolveAgentName(name)
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -441,13 +578,21 @@ func (s *Server) Run(ctx context.Context) error {
 	}, s.handleChat))))
 	mux.HandleFunc("/channels", s.wrap("/channels", requirePermission("channels.read", s.handleChannels)))
 	mux.HandleFunc("/plugins", s.wrap("/plugins", requirePermission("plugins.read", s.handlePlugins)))
+	mux.HandleFunc("/apps", s.wrap("/apps", requirePermission("apps.read", s.handleApps)))
+	mux.HandleFunc("/app-workflows/resolve", s.wrap("/app-workflows/resolve", requirePermission("apps.read", s.handleAppWorkflowResolve)))
+	mux.HandleFunc("/app-bindings", s.wrap("/app-bindings", s.handleAppBindings))
+	mux.HandleFunc("/app-pairings", s.wrap("/app-pairings", s.handleAppPairings))
 	mux.HandleFunc("/routing", s.wrap("/routing", requirePermission("routing.read", s.handleRouting)))
 	mux.HandleFunc("/routing/analysis", s.wrap("/routing/analysis", requirePermission("routing.read", s.handleRoutingAnalysis)))
+	mux.HandleFunc("/agents", s.wrap("/agents", s.handleAgents))
+	mux.HandleFunc("/agents/personality-templates", s.wrap("/agents/personality-templates", requirePermission("config.read", s.handlePersonalityTemplates)))
+	mux.HandleFunc("/agents/skill-catalog", s.wrap("/agents/skill-catalog", requirePermission("skills.read", s.handleAssistantSkillCatalog)))
 	mux.HandleFunc("/assistants", s.wrap("/assistants", s.handleAssistants))
 	mux.HandleFunc("/assistants/personality-templates", s.wrap("/assistants/personality-templates", requirePermission("config.read", s.handlePersonalityTemplates)))
 	mux.HandleFunc("/assistants/skill-catalog", s.wrap("/assistants/skill-catalog", requirePermission("skills.read", s.handleAssistantSkillCatalog)))
 	mux.HandleFunc("/providers", s.wrap("/providers", s.handleProviders))
 	mux.HandleFunc("/providers/test", s.wrap("/providers/test", s.handleProviderTest))
+	mux.HandleFunc("/providers/default", s.wrap("/providers/default", s.handleDefaultProvider))
 	mux.HandleFunc("/agent-bindings", s.wrap("/agent-bindings", s.handleAgentBindings))
 	mux.HandleFunc("/runtimes", s.wrap("/runtimes", requirePermission("runtimes.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.handleRuntimes))))
 	mux.HandleFunc("/runtimes/refresh", s.wrap("/runtimes/refresh", requirePermission("runtimes.write", s.handleRefreshRuntime)))
@@ -462,10 +607,11 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/jobs/", s.wrap("/jobs/", requirePermission("audit.read", s.handleJobByID)))
 	mux.HandleFunc("/jobs/retry", s.wrap("/jobs/retry", requirePermission("audit.read", s.handleRetryJob)))
 	mux.HandleFunc("/jobs/cancel", s.wrap("/jobs/cancel", requirePermission("audit.read", s.handleCancelJob)))
-	mux.HandleFunc("/config", s.wrap("/config", requirePermission("config.write", s.handleConfigAPI)))
+	mux.HandleFunc("/config", s.wrap("/config", s.handleConfigAPI))
 	mux.HandleFunc("/memory", s.wrap("/memory", requirePermission("memory.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.handleMemory))))
 	mux.HandleFunc("/events", s.wrap("/events", requirePermission("events.read", s.handleEvents)))
 	mux.HandleFunc("/events/stream", s.wrap("/events/stream", requirePermission("events.read", s.handleEventStream)))
+	mux.HandleFunc("/ws", s.wrap("/ws", s.handleOpenClawWS))
 	mux.HandleFunc("/control-plane", s.wrap("/control-plane", requirePermission("status.read", s.handleControlPlane)))
 	mux.HandleFunc("/sessions", s.wrap("/sessions", requirePermission("sessions.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.handleSessions))))
 	mux.HandleFunc("/sessions/", s.wrap("/sessions/", requirePermission("sessions.read", requireHierarchyAccess(s.resolveHierarchyFromSessionPath, s.handleSessionByID))))
@@ -490,7 +636,31 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/channels/discord/interactions", s.rateLimit.Wrap(s.handleDiscordInteractions))
 	mux.HandleFunc("/ingress/web", s.rateLimit.Wrap(s.handleSignedIngress))
 	mux.HandleFunc("/ingress/plugins/", s.rateLimit.Wrap(s.handlePluginIngress))
-	mux.HandleFunc("/", s.handleRootUI)
+
+	// OpenAI-compatible API endpoints
+	mux.HandleFunc("/v1/chat/completions", s.wrap("/v1/chat/completions", s.handleOpenAIChatCompletions))
+	mux.HandleFunc("/v1/models", s.wrap("/v1/models", s.handleOpenAIModels))
+	mux.HandleFunc("/v1/responses", s.wrap("/v1/responses", s.handleOpenAIResponses))
+
+	// WebChat and Dashboard UI
+	mux.HandleFunc("/webchat", s.wrap("/webchat", s.handleWebChat))
+	mux.HandleFunc("/dashboard", s.wrap("/dashboard", s.handleDashboard))
+	mux.HandleFunc("/dashboard/", s.wrap("/dashboard/", s.handleDashboard))
+	mux.HandleFunc("/api/webchat/status", s.wrap("/api/webchat/status", s.handleWebChatStatus))
+
+	// Webhook endpoints
+	mux.HandleFunc("/webhooks/", s.rateLimit.Wrap(s.handleWebhookIncoming))
+
+	// Device nodes
+	mux.HandleFunc("/nodes", s.wrap("/nodes", requirePermission("nodes.read", s.handleNodesList)))
+	mux.HandleFunc("/nodes/", s.wrap("/nodes/", s.handleNodeByID))
+	mux.HandleFunc("/nodes/invoke", s.wrap("/nodes/invoke", requirePermission("nodes.write", s.handleNodeInvoke)))
+
+	// Cron jobs
+	mux.HandleFunc("/cron", s.wrap("/cron", requirePermission("cron.read", s.handleCronList)))
+	mux.HandleFunc("/cron/", s.wrap("/cron/", s.handleCronByID))
+
+	mux.HandleFunc("/", s.handleRootAPI)
 
 	s.startedAt = time.Now().UTC()
 	s.httpServer = &http.Server{
@@ -546,7 +716,7 @@ func (s *Server) runOrCreateChannelSession(ctx context.Context, source string, s
 		decision = s.router.Decide(channel.RouteRequest{Channel: source, Source: routeSource, Text: message})
 	}
 	if strings.TrimSpace(sessionID) == "" {
-		agentName := s.app.Config.Agent.Name
+		agentName := s.app.Config.ResolveMainAgentName()
 		orgID, projectID, workspaceID := defaultResourceIDs(s.app.WorkingDir)
 		if decision.Agent != "" {
 			agentName = decision.Agent
@@ -574,13 +744,11 @@ func (s *Server) runOrCreateChannelSession(ctx context.Context, source string, s
 			Org:           org.ID,
 			Project:       project.ID,
 			Workspace:     workspace.ID,
-			SessionMode:   decision.SessionMode,
+			SessionMode:   normalizeSingleAgentSessionMode(decision.SessionMode, "channel-dm"),
 			QueueMode:     decision.QueueMode,
 			ReplyBack:     decision.ReplyBack,
 			SourceChannel: source,
 			SourceID:      firstNonEmpty(strings.TrimSpace(meta["user_id"]), strings.TrimSpace(meta["reply_target"]), sessionID),
-			GroupKey:      decision.Key,
-			IsGroup:       decision.SessionMode == "group" || decision.SessionMode == "group-shared",
 		}
 		if createOpts.SessionMode == "" {
 			createOpts.SessionMode = "main"
@@ -793,6 +961,39 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (s *Server) handleRootAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":    "AnyClaw Gateway",
+		"version": runtime.Version,
+		"status":  "running",
+		"endpoints": map[string]string{
+			"health":     "/healthz",
+			"status":     "/status",
+			"chat":       "/chat",
+			"webchat":    "/webchat",
+			"dashboard":  "/dashboard",
+			"agents":     "/agents",
+			"tasks":      "/tasks",
+			"sessions":   "/sessions",
+			"channels":   "/channels",
+			"plugins":    "/plugins",
+			"skills":     "/skills",
+			"tools":      "/tools",
+			"websocket":  "/ws",
+			"openai_api": "/v1/chat/completions",
+			"models":     "/v1/models",
+			"responses":  "/v1/responses",
+			"webhooks":   "/webhooks/",
+			"nodes":      "/nodes",
+			"cron":       "/cron",
+		},
+	})
+}
+
 func (s *Server) handleDiscordInteractions(w http.ResponseWriter, r *http.Request) {
 	if s.discord == nil || !s.discord.Enabled() {
 		http.NotFound(w, r)
@@ -909,6 +1110,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Message   string `json:"message"`
 		SessionID string `json:"session_id"`
 		Title     string `json:"title"`
+		Agent     string `json:"agent"`
 		Assistant string `json:"assistant"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -919,7 +1121,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
 		return
 	}
-	agentName, err := s.resolveAssistantName(req.Assistant)
+	agentName, err := s.resolveAgentName(requestedAgentName(req.Agent, req.Assistant))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -955,6 +1157,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	response, updatedSession, err := s.runSessionMessage(r.Context(), req.SessionID, req.Title, req.Message)
 	if err != nil {
+		if errors.Is(err, ErrTaskWaitingApproval) {
+			s.appendAudit(UserFromContext(r.Context()), "chat.send", req.SessionID, map[string]any{"message_length": len(req.Message), "status": "waiting_approval"})
+			writeJSON(w, http.StatusAccepted, s.sessionApprovalResponse(req.SessionID))
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -992,6 +1199,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Title     string `json:"title"`
 			Input     string `json:"input"`
+			Agent     string `json:"agent"`
 			Assistant string `json:"assistant"`
 			SessionID string `json:"session_id"`
 		}
@@ -1003,7 +1211,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "input is required"})
 			return
 		}
-		assistantName, err := s.resolveAssistantName(req.Assistant)
+		assistantName, err := s.resolveAgentName(requestedAgentName(req.Agent, req.Assistant))
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -1085,6 +1293,33 @@ func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.tasks.Steps(taskID))
 		return
 	}
+	if len(parts) > 1 && parts[1] == "execute" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !HasPermission(UserFromContext(r.Context()), "tasks.write") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "tasks.write"})
+			return
+		}
+		result, err := s.tasks.Execute(r.Context(), taskID)
+		if err != nil {
+			if errors.Is(err, ErrTaskWaitingApproval) {
+				s.appendAudit(UserFromContext(r.Context()), "tasks.write", taskID, map[string]any{"status": "waiting_approval", "resume": true})
+				response := s.taskResponse(result.Task, result.Session)
+				response["status"] = "waiting_approval"
+				writeJSON(w, http.StatusAccepted, response)
+				return
+			}
+			s.appendAudit(UserFromContext(r.Context()), "tasks.write", taskID, map[string]any{"status": "failed", "resume": true})
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error(), "task": task})
+			return
+		}
+		s.recordTaskCompletion(result, "task_resume")
+		s.appendAudit(UserFromContext(r.Context()), "tasks.write", taskID, map[string]any{"status": result.Task.Status, "resume": true})
+		writeJSON(w, http.StatusOK, s.taskResponse(result.Task, result.Session))
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1153,25 +1388,17 @@ func (s *Server) handleApprovalByID(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		if updated.TaskID != "" {
-			if req.Approved {
-				go func(taskID string) {
-					result, runErr := s.tasks.Execute(context.Background(), taskID)
-					if runErr != nil {
-						if errors.Is(runErr, ErrTaskWaitingApproval) {
-							return
-						}
-						return
-					}
-					s.recordTaskCompletion(result, "approval_resume")
-				}(updated.TaskID)
-			} else {
-				_ = s.tasks.MarkRejected(updated.TaskID, updated.StepIndex, firstNonEmpty(strings.TrimSpace(req.Comment), "task execution rejected by approver"))
-			}
-		}
+		s.handleResolvedApproval(updated, req.Approved, req.Comment)
 		s.appendAudit(UserFromContext(r.Context()), "approvals.write", id, map[string]any{"approved": req.Approved})
-		if updated.TaskID != "" {
-			s.appendEvent("approval.resolved", updated.SessionID, map[string]any{"approval_id": updated.ID, "task_id": updated.TaskID, "status": updated.Status})
+		if updated.TaskID != "" || updated.SessionID != "" {
+			payload := map[string]any{"approval_id": updated.ID, "status": updated.Status}
+			if updated.TaskID != "" {
+				payload["task_id"] = updated.TaskID
+			}
+			if updated.ToolName != "" {
+				payload["tool_name"] = updated.ToolName
+			}
+			s.appendEvent("approval.resolved", updated.SessionID, payload)
 		}
 		writeJSON(w, http.StatusOK, updated)
 		return
@@ -1212,53 +1439,60 @@ func (s *Server) recordTaskCompletion(result *TaskExecutionResult, source string
 }
 
 func (s *Server) runSessionMessage(ctx context.Context, sessionID string, title string, message string) (string, *Session, error) {
+	return s.runSessionMessageWithOptions(ctx, sessionID, title, message, sessionRunOptions{Source: "api"})
+}
+
+func (s *Server) runSessionMessageWithOptions(ctx context.Context, sessionID string, title string, message string, opts sessionRunOptions) (string, *Session, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return "", nil, fmt.Errorf("session creation now requires registered org/project/workspace via request path")
 	}
+	source := firstNonEmpty(strings.TrimSpace(opts.Source), "api")
 
-	if _, err := s.sessions.EnqueueTurn(sessionID); err == nil {
-		s.appendEvent("session.queue.updated", sessionID, map[string]any{"queue_mode": "fifo", "source": "api"})
+	if !opts.Resume {
+		if _, err := s.sessions.EnqueueTurn(sessionID); err == nil {
+			s.appendEvent("session.queue.updated", sessionID, map[string]any{"queue_mode": "fifo", "source": source})
+		}
 	}
 	if _, err := s.sessions.SetPresence(sessionID, "typing", true); err == nil {
-		s.appendEvent("session.typing", sessionID, map[string]any{"typing": true, "source": "api"})
+		s.appendEvent("session.typing", sessionID, map[string]any{"typing": true, "source": source})
 	}
-	s.appendEvent("chat.started", sessionID, map[string]any{"message": message})
+	eventName := "chat.started"
+	if opts.Resume {
+		eventName = "chat.resumed"
+	}
+	s.appendEvent(eventName, sessionID, map[string]any{"message": message, "source": source})
 	session, ok := s.sessions.Get(sessionID)
 	if !ok {
 		return "", nil, fmt.Errorf("session not found: %s", sessionID)
 	}
-	if len(sessionAgentNames(session)) > 1 || session.IsGroup {
-		response, updatedSession, err := s.runGroupSessionMessage(ctx, session, message)
-		if err != nil {
-			return "", nil, err
-		}
-		if _, err := s.sessions.SetPresence(sessionID, "idle", false); err == nil {
-			s.appendEvent("session.presence", sessionID, map[string]any{"presence": "idle", "source": "api"})
-		}
-		s.appendEvent("chat.completed", sessionID, map[string]any{"message": message, "response_length": len(response), "mode": "group"})
-		return response, updatedSession, nil
-	}
 	targetApp, err := s.runtimePool.GetOrCreate(session.Agent, session.Org, session.Project, session.Workspace)
 	if err != nil {
-		return "", nil, err
+		return "", session, err
 	}
 	targetApp.Agent.SetHistory(session.History)
 	execCtx := tools.WithBrowserSession(ctx, sessionID)
 	execCtx = tools.WithSandboxScope(execCtx, tools.SandboxScope{SessionID: sessionID, Channel: "api"})
+	execCtx = agent.WithToolApprovalHook(execCtx, s.sessionToolApprovalHook(session, targetApp.Config, title, message, source))
+	execCtx = tools.WithToolApprovalHook(execCtx, s.sessionProtocolApprovalHook(session, targetApp.Config, title, message, source))
 	response, err := targetApp.Agent.Run(execCtx, message)
 	if err != nil {
-		return "", nil, err
+		if errors.Is(err, ErrTaskWaitingApproval) {
+			s.updateSessionApprovalPresence(sessionID, "")
+		} else {
+			s.updateSessionPresence(sessionID, "idle", false)
+		}
+		return "", session, err
 	}
 	updatedSession, err := s.sessions.AddExchange(sessionID, message, response)
 	if err != nil {
-		return "", nil, err
+		return "", session, err
 	}
 	if _, err := s.sessions.SetPresence(sessionID, "idle", false); err == nil {
-		s.appendEvent("session.presence", sessionID, map[string]any{"presence": "idle", "source": "api"})
+		s.appendEvent("session.presence", sessionID, map[string]any{"presence": "idle", "source": source})
 	}
 	s.recordSessionToolActivities(updatedSession, targetApp.Agent.GetLastToolActivities())
-	s.appendEvent("chat.completed", sessionID, map[string]any{"message": message, "response_length": len(response)})
+	s.appendEvent("chat.completed", sessionID, map[string]any{"message": message, "response_length": len(response), "source": source})
 	return response, updatedSession, nil
 	/*
 		session, err := s.sessions.Create(title, s.app.Config.Agent.Name, org.ID, project.ID, workspace.ID)
@@ -1268,6 +1502,48 @@ func (s *Server) runSessionMessage(ctx context.Context, sessionID string, title 
 		sessionID = session.ID
 		s.appendEvent("session.created", sessionID, map[string]any{"title": session.Title})
 	*/
+}
+
+func (s *Server) handleResolvedApproval(updated *Approval, approved bool, comment string) {
+	if updated == nil {
+		return
+	}
+	if updated.TaskID != "" {
+		if approved {
+			go func(taskID string) {
+				result, runErr := s.tasks.Execute(context.Background(), taskID)
+				if runErr != nil {
+					if errors.Is(runErr, ErrTaskWaitingApproval) {
+						return
+					}
+					return
+				}
+				s.recordTaskCompletion(result, "approval_resume")
+			}(updated.TaskID)
+			return
+		}
+		_ = s.tasks.MarkRejected(updated.TaskID, updated.StepIndex, firstNonEmpty(strings.TrimSpace(comment), "task execution rejected by approver"))
+		return
+	}
+	if updated.SessionID == "" {
+		return
+	}
+	if approved {
+		approval := cloneApproval(updated)
+		go func(item *Approval) {
+			if item == nil {
+				return
+			}
+			_ = s.resumeApprovedSessionApproval(context.Background(), item)
+		}(approval)
+		return
+	}
+	s.updateSessionPresence(updated.SessionID, "idle", false)
+	s.appendEvent("chat.cancelled", updated.SessionID, map[string]any{
+		"approval_id": updated.ID,
+		"reason":      firstNonEmpty(strings.TrimSpace(comment), "approval rejected"),
+		"source":      "approval",
+	})
 }
 
 func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
@@ -1447,47 +1723,15 @@ func (s *Server) handleRoutingAnalysis(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, channel.AnalyzeRouting(s.app.Config.Channels.Routing))
 }
 
-func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if !HasPermission(UserFromContext(r.Context()), "config.read") && !HasPermission(UserFromContext(r.Context()), "config.write") {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "config.read"})
 			return
 		}
-		items := make([]map[string]any, 0, len(s.app.Config.Agent.Profiles))
-		for _, profile := range s.app.Config.Agent.Profiles {
-			personality := profile.Personality
-			if strings.TrimSpace(personality.Template) == "" && len(personality.Traits) == 0 && strings.TrimSpace(personality.Tone) == "" && strings.TrimSpace(personality.Style) == "" {
-				personality = defaultPersonalitySpec()
-			}
-			providerName := ""
-			providerType := ""
-			providerRuntime := ""
-			if provider, ok := s.app.Config.FindProviderProfile(profile.ProviderRef); ok {
-				providerName = provider.Name
-				providerType = provider.Type
-				providerRuntime = provider.Provider
-			}
-			items = append(items, map[string]any{
-				"name":             profile.Name,
-				"description":      profile.Description,
-				"role":             profile.Role,
-				"persona":          profile.Persona,
-				"working_dir":      profile.WorkingDir,
-				"permission_level": profile.PermissionLevel,
-				"provider_ref":     profile.ProviderRef,
-				"provider_name":    providerName,
-				"provider_type":    providerType,
-				"provider":         firstNonEmpty(providerRuntime, s.app.Config.LLM.Provider),
-				"default_model":    profile.DefaultModel,
-				"enabled":          profile.IsEnabled(),
-				"active":           strings.EqualFold(strings.TrimSpace(s.app.Config.Agent.ActiveProfile), strings.TrimSpace(profile.Name)),
-				"personality":      personality,
-				"skills":           profile.Skills,
-			})
-		}
-		s.appendAudit(UserFromContext(r.Context()), "assistants.read", "assistants", nil)
-		writeJSON(w, http.StatusOK, items)
+		s.appendAudit(UserFromContext(r.Context()), "agents.read", "agents", nil)
+		writeJSON(w, http.StatusOK, s.listAgentViews())
 	case http.MethodPost:
 		if !HasPermission(UserFromContext(r.Context()), "config.write") {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "config.write"})
@@ -1498,6 +1742,8 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 			Description     string                 `json:"description"`
 			Role            string                 `json:"role"`
 			Persona         string                 `json:"persona"`
+			AvatarPreset    *string                `json:"avatar_preset"`
+			AvatarDataURL   *string                `json:"avatar_data_url"`
 			WorkingDir      string                 `json:"working_dir"`
 			PermissionLevel string                 `json:"permission_level"`
 			ProviderRef     string                 `json:"provider_ref"`
@@ -1523,7 +1769,19 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 			Personality:     req.Personality,
 			Skills:          req.Skills,
 		}
+		if req.AvatarPreset != nil {
+			profile.AvatarPreset = *req.AvatarPreset
+		}
+		if req.AvatarDataURL != nil {
+			profile.AvatarDataURL = *req.AvatarDataURL
+		}
 		if existing, ok := s.app.Config.FindAgentProfile(profile.Name); ok {
+			if req.AvatarPreset == nil {
+				profile.AvatarPreset = existing.AvatarPreset
+			}
+			if req.AvatarDataURL == nil {
+				profile.AvatarDataURL = existing.AvatarDataURL
+			}
 			profile.Domain = existing.Domain
 			profile.Expertise = append([]string{}, existing.Expertise...)
 			profile.SystemPrompt = existing.SystemPrompt
@@ -1551,14 +1809,14 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err := s.app.Config.UpsertAgentProfile(profile); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "assistant name is required"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		if err := s.app.Config.Save(s.app.ConfigPath); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		s.appendAudit(UserFromContext(r.Context()), "assistants.write", profile.Name, map[string]any{"enabled": profile.IsEnabled()})
+		s.appendAudit(UserFromContext(r.Context()), "agents.write", profile.Name, map[string]any{"enabled": profile.IsEnabled()})
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	case http.MethodDelete:
 		if !HasPermission(UserFromContext(r.Context()), "config.write") {
@@ -1571,18 +1829,22 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !s.app.Config.DeleteAgentProfile(name) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "assistant not found"})
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 			return
 		}
 		if err := s.app.Config.Save(s.app.ConfigPath); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		s.appendAudit(UserFromContext(r.Context()), "assistants.delete", name, nil)
+		s.appendAudit(UserFromContext(r.Context()), "agents.delete", name, nil)
 		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
+	s.handleAgents(w, r)
 }
 
 func (s *Server) handleRuntimes(w http.ResponseWriter, r *http.Request) {
@@ -1785,6 +2047,8 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			"events.read":     true,
 			"tools.read":      true,
 			"plugins.read":    true,
+			"apps.read":       true,
+			"apps.write":      true,
 			"channels.read":   true,
 			"routing.read":    true,
 			"runtimes.read":   true,
@@ -1952,8 +2216,8 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 func builtinRoleTemplates() []config.SecurityRole {
 	return []config.SecurityRole{
 		{Name: "admin", Description: "Full platform access", Permissions: []string{"*"}},
-		{Name: "operator", Description: "Operate sessions, runtimes, and workspace resources", Permissions: []string{"status.read", "chat.send", "tasks.read", "tasks.write", "approvals.read", "approvals.write", "sessions.read", "sessions.write", "memory.read", "runtimes.read", "runtimes.write", "events.read", "tools.read", "resources.read", "resources.write"}},
-		{Name: "viewer", Description: "Read-only governance and monitoring", Permissions: []string{"status.read", "sessions.read", "events.read", "audit.read", "plugins.read", "channels.read", "routing.read", "runtimes.read", "resources.read"}},
+		{Name: "operator", Description: "Operate sessions, runtimes, and workspace resources", Permissions: []string{"status.read", "chat.send", "tasks.read", "tasks.write", "approvals.read", "approvals.write", "sessions.read", "sessions.write", "memory.read", "runtimes.read", "runtimes.write", "events.read", "tools.read", "resources.read", "resources.write", "apps.read", "apps.write"}},
+		{Name: "viewer", Description: "Read-only governance and monitoring", Permissions: []string{"status.read", "sessions.read", "events.read", "audit.read", "plugins.read", "apps.read", "channels.read", "routing.read", "runtimes.read", "resources.read"}},
 	}
 }
 
@@ -2352,6 +2616,11 @@ func (s *Server) handleSignedIngress(w http.ResponseWriter, r *http.Request) {
 	}
 	response, session, err := s.runSessionMessage(r.Context(), req.SessionID, req.Title, req.Message)
 	if err != nil {
+		if errors.Is(err, ErrTaskWaitingApproval) {
+			s.appendAudit(UserFromContext(r.Context()), "ingress.web.accepted", req.SessionID, map[string]any{"status": "waiting_approval"})
+			writeJSON(w, http.StatusAccepted, s.sessionApprovalResponse(req.SessionID))
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -2536,6 +2805,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var req struct {
 			Title        string   `json:"title"`
+			Agent        string   `json:"agent"`
 			Assistant    string   `json:"assistant"`
 			Participants []string `json:"participants"`
 			SessionMode  string   `json:"session_mode"`
@@ -2548,19 +2818,28 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 			return
 		}
-		agentName, err := s.resolveAssistantName(req.Assistant)
+		agentName, err := s.resolveAgentName(requestedAgentName(req.Agent, req.Assistant))
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		participants, err := s.resolveAssistantNames(req.Participants)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
+		resolvedParticipants := make([]string, 0, len(req.Participants))
+		seenParticipants := map[string]bool{}
+		for _, name := range req.Participants {
+			resolvedName, err := s.resolveAgentName(name)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			if resolvedName == "" || seenParticipants[resolvedName] {
+				continue
+			}
+			seenParticipants[resolvedName] = true
+			resolvedParticipants = append(resolvedParticipants, resolvedName)
 		}
-		participants = normalizeParticipants(agentName, participants)
-		if req.IsGroup && len(participants) < 2 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group channels require at least two agents"})
+		resolvedParticipants = normalizeParticipants(agentName, resolvedParticipants)
+		if req.IsGroup || strings.TrimSpace(req.GroupKey) != "" || strings.Contains(strings.ToLower(strings.TrimSpace(req.SessionMode)), "group") || len(resolvedParticipants) > 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group chat and multi-agent sessions have been removed; create a single-agent session instead"})
 			return
 		}
 		orgID, projectID, workspaceID := s.resolveResourceSelection(r)
@@ -2570,17 +2849,14 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		session, err := s.sessions.CreateWithOptions(SessionCreateOptions{
-			Title:        req.Title,
-			AgentName:    agentName,
-			Participants: participants,
-			Org:          org.ID,
-			Project:      project.ID,
-			Workspace:    workspace.ID,
-			SessionMode:  req.SessionMode,
-			QueueMode:    req.QueueMode,
-			ReplyBack:    req.ReplyBack,
-			IsGroup:      req.IsGroup,
-			GroupKey:     req.GroupKey,
+			Title:       req.Title,
+			AgentName:   agentName,
+			Org:         org.ID,
+			Project:     project.ID,
+			Workspace:   workspace.ID,
+			SessionMode: normalizeSingleAgentSessionMode(req.SessionMode, "main"),
+			QueueMode:   req.QueueMode,
+			ReplyBack:   req.ReplyBack,
 		})
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -2591,6 +2867,18 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func normalizeSingleAgentSessionMode(mode string, fallback string) string {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" {
+		return fallback
+	}
+	switch mode {
+	case "group", "group-shared", "channel-group":
+		return fallback
+	}
+	return mode
 }
 
 func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
@@ -2858,8 +3146,12 @@ func (s *Server) handleV2Tasks(w http.ResponseWriter, r *http.Request) {
 		if mode == "" {
 			mode = taskModule.ModeSingle
 		}
-		if mode != taskModule.ModeSingle && mode != taskModule.ModeMulti {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be 'single' or 'multi'"})
+		if mode == taskModule.ModeMulti {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "multi-agent tasks have been removed; use single mode"})
+			return
+		}
+		if mode != taskModule.ModeSingle {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be 'single'"})
 			return
 		}
 
@@ -3097,4 +3389,194 @@ func (s *Server) handleV2StoreByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+func RunWithWorkers(ctx context.Context, app *runtime.App) error {
+	workerCount := app.Config.Gateway.WorkerCount
+	if workerCount <= 0 {
+		workerCount = 4
+	}
+	if workerCount > 64 {
+		workerCount = 64
+	}
+
+	if os.Getenv("ANYCLAW_WORKER_MODE") == "1" {
+		return runWorker(ctx, app)
+	}
+
+	return runMaster(ctx, app, workerCount)
+}
+
+func runMaster(ctx context.Context, app *runtime.App, workerCount int) error {
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable path: %w", err)
+	}
+
+	basePort := app.Config.Gateway.Port
+	workerPIDs := make([]int, workerCount)
+	workerPorts := make([]int, workerCount)
+
+	for i := 0; i < workerCount; i++ {
+		workerPort := basePort + i
+		workerPorts[i] = workerPort
+		cmd := exec.Command(execPath, "gateway", "run",
+			"--config", app.ConfigPath,
+			"--host", app.Config.Gateway.Host,
+			"--port", strconv.Itoa(workerPort),
+			"--workers", "1")
+		cmd.Env = append(os.Environ(),
+			"ANYCLAW_WORKER_MODE=1",
+			fmt.Sprintf("ANYCLAW_WORKER_ID=%d", i),
+		)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Start(); err != nil {
+			for _, pid := range workerPIDs[:i] {
+				killProcess(pid)
+			}
+			return fmt.Errorf("start worker %d: %w", i, err)
+		}
+		workerPIDs[i] = cmd.Process.Pid
+	}
+
+	printWorkerStatus(workerPIDs, workerPorts, basePort)
+
+	<-ctx.Done()
+
+	for _, pid := range workerPIDs {
+		killProcess(pid)
+	}
+
+	return nil
+}
+
+func killProcess(pid int) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return proc.Kill()
+}
+
+func runWorker(ctx context.Context, app *runtime.App) error {
+	workerID := os.Getenv("ANYCLAW_WORKER_ID")
+	addr := runtime.GatewayAddress(app.Config)
+
+	server := New(app)
+	mux := http.NewServeMux()
+
+	server.initChannels()
+	if err := server.ensureDefaultWorkspace(); err != nil {
+		return err
+	}
+	server.startWorkers(ctx)
+
+	mux.HandleFunc("/healthz", server.wrap("/healthz", server.handleHealth))
+	mux.HandleFunc("/status", server.wrap("/status", requirePermission("status.read", server.handleStatus)))
+	mux.HandleFunc("/chat", server.wrap("/chat", requirePermission("chat.send", requireHierarchyAccess(func(r *http.Request) (string, string, string) {
+		return server.resolveHierarchyFromQuery(r)
+	}, server.handleChat))))
+	mux.HandleFunc("/channels", server.wrap("/channels", requirePermission("channels.read", server.handleChannels)))
+	mux.HandleFunc("/plugins", server.wrap("/plugins", requirePermission("plugins.read", server.handlePlugins)))
+	mux.HandleFunc("/apps", server.wrap("/apps", requirePermission("apps.read", server.handleApps)))
+	mux.HandleFunc("/app-workflows/resolve", server.wrap("/app-workflows/resolve", requirePermission("apps.read", server.handleAppWorkflowResolve)))
+	mux.HandleFunc("/app-bindings", server.wrap("/app-bindings", server.handleAppBindings))
+	mux.HandleFunc("/app-pairings", server.wrap("/app-pairings", server.handleAppPairings))
+	mux.HandleFunc("/routing", server.wrap("/routing", requirePermission("routing.read", server.handleRouting)))
+	mux.HandleFunc("/routing/analysis", server.wrap("/routing/analysis", requirePermission("routing.read", server.handleRoutingAnalysis)))
+	mux.HandleFunc("/agents", server.wrap("/agents", server.handleAgents))
+	mux.HandleFunc("/agents/personality-templates", server.wrap("/agents/personality-templates", requirePermission("config.read", server.handlePersonalityTemplates)))
+	mux.HandleFunc("/agents/skill-catalog", server.wrap("/agents/skill-catalog", requirePermission("skills.read", server.handleAssistantSkillCatalog)))
+	mux.HandleFunc("/assistants", server.wrap("/assistants", server.handleAssistants))
+	mux.HandleFunc("/assistants/personality-templates", server.wrap("/assistants/personality-templates", requirePermission("config.read", server.handlePersonalityTemplates)))
+	mux.HandleFunc("/assistants/skill-catalog", server.wrap("/assistants/skill-catalog", requirePermission("skills.read", server.handleAssistantSkillCatalog)))
+	mux.HandleFunc("/providers", server.wrap("/providers", server.handleProviders))
+	mux.HandleFunc("/providers/test", server.wrap("/providers/test", server.handleProviderTest))
+	mux.HandleFunc("/providers/default", server.wrap("/providers/default", server.handleDefaultProvider))
+	mux.HandleFunc("/agent-bindings", server.wrap("/agent-bindings", server.handleAgentBindings))
+	mux.HandleFunc("/runtimes", server.wrap("/runtimes", requirePermission("runtimes.read", requireHierarchyAccess(server.resolveHierarchyFromQuery, server.handleRuntimes))))
+	mux.HandleFunc("/runtimes/refresh", server.wrap("/runtimes/refresh", requirePermission("runtimes.write", server.handleRefreshRuntime)))
+	mux.HandleFunc("/runtimes/refresh-batch", server.wrap("/runtimes/refresh-batch", requirePermission("runtimes.write", server.handleRefreshRuntimesBatch)))
+	mux.HandleFunc("/runtimes/metrics", server.wrap("/runtimes/metrics", requirePermission("runtimes.read", server.handleRuntimeMetrics)))
+	mux.HandleFunc("/resources", server.wrap("/resources", server.handleResources))
+	mux.HandleFunc("/auth/users", server.wrap("/auth/users", server.handleUsers))
+	mux.HandleFunc("/auth/roles", server.wrap("/auth/roles", server.handleRoles))
+	mux.HandleFunc("/auth/roles/impact", server.wrap("/auth/roles/impact", requirePermission("auth.users.read", server.handleRoleImpact)))
+	mux.HandleFunc("/audit", server.wrap("/audit", requirePermission("audit.read", server.handleAudit)))
+	mux.HandleFunc("/jobs", server.wrap("/jobs", requirePermission("audit.read", server.handleJobs)))
+	mux.HandleFunc("/jobs/", server.wrap("/jobs/", requirePermission("audit.read", server.handleJobByID)))
+	mux.HandleFunc("/jobs/retry", server.wrap("/jobs/retry", requirePermission("audit.read", server.handleRetryJob)))
+	mux.HandleFunc("/jobs/cancel", server.wrap("/jobs/cancel", requirePermission("audit.read", server.handleCancelJob)))
+	mux.HandleFunc("/config", server.wrap("/config", server.handleConfigAPI))
+	mux.HandleFunc("/memory", server.wrap("/memory", requirePermission("memory.read", requireHierarchyAccess(server.resolveHierarchyFromQuery, server.handleMemory))))
+	mux.HandleFunc("/events", server.wrap("/events", requirePermission("events.read", server.handleEvents)))
+	mux.HandleFunc("/events/stream", server.wrap("/events/stream", requirePermission("events.read", server.handleEventStream)))
+	mux.HandleFunc("/ws", server.wrap("/ws", server.handleOpenClawWS))
+	mux.HandleFunc("/control-plane", server.wrap("/control-plane", requirePermission("status.read", server.handleControlPlane)))
+	mux.HandleFunc("/sessions", server.wrap("/sessions", requirePermission("sessions.read", requireHierarchyAccess(server.resolveHierarchyFromQuery, server.handleSessions))))
+	mux.HandleFunc("/sessions/", server.wrap("/sessions/", requirePermission("sessions.read", requireHierarchyAccess(server.resolveHierarchyFromSessionPath, server.handleSessionByID))))
+	mux.HandleFunc("/sessions/move", server.wrap("/sessions/move", requirePermission("sessions.write", server.handleMoveSession)))
+	mux.HandleFunc("/sessions/move-batch", server.wrap("/sessions/move-batch", requirePermission("sessions.write", server.handleMoveSessionsBatch)))
+	mux.HandleFunc("/tasks", server.wrap("/tasks", requirePermission("tasks.write", requireHierarchyAccess(server.resolveHierarchyFromQuery, server.handleTasks))))
+	mux.HandleFunc("/tasks/", server.wrap("/tasks/", server.handleTaskByID))
+	mux.HandleFunc("/v2/tasks", server.wrap("/v2/tasks", requirePermission("tasks.write", server.handleV2Tasks)))
+	mux.HandleFunc("/v2/tasks/", server.wrap("/v2/tasks/", requirePermission("tasks.read", server.handleV2TaskByID)))
+	mux.HandleFunc("/v2/agents", server.wrap("/v2/agents", requirePermission("tasks.read", server.handleV2Agents)))
+	mux.HandleFunc("/v2/chat", server.wrap("/v2/chat", requirePermission("tasks.write", server.handleV2Chat)))
+	mux.HandleFunc("/v2/chat/sessions", server.wrap("/v2/chat/sessions", requirePermission("tasks.read", server.handleV2ChatSessions)))
+	mux.HandleFunc("/v2/chat/sessions/", server.wrap("/v2/chat/sessions/", requirePermission("tasks.read", server.handleV2ChatSessionByID)))
+	mux.HandleFunc("/v2/store", server.wrap("/v2/store", requirePermission("tasks.read", server.handleV2Store)))
+	mux.HandleFunc("/v2/store/", server.wrap("/v2/store/", requirePermission("tasks.read", server.handleV2StoreByID)))
+	mux.HandleFunc("/approvals", server.wrap("/approvals", requirePermission("approvals.read", server.handleApprovals)))
+	mux.HandleFunc("/approvals/", server.wrap("/approvals/", requirePermission("approvals.write", server.handleApprovalByID)))
+	mux.HandleFunc("/skills", server.wrap("/skills", requirePermission("skills.read", server.handleSkills)))
+	mux.HandleFunc("/tools/activity", server.wrap("/tools/activity", requirePermission("tools.read", server.handleToolActivity)))
+	mux.HandleFunc("/tools", server.wrap("/tools", requirePermission("tools.read", server.handleTools)))
+	mux.HandleFunc("/webchat", server.wrap("/webchat", server.handleWebChat))
+	mux.HandleFunc("/dashboard", server.wrap("/dashboard", server.handleDashboard))
+	mux.HandleFunc("/dashboard/", server.wrap("/dashboard/", server.handleDashboard))
+	mux.HandleFunc("/api/webchat/status", server.wrap("/api/webchat/status", server.handleWebChatStatus))
+	mux.HandleFunc("/channels/whatsapp/webhook", server.rateLimit.Wrap(server.handleWhatsAppWebhook))
+	mux.HandleFunc("/channels/discord/interactions", server.rateLimit.Wrap(server.handleDiscordInteractions))
+	mux.HandleFunc("/ingress/web", server.rateLimit.Wrap(server.handleSignedIngress))
+	mux.HandleFunc("/ingress/plugins/", server.rateLimit.Wrap(server.handlePluginIngress))
+	mux.HandleFunc("/", server.handleRootAPI)
+
+	server.startedAt = time.Now().UTC()
+	server.httpServer = &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	errCh := make(chan error, 1)
+	go server.runChannels(ctx)
+	go func() {
+		if err := server.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return server.httpServer.Shutdown(shutdownCtx)
+	case err := <-errCh:
+		return fmt.Errorf("worker %s server failed: %w", workerID, err)
+	}
+}
+
+func printWorkerStatus(pids []int, ports []int, basePort int) {
+	if len(pids) == 0 {
+		return
+	}
+	fmt.Printf("Gateway workers started:\n")
+	for i, pid := range pids {
+		addr := fmt.Sprintf("127.0.0.1:%d", ports[i])
+		fmt.Printf("  Worker %d: PID=%d, addr=%s\n", i, pid, addr)
+	}
+	fmt.Printf("Main Gateway: 127.0.0.1:%d (load balancer)\n", basePort)
 }

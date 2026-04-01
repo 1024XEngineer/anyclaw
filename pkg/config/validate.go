@@ -34,6 +34,11 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("providers[%d].provider is required", i))
 		}
 	}
+	if ref := strings.TrimSpace(c.LLM.DefaultProviderRef); ref != "" {
+		if _, ok := c.FindProviderProfile(ref); !ok {
+			errs = append(errs, fmt.Sprintf("llm.default_provider_ref must reference an existing provider (got %q)", ref))
+		}
+	}
 
 	if c.Gateway.Port < 0 || c.Gateway.Port > 65535 {
 		errs = append(errs, fmt.Sprintf("gateway.port must be between 0 and 65535 (got %d)", c.Gateway.Port))

@@ -42,6 +42,83 @@ func (l *Logger) LogTool(toolName string, input map[string]any, output string, e
 	_ = l.Append(event)
 }
 
+func (l *Logger) LogApprovalRequest(approval *Approval) error {
+	return l.logApproval("approval_request", approval)
+}
+
+func (l *Logger) LogApprovalDecision(approval *Approval) error {
+	return l.logApproval("approval_decision", approval)
+}
+
+func (l *Logger) LogApprovalCancelled(approvalID string) error {
+	return l.logSimple("approval_cancelled", map[string]any{"approval_id": approvalID})
+}
+
+func (l *Logger) LogApprovalExpired(approvalID string) error {
+	return l.logSimple("approval_expired", map[string]any{"approval_id": approvalID})
+}
+
+func (l *Logger) LogBatchApproval(batchID string, count int) error {
+	return l.logSimple("batch_approval", map[string]any{"batch_id": batchID, "count": count})
+}
+
+func (l *Logger) LogSecurityAssessment(result SecurityAssessmentResult) error {
+	return l.logSimple("security_assessment", map[string]any{
+		"tool_name":      result.ToolName,
+		"risk_level":     result.RiskLevel,
+		"recommendation": result.Recommendation,
+	})
+}
+
+func (l *Logger) LogToolCheck(toolName string, result ToolCheckResult) error {
+	return l.logSimple("tool_check", map[string]any{
+		"tool_name": toolName,
+		"approved":  result.Approved,
+		"reason":    result.Reason,
+	})
+}
+
+func (l *Logger) LogPathCheck(path string, result PathCheckResult) error {
+	return l.logSimple("path_check", map[string]any{
+		"path":      path,
+		"protected": result.Protected,
+		"reason":    result.Reason,
+	})
+}
+
+func (l *Logger) logApproval(action string, approval *Approval) error {
+	event := Event{
+		Time:      time.Now().Format(time.RFC3339),
+		AgentName: l.agentName,
+		Action:    action,
+		Input: map[string]any{
+			"id":         approval.ID,
+			"task_id":    approval.TaskID,
+			"session_id": approval.SessionID,
+			"user_id":    approval.UserID,
+			"scope":      approval.Scope,
+			"category":   approval.Category,
+			"action":     approval.Action,
+			"tool_name":  approval.ToolName,
+			"plugin":     approval.Plugin,
+			"workflow":   approval.Workflow,
+			"status":     string(approval.Status),
+			"risk_level": approval.Request.RiskLevel,
+		},
+	}
+	return l.Append(event)
+}
+
+func (l *Logger) logSimple(action string, data map[string]any) error {
+	event := Event{
+		Time:      time.Now().Format(time.RFC3339),
+		AgentName: l.agentName,
+		Action:    action,
+		Input:     data,
+	}
+	return l.Append(event)
+}
+
 func (l *Logger) Append(event Event) error {
 	if l == nil || l.path == "" {
 		return nil

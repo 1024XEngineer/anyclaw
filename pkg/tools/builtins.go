@@ -43,6 +43,22 @@ func ReadFileTool(ctx context.Context, input map[string]any) (string, error) {
 	return ReadFileToolWithCwd(ctx, input, "")
 }
 
+func ReadFileToolWithPolicy(ctx context.Context, input map[string]any, cwd string, opts BuiltinOptions) (string, error) {
+	path, ok := input["path"].(string)
+	if !ok {
+		return "", fmt.Errorf("path is required")
+	}
+	resolved := resolvePath(path, cwd)
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckReadPath(resolved); err != nil {
+			return "", err
+		}
+	} else if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return "", err
+	}
+	return ReadFileToolWithCwd(ctx, input, cwd)
+}
+
 func ReadFileToolWithCwd(ctx context.Context, input map[string]any, cwd string) (string, error) {
 	path, ok := input["path"].(string)
 	if !ok {
@@ -104,14 +120,36 @@ func WriteFileToolWithPolicy(ctx context.Context, input map[string]any, cwd stri
 		return "", fmt.Errorf("path is required")
 	}
 	resolved := resolvePath(path, cwd)
-	if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
-		return "", err
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckWritePath(resolved); err != nil {
+			return "", err
+		}
+	} else {
+		if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+			return "", err
+		}
 	}
 	return WriteFileToolWithCwd(ctx, input, cwd, opts.PermissionLevel)
 }
 
 func ListDirectoryTool(ctx context.Context, input map[string]any) (string, error) {
 	return ListDirectoryToolWithCwd(ctx, input, "")
+}
+
+func ListDirectoryToolWithPolicy(ctx context.Context, input map[string]any, cwd string, opts BuiltinOptions) (string, error) {
+	path, ok := input["path"].(string)
+	if !ok {
+		path = cwd
+	}
+	resolved := resolvePath(path, cwd)
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckReadPath(resolved); err != nil {
+			return "", err
+		}
+	} else if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return "", err
+	}
+	return ListDirectoryToolWithCwd(ctx, input, cwd)
 }
 
 func ListDirectoryToolWithCwd(ctx context.Context, input map[string]any, cwd string) (string, error) {
@@ -154,6 +192,22 @@ func ListDirectoryToolWithCwd(ctx context.Context, input map[string]any, cwd str
 
 func SearchFilesTool(ctx context.Context, input map[string]any) (string, error) {
 	return SearchFilesToolWithCwd(ctx, input, "")
+}
+
+func SearchFilesToolWithPolicy(ctx context.Context, input map[string]any, cwd string, opts BuiltinOptions) (string, error) {
+	root, ok := input["path"].(string)
+	if !ok {
+		root = cwd
+	}
+	resolved := resolvePath(root, cwd)
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckReadPath(resolved); err != nil {
+			return "", err
+		}
+	} else if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return "", err
+	}
+	return SearchFilesToolWithCwd(ctx, input, cwd)
 }
 
 func SearchFilesToolWithCwd(ctx context.Context, input map[string]any, cwd string) (string, error) {
@@ -218,6 +272,11 @@ func RunCommandToolWithPolicy(ctx context.Context, input map[string]any, opts Bu
 	if opts.PermissionLevel == "read-only" {
 		return "", fmt.Errorf("permission denied: current agent is read-only")
 	}
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckCommandCwd(firstNonEmptyCommandCwd(cwd, opts.WorkingDir)); err != nil {
+			return "", err
+		}
+	}
 	if err := reviewCommandExecution(cmdStr, cwd, opts); err != nil {
 		return "", err
 	}
@@ -261,6 +320,15 @@ func RunCommandToolWithPolicy(ctx context.Context, input map[string]any, opts Bu
 	}
 
 	return string(output), nil
+}
+
+func firstNonEmptyCommandCwd(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func shellCommand(ctx context.Context, command string) *exec.Cmd {

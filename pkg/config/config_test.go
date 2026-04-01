@@ -190,6 +190,77 @@ func TestLoadInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestLoadUTF8BOMConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bom.json")
+
+	cfg := DefaultConfig()
+	cfg.Agent.Name = "个人助手"
+	data, _ := json.MarshalIndent(cfg, "", "  ")
+	data = append([]byte{0xEF, 0xBB, 0xBF}, data...)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected BOM config to load: %v", err)
+	}
+	if loaded.Agent.Name != "个人助手" {
+		t.Fatalf("expected agent name to survive BOM load, got %q", loaded.Agent.Name)
+	}
+}
+
+func TestLoadLegacyAliasConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.json")
+	data := []byte(`{
+  "provider": "compatible",
+  "model": "demo-model",
+  "apiKey": "legacy-key",
+  "baseURL": "https://example.invalid/v1",
+  "workingDir": "workspace/demo",
+  "skillsDir": "skills/custom",
+  "pluginsDir": "plugins/custom"
+}`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected legacy config to load: %v", err)
+	}
+	if loaded.LLM.Provider != "compatible" {
+		t.Fatalf("expected provider compatible, got %q", loaded.LLM.Provider)
+	}
+	if loaded.LLM.APIKey != "legacy-key" {
+		t.Fatalf("expected API key to migrate, got %q", loaded.LLM.APIKey)
+	}
+	if loaded.LLM.BaseURL != "https://example.invalid/v1" {
+		t.Fatalf("expected base URL to migrate, got %q", loaded.LLM.BaseURL)
+	}
+	if loaded.Agent.WorkingDir != "workspace/demo" {
+		t.Fatalf("expected working dir to migrate, got %q", loaded.Agent.WorkingDir)
+	}
+	if loaded.Skills.Dir != "skills/custom" {
+		t.Fatalf("expected skills dir to migrate, got %q", loaded.Skills.Dir)
+	}
+	if loaded.Plugins.Dir != "plugins/custom" {
+		t.Fatalf("expected plugins dir to migrate, got %q", loaded.Plugins.Dir)
+	}
+}
+
+func TestResolvePathUsesConfigDirectory(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "configs", "anyclaw.json")
+	resolved := ResolvePath(configPath, "workflows/demo")
+	expected := filepath.Join(dir, "configs", "workflows", "demo")
+	if resolved != expected {
+		t.Fatalf("expected %q, got %q", expected, resolved)
+	}
+}
+
 func TestLoadInvalidConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "invalid.json")
@@ -233,6 +304,14 @@ func TestSaveAndReload(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.LLM.Provider = "anthropic"
 	cfg.Gateway.Port = 9999
+	cfg.Agent.Profiles = []AgentProfile{
+		{
+			Name:          "hana",
+			Description:   "UI copilot",
+			AvatarPreset:  "hana",
+			AvatarDataURL: "data:image/webp;base64,ZmFrZS1hdmF0YXI=",
+		},
+	}
 
 	if err := cfg.Save(path); err != nil {
 		t.Fatalf("save should succeed: %v", err)
@@ -247,6 +326,40 @@ func TestSaveAndReload(t *testing.T) {
 	}
 	if loaded.Gateway.Port != 9999 {
 		t.Errorf("expected port 9999, got %d", loaded.Gateway.Port)
+	}
+	if len(loaded.Agent.Profiles) != 1 {
+		t.Fatalf("expected 1 agent profile, got %d", len(loaded.Agent.Profiles))
+	}
+	if loaded.Agent.Profiles[0].AvatarPreset != "hana" {
+		t.Errorf("expected avatar preset hana, got %q", loaded.Agent.Profiles[0].AvatarPreset)
+	}
+	if loaded.Agent.Profiles[0].AvatarDataURL != "data:image/webp;base64,ZmFrZS1hdmF0YXI=" {
+		t.Errorf("expected avatar data url to round-trip, got %q", loaded.Agent.Profiles[0].AvatarDataURL)
+	}
+}
+
+func TestValidateDefaultProviderRef(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Providers = []ProviderProfile{
+		{
+			ID:       "qwen",
+			Name:     "Qwen",
+			Provider: "qwen",
+			Enabled:  BoolPtr(true),
+		},
+	}
+	cfg.LLM.DefaultProviderRef = "qwen"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected default provider ref to validate, got %v", err)
+	}
+
+	cfg.LLM.DefaultProviderRef = "missing"
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for missing default provider ref")
+	}
+	if !strings.Contains(err.Error(), "llm.default_provider_ref") {
+		t.Fatalf("error should mention llm.default_provider_ref: %v", err)
 	}
 }
 
@@ -361,5 +474,60 @@ func TestGatewayBindValidation(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "gateway.bind") {
 		t.Fatalf("error should mention gateway.bind: %v", err)
+	}
+}
+
+func TestResolveMainAgentProfileFallsBackToAgentName(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agent.Name = "Go Expert"
+	cfg.Agent.ActiveProfile = ""
+	cfg.Agent.Profiles = []AgentProfile{
+		{
+			Name:            "Go Expert",
+			Description:     "Go specialist",
+			PermissionLevel: "limited",
+			Enabled:         BoolPtr(true),
+		},
+	}
+
+	profile, ok := cfg.ResolveMainAgentProfile()
+	if !ok {
+		t.Fatal("expected main agent profile to resolve from agent.name")
+	}
+	if profile.Name != "Go Expert" {
+		t.Fatalf("expected Go Expert, got %q", profile.Name)
+	}
+	if got := cfg.ResolveMainAgentName(); got != "Go Expert" {
+		t.Fatalf("expected resolved main agent name Go Expert, got %q", got)
+	}
+	if !cfg.IsCurrentAgentProfile("Go Expert") {
+		t.Fatal("expected Go Expert to be marked as the current agent profile")
+	}
+}
+
+func TestResolveAgentProfileSupportsMainAgentAlias(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agent.Name = "Python Expert"
+	cfg.Agent.Profiles = []AgentProfile{
+		{
+			Name:            "Python Expert",
+			Description:     "Python specialist",
+			PermissionLevel: "limited",
+			Enabled:         BoolPtr(true),
+		},
+	}
+
+	profile, ok := cfg.ResolveAgentProfile("mainagent")
+	if !ok {
+		t.Fatal("expected mainagent alias to resolve")
+	}
+	if profile.Name != "Python Expert" {
+		t.Fatalf("expected Python Expert, got %q", profile.Name)
+	}
+	if !cfg.ApplyAgentProfile("main-agent") {
+		t.Fatal("expected ApplyAgentProfile to accept main-agent alias")
+	}
+	if cfg.Agent.ActiveProfile != "Python Expert" {
+		t.Fatalf("expected active profile Python Expert, got %q", cfg.Agent.ActiveProfile)
 	}
 }

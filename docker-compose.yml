@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  anyclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: anyclaw-gateway
+    restart: unless-stopped
+    ports:
+      - "18789:18789"
+    volumes:
+      - anyclaw-data:/root/.anyclaw
+      - ./workspace:/workspace
+    environment:
+      - ANYCLAW_LLM_PROVIDER=${ANYCLAW_LLM_PROVIDER:-openai}
+      - ANYCLAW_LLM_MODEL=${ANYCLAW_LLM_MODEL:-gpt-4o}
+      - ANYCLAW_LLM_API_KEY=${ANYCLAW_LLM_API_KEY}
+      - ANYCLAW_GATEWAY_PORT=18789
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18789/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    container_name: anyclaw-sandbox
+    restart: "no"
+    volumes:
+      - sandbox-workspace:/home/sandbox/workspace
+    profiles:
+      - sandbox
+
+volumes:
+  anyclaw-data:
+  sandbox-workspace:

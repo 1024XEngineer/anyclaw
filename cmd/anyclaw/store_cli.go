@@ -1,10 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/agentstore"
+	"github.com/anyclaw/anyclaw/pkg/plugin"
 	"github.com/anyclaw/anyclaw/pkg/ui"
 )
 
@@ -25,6 +30,16 @@ func runStoreCommand(args []string) error {
 		return runStoreInstall(args[1:])
 	case "uninstall":
 		return runStoreUninstall(args[1:])
+	case "sign":
+		return runStoreSign(args[1:])
+	case "verify":
+		return runStoreVerify(args[1:])
+	case "trust":
+		return runStoreTrust(args[1:])
+	case "sources":
+		return runStoreSources(args[1:])
+	case "update":
+		return runStoreUpdate(args[1:])
 	default:
 		printStoreUsage()
 		return fmt.Errorf("unknown store command: %s", args[0])
@@ -40,6 +55,11 @@ Usage:
   anyclaw store info <id>
   anyclaw store install <id>
   anyclaw store uninstall <id>
+  anyclaw store sign <plugin-dir> <key-file>
+  anyclaw store verify <plugin-dir> <public-key-file>
+  anyclaw store trust <key-id> <key-file> [name]
+  anyclaw store sources [add <name> <url>]
+  anyclaw store update [plugin-id]
 `)
 }
 
@@ -207,5 +227,157 @@ func runStoreUninstall(args []string) error {
 		return err
 	}
 	printSuccess("Uninstalled: %s", args[0])
+	return nil
+}
+
+func runStoreSign(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: anyclaw store sign <plugin-dir> <key-file>")
+	}
+
+	pluginDir := args[0]
+	keyFile := args[1]
+
+	keyData, err := os.ReadFile(keyFile)
+	if err != nil {
+		return fmt.Errorf("failed to read key file: %w", err)
+	}
+
+	var keyPair plugin.KeyPair
+	if err := json.Unmarshal(keyData, &keyPair); err != nil {
+		return fmt.Errorf("failed to parse key file: %w", err)
+	}
+
+	sig, err := plugin.SignPluginDir(pluginDir, &keyPair)
+	if err != nil {
+		return fmt.Errorf("sign failed: %w", err)
+	}
+
+	if err := plugin.SaveSignature(pluginDir, sig); err != nil {
+		return fmt.Errorf("failed to save signature: %w", err)
+	}
+
+	printSuccess("Plugin signed successfully!")
+	return nil
+}
+
+func runStoreVerify(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: anyclaw store verify <plugin-dir> <public-key-file>")
+	}
+
+	pluginDir := args[0]
+	keyFile := args[1]
+
+	sig, err := plugin.LoadSignature(pluginDir)
+	if err != nil {
+		return fmt.Errorf("failed to load signature: %w", err)
+	}
+
+	keyData, err := os.ReadFile(keyFile)
+	if err != nil {
+		return fmt.Errorf("failed to read key file: %w", err)
+	}
+
+	pubKey := string(keyData)
+	verified, err := plugin.VerifyPluginDir(pluginDir, sig, pubKey)
+	if err != nil {
+		return fmt.Errorf("verification failed: %w", err)
+	}
+
+	if verified {
+		fmt.Println("Plugin signature is VALID!")
+		fmt.Printf("  Signer: %s\n", sig.Signer)
+		fmt.Printf("  Key ID: %s\n", sig.KeyID)
+		fmt.Printf("  Signed: %s\n", sig.Timestamp)
+	} else {
+		fmt.Println("Plugin signature is INVALID!")
+	}
+
+	return nil
+}
+
+func runStoreTrust(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: anyclaw store trust <key-id> <key-file> [name]")
+	}
+
+	keyID := args[0]
+
+	trustStore := plugin.NewTrustStore()
+
+	trustPath := filepath.Join(".anyclaw", "trust.json")
+	if data, err := os.ReadFile(trustPath); err == nil {
+		json.Unmarshal(data, &trustStore)
+	}
+
+	name := keyID
+	if len(args) > 2 {
+		name = args[2]
+	}
+	trustStore.AddSigner(keyID, &plugin.SignerInfo{
+		KeyID:      keyID,
+		Name:       name,
+		TrustLevel: plugin.TrustLevelTrusted,
+		AddedAt:    time.Now(),
+	})
+
+	if err := trustStore.Save(trustPath); err != nil {
+		return fmt.Errorf("failed to save trust store: %w", err)
+	}
+
+	printSuccess("Added %s to trusted signers!", keyID)
+	return nil
+}
+
+func runStoreSources(args []string) error {
+	sourcesPath := filepath.Join(".anyclaw", "sources.json")
+
+	if len(args) > 0 && args[0] == "add" {
+		if len(args) < 3 {
+			return fmt.Errorf("usage: anyclaw store sources add <name> <url>")
+		}
+		name := args[1]
+		url := args[2]
+
+		var sources []*plugin.PluginSource
+		if data, err := os.ReadFile(sourcesPath); err == nil {
+			json.Unmarshal(data, &sources)
+		}
+
+		sources = append(sources, &plugin.PluginSource{
+			Name: name,
+			URL:  url,
+			Type: "http",
+		})
+
+		data, _ := json.MarshalIndent(sources, "", "  ")
+		os.WriteFile(sourcesPath, data, 0644)
+
+		printSuccess("Added source: %s -> %s", name, url)
+		return nil
+	}
+
+	var sources []*plugin.PluginSource
+	if data, err := os.ReadFile(sourcesPath); err == nil {
+		json.Unmarshal(data, &sources)
+	}
+
+	if len(sources) == 0 {
+		fmt.Println("No sources configured.")
+		return nil
+	}
+
+	fmt.Printf("Configured sources (%d):\n\n", len(sources))
+	for _, s := range sources {
+		fmt.Printf("  %s: %s (%s)\n", s.Name, s.URL, s.Type)
+	}
+
+	return nil
+}
+
+func runStoreUpdate(args []string) error {
+	fmt.Println("Update functionality requires agentstore v2")
+	fmt.Println("Use 'anyclaw store install <plugin-id>' to update a plugin")
 	return nil
 }

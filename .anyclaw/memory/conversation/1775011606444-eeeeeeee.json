@@ -1,0 +1,7 @@
+{
+  "id": "1775011606444-eeeeeeee",
+  "timestamp": "2026-04-01T10:46:46.4446834+08:00",
+  "type": "conversation",
+  "role": "user",
+  "content": "请使用read_file工具读取D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\openclaw\\skills\\github\\SKILL.md文件的内容"
+}

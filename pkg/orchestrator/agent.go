@@ -206,7 +206,7 @@ func isToolAllowedForPermission(toolName string, permLevel string) bool {
 			"browser_click", "browser_wait", "browser_scroll",
 			"browser_tab_list", "browser_tab_new", "browser_tab_switch", "browser_tab_close",
 			"browser_close", "browser_eval", "browser_select", "browser_press", "browser_type",
-			"desktop_screenshot":
+			"desktop_screenshot", "desktop_screenshot_window", "desktop_list_windows", "desktop_wait_window", "desktop_inspect_ui", "desktop_resolve_target", "desktop_match_image", "desktop_wait_image", "desktop_ocr", "desktop_verify_text", "desktop_find_text", "desktop_wait_text", "desktop_clipboard_get":
 			return true
 		default:
 			return !strings.HasPrefix(toolName, "write_") &&

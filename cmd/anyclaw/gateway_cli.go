@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -23,7 +21,7 @@ func runGatewayCommand(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	switch args[0] {
+	switch normalizeGatewayCommand(args[0]) {
 	case "run":
 		return runGatewayServer(ctx, args[1:])
 	case "daemon":
@@ -40,13 +38,27 @@ func runGatewayCommand(ctx context.Context, args []string) error {
 	}
 }
 
+func normalizeGatewayCommand(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "start":
+		return "run"
+	default:
+		return strings.ToLower(strings.TrimSpace(name))
+	}
+}
+
 func runGatewayServer(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("gateway run", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	configPath := fs.String("config", "anyclaw.json", "path to config file")
 	host := fs.String("host", "", "gateway host")
 	port := fs.Int("port", 0, "gateway port")
+	workers := fs.Int("workers", 0, "number of worker processes (0=auto)")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if err := ensureConfigOnboarded(ctx, *configPath, true); err != nil {
 		return err
 	}
 
@@ -63,12 +75,21 @@ func runGatewayServer(ctx context.Context, args []string) error {
 	if *port > 0 {
 		app.Config.Gateway.Port = *port
 	}
+	if *workers > 0 {
+		app.Config.Gateway.WorkerCount = *workers
+	}
 
-	server := gateway.New(app)
 	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
+	printInfo("Gateway workers: %d", app.Config.Gateway.WorkerCount)
 	printSuccess("Gateway listening on %s", appRuntime.GatewayAddress(app.Config))
 	printInfo("Health: %s/healthz", appRuntime.GatewayURL(app.Config))
 	printInfo("Status: %s/status", appRuntime.GatewayURL(app.Config))
+
+	if app.Config.Gateway.WorkerCount > 1 {
+		return gateway.RunWithWorkers(ctx, app)
+	}
+
+	server := gateway.New(app)
 	return server.Run(ctx)
 }
 
@@ -119,8 +140,9 @@ func runGatewayStatus(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	status, err := gateway.Probe(ctx, appRuntime.GatewayURL(cfg))
-	if err != nil {
+
+	var status gateway.Status
+	if err := doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/status", nil, &status); err != nil {
 		return fmt.Errorf("gateway not reachable at %s: %w", appRuntime.GatewayURL(cfg), err)
 	}
 
@@ -150,27 +172,13 @@ func runGatewaySessions(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, appRuntime.GatewayURL(cfg)+"/sessions", nil)
-	if err != nil {
-		return err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("gateway returned %s", resp.Status)
-	}
-
 	var sessions []struct {
 		ID           string `json:"id"`
 		Title        string `json:"title"`
 		MessageCount int    `json:"message_count"`
 		UpdatedAt    string `json:"updated_at"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
+	if err := doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/sessions", nil, &sessions); err != nil {
 		return err
 	}
 
@@ -206,12 +214,16 @@ func runGatewayEvents(args []string) error {
 	if *stream {
 		url := fmt.Sprintf("%s/events/stream?replay=%d", baseURL, *replay)
 		printInfo("Streaming events from %s", url)
-		resp, err := http.Get(url)
+		req, err := newGatewayRequest(context.Background(), cfg, httpMethodGet, fmt.Sprintf("/events/stream?replay=%d", *replay), nil)
+		if err != nil {
+			return err
+		}
+		resp, err := gatewayHTTPClient(30 * time.Second).Do(req)
 		if err != nil {
 			return err
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return fmt.Errorf("gateway returned %s", resp.Status)
 		}
 		_, err = io.Copy(os.Stdout, resp.Body)
@@ -220,27 +232,13 @@ func runGatewayEvents(args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/events", nil)
-	if err != nil {
-		return err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("gateway returned %s", resp.Status)
-	}
-
 	var events []struct {
 		ID        string `json:"id"`
 		Type      string `json:"type"`
 		SessionID string `json:"session_id"`
 		Timestamp string `json:"timestamp"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+	if err := doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/events", nil, &events); err != nil {
 		return err
 	}
 
@@ -256,10 +254,13 @@ func runGatewayEvents(args []string) error {
 	return nil
 }
 
+const httpMethodGet = "GET"
+
 func printGatewayUsage() {
 	fmt.Print(`AnyClaw gateway commands:
 
 Usage:
+  anyclaw gateway start [--host 127.0.0.1] [--port 18789]
   anyclaw gateway run [--host 127.0.0.1] [--port 18789]
   anyclaw gateway daemon start
   anyclaw gateway daemon stop

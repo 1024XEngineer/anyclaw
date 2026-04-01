@@ -1,42 +1,0 @@
-[32m✓ [0mGateway listening on 127.0.0.1:18789
-[33mℹ [0mHealth: http://127.0.0.1:18789/healthz
-[33mℹ [0mStatus: http://127.0.0.1:18789/status
-[32m✓ [0mGateway listening on 127.0.0.1:18789
-[33mℹ [0mHealth: http://127.0.0.1:18789/healthz
-[33mℹ [0mStatus: http://127.0.0.1:18789/status
-[32m✓ [0mGateway listening on 127.0.0.1:18789
-[33mℹ [0mHealth: http://127.0.0.1:18789/healthz
-[33mℹ [0mStatus: http://127.0.0.1:18789/status
-[32m✓ [0mGateway listening on 127.0.0.1:18789
-[33mℹ [0mHealth: http://127.0.0.1:18789/healthz
-[33mℹ [0mStatus: http://127.0.0.1:18789/status
-[31m✗ 错误: [0mgateway server failed: listen tcp 127.0.0.1:18789: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.
-  [36m▸[0m [2mconfig[0m loading configuration  [32m✓[0m [36mconfig[0m provider=qwen model=qwen-plus [2m1ms[0m
-  [36m▸[0m [2mstorage[0m initializing storage  [32m✓[0m [36mstorage[0m work_dir=.anyclaw working_dir=D:\anyclaw\anyclaw\anyclaw\anyclaw\workflows\personal [2m0s[0m
-  [36m▸[0m [2msecurity[0m initializing security  [32m✓[0m [36msecurity[0m audit_log=.anyclaw/audit/audit.jsonl secured=false [2m0s[0m
-  [36m▸[0m [2mskills[0m loading skills  [32m✓[0m [36mskills[0m 2 skill(s) loaded [2m1ms[0m
-  [36m▸[0m [2mtools[0m registering tools  [32m✓[0m [36mtools[0m 27 tool(s) registered [2m0s[0m
-  [36m▸[0m [2mplugins[0m loading plugins  [32m✓[0m [36mplugins[0m 6 plugin(s) loaded [2m0s[0m
-  [36m▸[0m [2mllm[0m  connecting to qwen/qwen-plus  [32m✓[0m [36mllm[0m LLM client ready [2m0s[0m
-  [36m▸[0m [2magent[0m creating agent "个人助手"  [32m✓[0m [36magent[0m permission=limited [2m0s[0m
-  [36m▸[0m [2morchestrator[0m initializing orchestrator  [32m✓[0m [36morchestrator[0m orchestrator ready with 6 agents [2m0s[0m
-  [32m✓[0m [36mready[0m bootstrap complete in 3ms [2m0s[0m
-[2m--------------------------------------------------[0m
-[32m✓ [0mGateway listening on 127.0.0.1:18789
-[33mℹ [0mHealth: http://127.0.0.1:18789/healthz
-[33mℹ [0mStatus: http://127.0.0.1:18789/status
-[31m✗ 错误: [0mworkspace name already exists in project: personal
-  [36m▸[0m [2mconfig[0m loading configuration  [32m✓[0m [36mconfig[0m provider=qwen model=qwen-plus [2m1ms[0m
-  [36m▸[0m [2mstorage[0m initializing storage  [32m✓[0m [36mstorage[0m work_dir=.anyclaw working_dir=D:\anyclaw\anyclaw\anyclaw\anyclaw\workflows\personal [2m0s[0m
-  [36m▸[0m [2msecurity[0m initializing security  [32m✓[0m [36msecurity[0m audit_log=.anyclaw/audit/audit.jsonl secured=false [2m0s[0m
-  [36m▸[0m [2mskills[0m loading skills  [32m✓[0m [36mskills[0m 2 skill(s) loaded [2m1ms[0m
-  [36m▸[0m [2mtools[0m registering tools  [32m✓[0m [36mtools[0m 27 tool(s) registered [2m0s[0m
-  [36m▸[0m [2mplugins[0m loading plugins  [32m✓[0m [36mplugins[0m 6 plugin(s) loaded [2m0s[0m
-  [36m▸[0m [2mllm[0m  connecting to qwen/qwen-plus  [32m✓[0m [36mllm[0m LLM client ready [2m0s[0m
-  [36m▸[0m [2magent[0m creating agent "个人助手"  [32m✓[0m [36magent[0m permission=limited [2m0s[0m
-  [36m▸[0m [2morchestrator[0m initializing orchestrator  [32m✓[0m [36morchestrator[0m orchestrator ready with 6 agents [2m1ms[0m
-  [32m✓[0m [36mready[0m bootstrap complete in 2ms [2m0s[0m
-[2m--------------------------------------------------[0m
-[32m✓ [0mGateway listening on 127.0.0.1:18789
-[33mℹ [0mHealth: http://127.0.0.1:18789/healthz
-[33mℹ [0mStatus: http://127.0.0.1:18789/status

@@ -1,0 +1,7 @@
+{
+  "id": "1775011495531-yyyyyyyy",
+  "timestamp": "2026-04-01T10:44:55.531947+08:00",
+  "type": "conversation",
+  "role": "user",
+  "content": "请使用read_file工具读取D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\openclaw\\skills\\weather\\SKILL.md文件的内容"
+}

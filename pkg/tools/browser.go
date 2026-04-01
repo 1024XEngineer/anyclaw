@@ -240,6 +240,24 @@ func BrowserScreenshotTool(ctx context.Context, input map[string]any) (string, e
 	return fmt.Sprintf("Saved screenshot to %s", path), nil
 }
 
+func BrowserScreenshotToolWithPolicy(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	path, _ := input["path"].(string)
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	resolved := normalizePolicyArtifactPath(path, opts.WorkingDir)
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckWritePath(resolved); err != nil {
+			return "", err
+		}
+	} else if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return "", err
+	}
+	cloned := cloneBrowserInput(input)
+	cloned["path"] = resolved
+	return BrowserScreenshotTool(ctx, cloned)
+}
+
 func BrowserUploadTool(ctx context.Context, input map[string]any) (string, error) {
 	selector, _ := input["selector"].(string)
 	path, _ := input["path"].(string)
@@ -263,6 +281,30 @@ func BrowserUploadTool(ctx context.Context, input map[string]any) (string, error
 		return "", err
 	}
 	return fmt.Sprintf("Uploaded %s via %s", absPath, selector), nil
+}
+
+func BrowserUploadToolWithPolicy(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	selector, _ := input["selector"].(string)
+	path, _ := input["path"].(string)
+	sessionID := resolveBrowserSessionID(ctx, input)
+	if strings.TrimSpace(selector) == "" || strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("selector and path are required")
+	}
+	_, pageCtx, err := getBrowserPage(sessionID, resolveBrowserTabID(input))
+	if err != nil {
+		return "", err
+	}
+	resolved := normalizePolicyArtifactPath(path, opts.WorkingDir)
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckBrowserUpload(resolved, pageCtx.lastURL); err != nil {
+			return "", err
+		}
+	} else if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return "", err
+	}
+	cloned := cloneBrowserInput(input)
+	cloned["path"] = resolved
+	return BrowserUploadTool(ctx, cloned)
 }
 
 func BrowserEvaluateTool(ctx context.Context, input map[string]any) (string, error) {
@@ -354,6 +396,24 @@ func BrowserPDFTool(ctx context.Context, input map[string]any) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Saved PDF to %s", path), nil
+}
+
+func BrowserPDFToolWithPolicy(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	path, _ := input["path"].(string)
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	resolved := normalizePolicyArtifactPath(path, opts.WorkingDir)
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckWritePath(resolved); err != nil {
+			return "", err
+		}
+	} else if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return "", err
+	}
+	cloned := cloneBrowserInput(input)
+	cloned["path"] = resolved
+	return BrowserPDFTool(ctx, cloned)
 }
 
 func BrowserScreenshotBase64Tool(ctx context.Context, input map[string]any) (string, error) {
@@ -517,6 +577,24 @@ func BrowserDownloadTool(ctx context.Context, input map[string]any) (string, err
 	return fmt.Sprintf("Downloaded %s to %s", urlStr, path), nil
 }
 
+func BrowserDownloadToolWithPolicy(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	path, _ := input["path"].(string)
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	resolved := normalizePolicyArtifactPath(path, opts.WorkingDir)
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckWritePath(resolved); err != nil {
+			return "", err
+		}
+	} else if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return "", err
+	}
+	cloned := cloneBrowserInput(input)
+	cloned["path"] = resolved
+	return BrowserDownloadTool(ctx, cloned)
+}
+
 func BrowserTabNewTool(ctx context.Context, input map[string]any) (string, error) {
 	sessionID := resolveBrowserSessionID(ctx, input)
 	tabID, _ := input["tab_id"].(string)
@@ -616,4 +694,15 @@ func BrowserTabCloseTool(ctx context.Context, input map[string]any) (string, err
 		}
 	}
 	return fmt.Sprintf("Closed tab %s", tabID), nil
+}
+
+func cloneBrowserInput(input map[string]any) map[string]any {
+	if input == nil {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }

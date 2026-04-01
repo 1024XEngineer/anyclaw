@@ -1,0 +1,279 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/anyclaw/anyclaw/pkg/cron"
+)
+
+// Webhook and Node handlers
+
+func (s *Server) handleWebhookIncoming(w http.ResponseWriter, r *http.Request) {
+	if s.webhooks == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	statusCode, body := s.webhooks.HandleRequest(r.Context(), r, func(ctx context.Context, webhook *Webhook, payload []byte) (string, error) {
+		// Process webhook through agent
+		agentName := webhook.Agent
+		if agentName == "" {
+			agentName = s.app.Config.ResolveMainAgentName()
+		}
+
+		targetApp, err := s.runtimePool.GetOrCreate(agentName, "", "", "")
+		if err != nil {
+			return "", err
+		}
+
+		// Format message from webhook
+		message := fmt.Sprintf("[Webhook: %s] %s", webhook.Name, string(payload))
+		if webhook.Template != "" {
+			message = fmt.Sprintf("%s\n\nPayload:\n%s", webhook.Template, string(payload))
+		}
+
+		targetApp.Agent.SetHistory(nil)
+		response, err := targetApp.Agent.Run(ctx, message)
+		if err != nil {
+			return "", err
+		}
+
+		s.appendEvent("webhook.triggered", "", map[string]any{
+			"webhook_id": webhook.ID,
+			"name":       webhook.Name,
+			"response":   response,
+		})
+
+		return response, nil
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	w.Write(body)
+}
+
+func (s *Server) handleNodesList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.nodes == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+
+	nodes := s.nodes.List()
+	s.appendAudit(UserFromContext(r.Context()), "nodes.read", "nodes", map[string]any{"count": len(nodes)})
+	writeJSON(w, http.StatusOK, nodes)
+}
+
+func (s *Server) handleNodeByID(w http.ResponseWriter, r *http.Request) {
+	if s.nodes == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/nodes/")
+	path = strings.TrimSpace(path)
+	if path == "" {
+		http.Error(w, "node id required", http.StatusBadRequest)
+		return
+	}
+
+	parts := strings.Split(path, "/")
+	nodeID := parts[0]
+
+	switch r.Method {
+	case http.MethodGet:
+		node, ok := s.nodes.Get(nodeID)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "node not found"})
+			return
+		}
+		s.appendAudit(UserFromContext(r.Context()), "nodes.read", nodeID, nil)
+		writeJSON(w, http.StatusOK, node)
+
+	case http.MethodDelete:
+		if err := s.nodes.Unregister(nodeID); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		s.appendAudit(UserFromContext(r.Context()), "nodes.delete", nodeID, nil)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "unregistered"})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleNodeInvoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.nodes == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no nodes available"})
+		return
+	}
+
+	var req struct {
+		NodeID string         `json:"node_id"`
+		Action string         `json:"action"`
+		Params map[string]any `json:"params,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	if req.NodeID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "node_id is required"})
+		return
+	}
+
+	if req.Action == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action is required"})
+		return
+	}
+
+	result, err := s.nodes.Invoke(r.Context(), req.NodeID, req.Action, req.Params)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.appendAudit(UserFromContext(r.Context()), "nodes.invoke", req.NodeID, map[string]any{"action": req.Action})
+	writeJSON(w, http.StatusOK, result)
+}
+
+// Cron handlers
+
+var cronScheduler *cron.Scheduler
+
+func (s *Server) handleCronList(w http.ResponseWriter, r *http.Request) {
+	if cronScheduler == nil {
+		cronScheduler = cron.New()
+		_ = cronScheduler.Start()
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		tasks := cronScheduler.ListTasks()
+		s.appendAudit(UserFromContext(r.Context()), "cron.read", "cron", map[string]any{"count": len(tasks)})
+		writeJSON(w, http.StatusOK, tasks)
+
+	case http.MethodPost:
+		var task cron.Task
+		if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+			return
+		}
+
+		if err := task.Validate(); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+
+		taskID, err := cronScheduler.AddTask(&task)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		s.appendAudit(UserFromContext(r.Context()), "cron.create", taskID, map[string]any{"name": task.Name, "schedule": task.Schedule})
+		writeJSON(w, http.StatusCreated, map[string]string{"id": taskID})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleCronByID(w http.ResponseWriter, r *http.Request) {
+	if cronScheduler == nil {
+		cronScheduler = cron.New()
+		_ = cronScheduler.Start()
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/cron/")
+	path = strings.TrimSpace(path)
+	if path == "" {
+		http.Error(w, "task id required", http.StatusBadRequest)
+		return
+	}
+
+	parts := strings.Split(path, "/")
+	taskID := parts[0]
+
+	switch r.Method {
+	case http.MethodGet:
+		task, ok := cronScheduler.GetTask(taskID)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+			return
+		}
+		s.appendAudit(UserFromContext(r.Context()), "cron.read", taskID, nil)
+		writeJSON(w, http.StatusOK, task)
+
+	case http.MethodPut:
+		var task cron.Task
+		if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+			return
+		}
+		task.ID = taskID
+		if err := cronScheduler.UpdateTask(&task); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		s.appendAudit(UserFromContext(r.Context()), "cron.update", taskID, nil)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+
+	case http.MethodDelete:
+		if err := cronScheduler.DeleteTask(taskID); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		s.appendAudit(UserFromContext(r.Context()), "cron.delete", taskID, nil)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleNodesHealth returns node manager health
+func (s *Server) handleNodesHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.nodes == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"total": 0, "online": 0, "offline": 0})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, s.nodes.Health())
+}
+
+// handleCronStats returns cron scheduler statistics
+func (s *Server) handleCronStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if cronScheduler == nil {
+		cronScheduler = cron.New()
+		_ = cronScheduler.Start()
+	}
+
+	writeJSON(w, http.StatusOK, cronScheduler.Stats())
+}

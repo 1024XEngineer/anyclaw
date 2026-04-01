@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +56,25 @@ func TestWriteFileToolWithPolicyBlocksProtectedPath(t *testing.T) {
 	}
 }
 
+func TestReadFileToolWithPolicyBlocksOutsideWorkingDir(t *testing.T) {
+	workspace := t.TempDir()
+	outsideDir := t.TempDir()
+	target := filepath.Join(outsideDir, "notes.txt")
+	if err := os.WriteFile(target, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	_, err := ReadFileToolWithPolicy(context.Background(), map[string]any{
+		"path": target,
+	}, workspace, BuiltinOptions{
+		WorkingDir: workspace,
+		Policy:     NewPolicyEngine(PolicyOptions{WorkingDir: workspace}),
+	})
+	if err == nil {
+		t.Fatal("expected read outside working directory to be denied")
+	}
+}
+
 func TestReviewCommandExecutionBlocksProtectedPathReference(t *testing.T) {
 	tempDir := t.TempDir()
 	protected := filepath.Join(tempDir, "Documents")
@@ -72,9 +92,57 @@ func TestReviewCommandExecutionBlocksProtectedPathReference(t *testing.T) {
 	}
 }
 
+func TestRunCommandToolWithPolicyBlocksOutsideWorkingDirCwd(t *testing.T) {
+	workspace := t.TempDir()
+	outsideDir := t.TempDir()
+
+	_, err := RunCommandToolWithPolicy(context.Background(), map[string]any{
+		"command": "echo hello",
+		"cwd":     outsideDir,
+	}, BuiltinOptions{
+		WorkingDir:      workspace,
+		ExecutionMode:   "host-reviewed",
+		PermissionLevel: "limited",
+		Policy:          NewPolicyEngine(PolicyOptions{WorkingDir: workspace, PermissionLevel: "limited"}),
+	})
+	if err == nil {
+		t.Fatal("expected command cwd outside working directory to be denied")
+	}
+}
+
 func TestEnsureDesktopAllowedRequiresHostReviewed(t *testing.T) {
 	err := ensureDesktopAllowed("desktop_click", BuiltinOptions{ExecutionMode: "sandbox", PermissionLevel: "limited"}, false)
 	if err == nil {
 		t.Fatal("expected desktop tool to require host-reviewed mode")
+	}
+}
+
+func TestMemoryToolsSearchAndGetDailyFiles(t *testing.T) {
+	workspace := t.TempDir()
+	memoryDir := filepath.Join(workspace, "memory")
+	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryDir, "2026-03-29.md"), []byte("# Daily Memory 2026-03-29\n\nRelease checklist completed."), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	registry := NewRegistry()
+	RegisterBuiltins(registry, BuiltinOptions{WorkingDir: workspace})
+
+	searchResult, err := registry.Call(context.Background(), "memory_search", map[string]any{"query": "checklist"})
+	if err != nil {
+		t.Fatalf("memory_search: %v", err)
+	}
+	if !strings.Contains(searchResult, "2026-03-29") {
+		t.Fatalf("expected search result to mention date, got %q", searchResult)
+	}
+
+	getResult, err := registry.Call(context.Background(), "memory_get", map[string]any{"date": "2026-03-29"})
+	if err != nil {
+		t.Fatalf("memory_get: %v", err)
+	}
+	if !strings.Contains(getResult, "Release checklist completed.") {
+		t.Fatalf("expected memory_get output, got %q", getResult)
 	}
 }

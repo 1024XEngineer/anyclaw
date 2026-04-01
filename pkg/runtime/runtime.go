@@ -18,6 +18,7 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/plugin"
 	"github.com/anyclaw/anyclaw/pkg/skills"
 	"github.com/anyclaw/anyclaw/pkg/tools"
+	"github.com/anyclaw/anyclaw/pkg/workspace"
 )
 
 const Version = "2026.3.13"
@@ -55,6 +56,9 @@ type BootstrapOptions struct {
 	ConfigPath string
 	Config     *config.Config // if set, skip loading from file
 	Progress   BootProgress   // optional progress callback
+	// WorkingDirOverride preserves an explicit target workspace while still
+	// allowing the selected agent profile to apply provider/model defaults.
+	WorkingDirOverride string
 }
 
 type App struct {
@@ -70,6 +74,39 @@ type App struct {
 	Orchestrator *orchestrator.Orchestrator
 	WorkDir      string
 	WorkingDir   string
+}
+
+func resolveRuntimePaths(cfg *config.Config, configPath string) {
+	if cfg == nil {
+		return
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Agent.WorkDir); resolved != "" {
+		cfg.Agent.WorkDir = resolved
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Agent.WorkingDir); resolved != "" {
+		cfg.Agent.WorkingDir = resolved
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Skills.Dir); resolved != "" {
+		cfg.Skills.Dir = resolved
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Plugins.Dir); resolved != "" {
+		cfg.Plugins.Dir = resolved
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Memory.Dir); resolved != "" {
+		cfg.Memory.Dir = resolved
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Security.AuditLog); resolved != "" {
+		cfg.Security.AuditLog = resolved
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Sandbox.BaseDir); resolved != "" {
+		cfg.Sandbox.BaseDir = resolved
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Daemon.PIDFile); resolved != "" {
+		cfg.Daemon.PIDFile = resolved
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Daemon.LogFile); resolved != "" {
+		cfg.Daemon.LogFile = resolved
+	}
 }
 
 // LoadConfig loads configuration from disk with validation.
@@ -99,19 +136,28 @@ func NewTargetApp(configPath string, agentName string, workingDir string) (*App,
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
-	if strings.TrimSpace(agentName) != "" {
-		cfg.Agent.Name = strings.TrimSpace(agentName)
+	agentName = strings.TrimSpace(agentName)
+	if agentName != "" {
+		if profile, ok := cfg.ResolveAgentProfile(agentName); ok {
+			_ = cfg.ApplyAgentRuntimeProfile(profile.Name)
+		} else {
+			cfg.Agent.Name = agentName
+			cfg.Agent.ActiveProfile = ""
+		}
+	} else if profile, ok := cfg.ResolveMainAgentProfile(); ok {
+		_ = cfg.ApplyAgentRuntimeProfile(profile.Name)
 	}
-	if strings.TrimSpace(workingDir) != "" {
-		cfg.Agent.WorkingDir = strings.TrimSpace(workingDir)
+	workingDir = strings.TrimSpace(workingDir)
+	if workingDir != "" {
+		cfg.Agent.WorkingDir = workingDir
 	}
-	baseWorkDir := cfg.Agent.WorkDir
+	baseWorkDir := config.ResolvePath(configPath, cfg.Agent.WorkDir)
 	if baseWorkDir == "" {
-		baseWorkDir = ".anyclaw"
+		baseWorkDir = config.ResolvePath(configPath, ".anyclaw")
 	}
 	targetName := sanitizeTargetName(cfg.Agent.Name + "-" + cfg.Agent.WorkingDir)
 	cfg.Agent.WorkDir = filepath.Join(baseWorkDir, "runtimes", targetName)
-	return Bootstrap(BootstrapOptions{ConfigPath: configPath, Config: cfg})
+	return Bootstrap(BootstrapOptions{ConfigPath: configPath, Config: cfg, WorkingDirOverride: workingDir})
 }
 
 // Bootstrap initializes the application in well-defined phases.
@@ -144,6 +190,9 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		}
 		app.Config = cfg
 	}
+	_ = app.Config.ApplyDefaultProviderProfile()
+	app.ConfigPath = config.ResolveConfigPath(app.ConfigPath)
+	resolveRuntimePaths(app.Config, app.ConfigPath)
 	progress(BootEvent{Phase: PhaseConfig, Status: "ok", Message: fmt.Sprintf("provider=%s model=%s", app.Config.LLM.Provider, app.Config.LLM.Model), Dur: time.Since(t)})
 
 	// ── Phase 2: Storage (work dirs + memory) ────────────────────────
@@ -164,8 +213,11 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	if workingDir == "" {
 		workingDir = "workflows"
 	}
-	if app.Config.Agent.ActiveProfile != "" {
-		_ = app.Config.ApplyAgentProfile(app.Config.Agent.ActiveProfile)
+	if profile, ok := app.Config.ResolveMainAgentProfile(); ok {
+		_ = app.Config.ApplyAgentProfile(profile.Name)
+		if override := strings.TrimSpace(opts.WorkingDirOverride); override != "" {
+			app.Config.Agent.WorkingDir = override
+		}
 		if app.Config.Agent.WorkingDir != "" {
 			workingDir = app.Config.Agent.WorkingDir
 		}
@@ -181,8 +233,16 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		return nil, fmt.Errorf("storage: create working dir %q: %w", workingDir, err)
 	}
 	app.WorkingDir = workingDir
+	if err := workspace.EnsureBootstrap(workingDir, workspace.BootstrapOptions{
+		AgentName:        app.Config.Agent.Name,
+		AgentDescription: app.Config.Agent.Description,
+	}); err != nil {
+		progress(BootEvent{Phase: PhaseStorage, Status: "fail", Message: "workspace bootstrap failed", Err: err, Dur: time.Since(t)})
+		return nil, fmt.Errorf("storage: bootstrap workspace %q: %w", workingDir, err)
+	}
 
 	mem := memory.NewFileMemory(workDir)
+	mem.SetDailyDir(filepath.Join(workingDir, "memory"))
 	if err := mem.Init(); err != nil {
 		progress(BootEvent{Phase: PhaseStorage, Status: "fail", Message: "memory init failed", Err: err, Dur: time.Since(t)})
 		return nil, fmt.Errorf("storage: init memory: %w", err)
@@ -209,15 +269,21 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		progress(BootEvent{Phase: PhaseSkills, Status: "fail", Message: "skills load failed", Err: err, Dur: time.Since(t)})
 		return nil, fmt.Errorf("skills: %w", err)
 	}
-	boundSkillNames := enabledProfileSkills(app.Config.Agent.Profiles, app.Config.Agent.ActiveProfile)
-	if len(boundSkillNames) > 0 {
-		sk = sk.FilterEnabled(boundSkillNames)
+	configuredSkillNames := configuredAgentSkillNames(app.Config)
+	missingSkillNames := []string{}
+	if len(configuredSkillNames) > 0 {
+		sk, missingSkillNames = filterConfiguredSkills(sk, configuredSkillNames)
 	}
 	app.Skills = sk
 	skillCount := len(sk.List())
-	if skillCount == 0 {
+	switch {
+	case skillCount == 0 && len(missingSkillNames) > 0:
+		progress(BootEvent{Phase: PhaseSkills, Status: "warn", Message: fmt.Sprintf("no configured skills loaded; missing: %s", strings.Join(missingSkillNames, ", ")), Dur: time.Since(t)})
+	case skillCount == 0:
 		progress(BootEvent{Phase: PhaseSkills, Status: "warn", Message: "no skills loaded", Dur: time.Since(t)})
-	} else {
+	case len(missingSkillNames) > 0:
+		progress(BootEvent{Phase: PhaseSkills, Status: "warn", Message: fmt.Sprintf("%d skill(s) loaded; missing configured skills: %s", skillCount, strings.Join(missingSkillNames, ", ")), Dur: time.Since(t)})
+	default:
 		progress(BootEvent{Phase: PhaseSkills, Status: "ok", Message: fmt.Sprintf("%d skill(s) loaded", skillCount), Dur: time.Since(t)})
 	}
 
@@ -227,12 +293,21 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 
 	registry := tools.NewRegistry()
 	sandboxManager := tools.NewSandboxManager(app.Config.Sandbox, workingDir)
+	policyEngine := tools.NewPolicyEngine(tools.PolicyOptions{
+		WorkingDir:           workingDir,
+		PermissionLevel:      app.Config.Agent.PermissionLevel,
+		ProtectedPaths:       app.Config.Security.ProtectedPaths,
+		AllowedReadPaths:     app.Config.Security.AllowedReadPaths,
+		AllowedWritePaths:    app.Config.Security.AllowedWritePaths,
+		AllowedEgressDomains: app.Config.Security.AllowedEgressDomains,
+	})
 	tools.RegisterBuiltins(registry, tools.BuiltinOptions{
 		WorkingDir:            workingDir,
 		PermissionLevel:       app.Config.Agent.PermissionLevel,
 		ExecutionMode:         app.Config.Sandbox.ExecutionMode,
 		DangerousPatterns:     app.Config.Security.DangerousCommandPatterns,
 		ProtectedPaths:        app.Config.Security.ProtectedPaths,
+		Policy:                policyEngine,
 		CommandTimeoutSeconds: app.Config.Security.CommandTimeoutSeconds,
 		AuditLogger:           auditLogger,
 		Sandbox:               sandboxManager,
@@ -252,7 +327,9 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		progress(BootEvent{Phase: PhasePlugins, Status: "fail", Message: "plugin load failed", Err: err, Dur: time.Since(t)})
 		return nil, fmt.Errorf("plugins: %w", err)
 	}
+	plugRegistry.SetPolicyEngine(policyEngine)
 	plugRegistry.RegisterToolPlugins(registry, app.Config.Plugins.Dir)
+	plugRegistry.RegisterAppPlugins(registry, app.Config.Plugins.Dir, app.ConfigPath)
 	app.Plugins = plugRegistry
 
 	pluginCount := len(plugRegistry.List())
@@ -289,108 +366,22 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	ag := agent.New(agent.Config{
 		Name:        app.Config.Agent.Name,
 		Description: app.Config.Agent.Description,
-		Personality: agent.BuildPersonalityPrompt(firstEnabledProfilePersonality(app.Config.Agent.Profiles, app.Config.Agent.ActiveProfile)),
+		Personality: agent.BuildPersonalityPrompt(resolveMainAgentPersonality(app.Config)),
 		LLM:         llmWrapper,
 		Memory:      mem,
 		Skills:      sk,
 		Tools:       registry,
 		WorkDir:     workDir,
+		WorkingDir:  workingDir,
 	})
 	app.Agent = ag
 	progress(BootEvent{Phase: PhaseAgent, Status: "ok", Message: fmt.Sprintf("permission=%s", app.Config.Agent.PermissionLevel), Dur: time.Since(t)})
 
 	// ── Phase 8.5: Orchestrator (multi-agent coordination) ──────────
-	if app.Config.Orchestrator.Enabled {
-		progress(BootEvent{Phase: PhaseOrchestrator, Status: "start", Message: "initializing orchestrator"})
-		t = time.Now()
-
-		// Collect agent definitions from profiles and/or orchestrator config
-		agentDefs := make([]orchestrator.AgentDefinition, 0)
-
-		// If agent_names specified, pick those profiles
-		if len(app.Config.Orchestrator.AgentNames) > 0 {
-			for _, name := range app.Config.Orchestrator.AgentNames {
-				if profile, ok := app.Config.FindAgentProfile(name); ok && profile.IsEnabled() {
-					skillNames := make([]string, 0, len(profile.Skills))
-					for _, s := range profile.Skills {
-						if s.Enabled {
-							skillNames = append(skillNames, s.Name)
-						}
-					}
-					agentDefs = append(agentDefs, orchestrator.AgentDefinition{
-						Name:              profile.Name,
-						Description:       profile.Description,
-						Persona:           profile.Persona,
-						Domain:            profile.Domain,
-						Expertise:         profile.Expertise,
-						SystemPrompt:      profile.SystemPrompt,
-						ConversationTone:  profile.Personality.Tone,
-						ConversationStyle: profile.Personality.Style,
-						PrivateSkills:     skillNames,
-						PermissionLevel:   profile.PermissionLevel,
-						WorkingDir:        profile.WorkingDir,
-					})
-				}
-			}
-		}
-
-		// Also add from legacy sub_agents config (backward compat)
-		for _, saCfg := range app.Config.Orchestrator.SubAgents {
-			agentDefs = append(agentDefs, resolveSubAgentDefinition(saCfg, app.Config.LLM))
-		}
-
-		// If no agents defined, auto-create from enabled profiles
-		if len(agentDefs) == 0 {
-			for _, profile := range app.Config.Agent.Profiles {
-				if !profile.IsEnabled() {
-					continue
-				}
-				skillNames := make([]string, 0, len(profile.Skills))
-				for _, s := range profile.Skills {
-					if s.Enabled {
-						skillNames = append(skillNames, s.Name)
-					}
-				}
-				agentDefs = append(agentDefs, orchestrator.AgentDefinition{
-					Name:              profile.Name,
-					Description:       profile.Description,
-					Persona:           profile.Persona,
-					Domain:            profile.Domain,
-					Expertise:         profile.Expertise,
-					SystemPrompt:      profile.SystemPrompt,
-					ConversationTone:  profile.Personality.Tone,
-					ConversationStyle: profile.Personality.Style,
-					PrivateSkills:     skillNames,
-					PermissionLevel:   profile.PermissionLevel,
-					WorkingDir:        profile.WorkingDir,
-				})
-			}
-		}
-
-		orchCfg := orchestrator.OrchestratorConfig{
-			MaxConcurrentAgents: app.Config.Orchestrator.MaxConcurrentAgents,
-			MaxRetries:          app.Config.Orchestrator.MaxRetries,
-			Timeout:             time.Duration(app.Config.Orchestrator.TimeoutSeconds) * time.Second,
-			AgentDefinitions:    agentDefs,
-			EnableDecomposition: app.Config.Orchestrator.EnableDecomposition,
-		}
-
-		if len(agentDefs) == 0 {
-			progress(BootEvent{Phase: PhaseOrchestrator, Status: "warn", Message: "no agent definitions found, orchestrator will have no agents", Dur: time.Since(t)})
-		}
-
-		orch, err := orchestrator.NewOrchestrator(orchCfg, llmWrapper, sk, registry, mem)
-		if err != nil {
-			progress(BootEvent{Phase: PhaseOrchestrator, Status: "warn", Message: fmt.Sprintf("orchestrator init failed: %v (continuing with single agent)", err), Dur: time.Since(t)})
-		} else if orch.AgentCount() == 0 {
-			progress(BootEvent{Phase: PhaseOrchestrator, Status: "warn", Message: "orchestrator initialized but has 0 agents", Dur: time.Since(t)})
-			app.Orchestrator = orch
-		} else {
-			app.Orchestrator = orch
-			progress(BootEvent{Phase: PhaseOrchestrator, Status: "ok", Message: fmt.Sprintf("orchestrator ready with %d agents", orch.AgentCount()), Dur: time.Since(t)})
-		}
+	if app.Config.Orchestrator.Enabled || len(app.Config.Orchestrator.AgentNames) > 0 || len(app.Config.Orchestrator.SubAgents) > 0 {
+		progress(BootEvent{Phase: PhaseOrchestrator, Status: "skip", Message: "multi-agent orchestrator removed; running in single-agent mode", Dur: 0})
 	} else {
-		progress(BootEvent{Phase: PhaseOrchestrator, Status: "skip", Message: "orchestrator disabled", Dur: 0})
+		progress(BootEvent{Phase: PhaseOrchestrator, Status: "skip", Message: "single-agent runtime", Dur: 0})
 	}
 
 	// ── Done ─────────────────────────────────────────────────────────
@@ -428,47 +419,77 @@ func GatewayURL(cfg *config.Config) string {
 	return "http://" + GatewayAddress(cfg)
 }
 
-func firstEnabledProfilePersonality(profiles []config.AgentProfile, active string) config.PersonalitySpec {
-	active = strings.TrimSpace(active)
-	for _, profile := range profiles {
-		if active != "" && strings.EqualFold(strings.TrimSpace(profile.Name), active) {
-			return profile.Personality
-		}
+func resolveMainAgentPersonality(cfg *config.Config) config.PersonalitySpec {
+	if cfg == nil {
+		return config.PersonalitySpec{}
 	}
-	for _, profile := range profiles {
-		if profile.IsEnabled() {
-			return profile.Personality
-		}
+	if profile, ok := cfg.ResolveMainAgentProfile(); ok {
+		return profile.Personality
 	}
 	return config.PersonalitySpec{}
 }
 
-func enabledProfileSkills(profiles []config.AgentProfile, active string) []string {
-	active = strings.TrimSpace(active)
-	resolve := func(profile config.AgentProfile) []string {
-		items := make([]string, 0, len(profile.Skills))
-		for _, skill := range profile.Skills {
-			if !skill.Enabled {
-				continue
-			}
-			name := strings.TrimSpace(skill.Name)
-			if name != "" {
-				items = append(items, name)
-			}
-		}
-		return items
+func configuredAgentSkillNames(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
 	}
-	for _, profile := range profiles {
-		if active != "" && strings.EqualFold(strings.TrimSpace(profile.Name), active) {
-			return resolve(profile)
+	if profile, ok := cfg.ResolveMainAgentProfile(); ok {
+		return enabledSkillNames(profile.Skills)
+	}
+	return enabledSkillNames(cfg.Agent.Skills)
+}
+
+func enabledSkillNames(skills []config.AgentSkillRef) []string {
+	if len(skills) == 0 {
+		return nil
+	}
+	items := make([]string, 0, len(skills))
+	seen := make(map[string]struct{}, len(skills))
+	for _, skill := range skills {
+		if !skill.Enabled {
+			continue
+		}
+		name := strings.TrimSpace(skill.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		items = append(items, name)
+	}
+	return items
+}
+
+func filterConfiguredSkills(manager *skills.SkillsManager, configured []string) (*skills.SkillsManager, []string) {
+	if manager == nil || len(configured) == 0 {
+		return manager, nil
+	}
+	filtered := manager.FilterEnabled(configured)
+	loaded := make(map[string]struct{}, len(filtered.List()))
+	for _, skill := range filtered.List() {
+		if skill == nil {
+			continue
+		}
+		name := strings.TrimSpace(strings.ToLower(skill.Name))
+		if name != "" {
+			loaded[name] = struct{}{}
 		}
 	}
-	for _, profile := range profiles {
-		if profile.IsEnabled() {
-			return resolve(profile)
+	missing := make([]string, 0)
+	for _, name := range configured {
+		key := strings.TrimSpace(strings.ToLower(name))
+		if key == "" {
+			continue
 		}
+		if _, ok := loaded[key]; ok {
+			continue
+		}
+		missing = append(missing, name)
 	}
-	return nil
+	return filtered, missing
 }
 
 func ResolveConfigPath(path string) string {

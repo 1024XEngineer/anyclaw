@@ -85,6 +85,10 @@ func (s *SkillsManager) Load() error {
 
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("Warning: skills directory not found: %s (skipping)\n", s.dir)
+			return nil
+		}
 		return fmt.Errorf("skills directory not found: %w", err)
 	}
 
@@ -108,10 +112,24 @@ func (s *SkillsManager) Load() error {
 
 func (s *SkillsManager) loadSkill(path string) (*Skill, error) {
 	skillFile := filepath.Join(path, "skill.json")
+	skillMdFile := filepath.Join(path, "SKILL.md")
 
+	// Try to load skill.json first
 	data, err := os.ReadFile(skillFile)
 	if err != nil {
-		return nil, fmt.Errorf("skill.json not found: %w", err)
+		// If skill.json doesn't exist, try to convert SKILL.md
+		if _, mdErr := os.Stat(skillMdFile); mdErr == nil {
+			if convertErr := ConvertSkillhubToSkillJSON(path); convertErr != nil {
+				return nil, fmt.Errorf("failed to convert SKILL.md: %w", convertErr)
+			}
+			// Try to read the converted skill.json
+			data, err = os.ReadFile(skillFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read converted skill.json: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("skill.json not found: %w", err)
+		}
 	}
 
 	var skill Skill

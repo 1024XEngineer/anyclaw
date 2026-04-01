@@ -16,15 +16,16 @@ type Config struct {
 }
 
 type LLMConfig struct {
-	Provider    string             `json:"provider"`
-	Model       string             `json:"model"`
-	APIKey      string             `json:"api_key"`
-	BaseURL     string             `json:"base_url"`
-	MaxTokens   int                `json:"max_tokens"`
-	Temperature float64            `json:"temperature"`
-	Proxy       string             `json:"proxy"`
-	Extra       map[string]string  `json:"extra"`
-	Routing     ModelRoutingConfig `json:"routing"`
+	Provider           string             `json:"provider"`
+	Model              string             `json:"model"`
+	APIKey             string             `json:"api_key"`
+	BaseURL            string             `json:"base_url"`
+	DefaultProviderRef string             `json:"default_provider_ref,omitempty"`
+	MaxTokens          int                `json:"max_tokens"`
+	Temperature        float64            `json:"temperature"`
+	Proxy              string             `json:"proxy"`
+	Extra              map[string]string  `json:"extra"`
+	Routing            ModelRoutingConfig `json:"routing"`
 }
 
 type ModelRoutingConfig struct {
@@ -37,14 +38,15 @@ type ModelRoutingConfig struct {
 }
 
 type AgentConfig struct {
-	Name                            string         `json:"name"`
-	Description                     string         `json:"description"`
-	WorkDir                         string         `json:"work_dir"`
-	WorkingDir                      string         `json:"working_dir"`
-	PermissionLevel                 string         `json:"permission_level"`
-	RequireConfirmationForDangerous bool           `json:"require_confirmation_for_dangerous"`
-	Profiles                        []AgentProfile `json:"profiles"`
-	ActiveProfile                   string         `json:"active_profile"`
+	Name                            string          `json:"name"`
+	Description                     string          `json:"description"`
+	WorkDir                         string          `json:"work_dir"`
+	WorkingDir                      string          `json:"working_dir"`
+	PermissionLevel                 string          `json:"permission_level"`
+	RequireConfirmationForDangerous bool            `json:"require_confirmation_for_dangerous"`
+	Skills                          []AgentSkillRef `json:"skills,omitempty"`
+	Profiles                        []AgentProfile  `json:"profiles"`
+	ActiveProfile                   string          `json:"active_profile"`
 }
 
 type AgentProfile struct {
@@ -52,6 +54,8 @@ type AgentProfile struct {
 	Description     string          `json:"description"`
 	Role            string          `json:"role,omitempty"`
 	Persona         string          `json:"persona,omitempty"`
+	AvatarPreset    string          `json:"avatar_preset,omitempty"`
+	AvatarDataURL   string          `json:"avatar_data_url,omitempty"`
 	Domain          string          `json:"domain,omitempty"`
 	Expertise       []string        `json:"expertise,omitempty"`
 	SystemPrompt    string          `json:"system_prompt,omitempty"`
@@ -113,6 +117,7 @@ type GatewayConfig struct {
 	Host                 string `json:"host"`
 	Port                 int    `json:"port"`
 	Bind                 string `json:"bind"`
+	WorkerCount          int    `json:"worker_count"`
 	RuntimeMaxInstances  int    `json:"runtime_max_instances"`
 	RuntimeIdleSeconds   int    `json:"runtime_idle_seconds"`
 	JobWorkerCount       int    `json:"job_worker_count"`
@@ -211,6 +216,9 @@ type SecurityConfig struct {
 	AuditLog                 string         `json:"audit_log"`
 	DangerousCommandPatterns []string       `json:"dangerous_command_patterns"`
 	ProtectedPaths           []string       `json:"protected_paths"`
+	AllowedReadPaths         []string       `json:"allowed_read_paths,omitempty"`
+	AllowedWritePaths        []string       `json:"allowed_write_paths,omitempty"`
+	AllowedEgressDomains     []string       `json:"allowed_egress_domains,omitempty"`
 	CommandTimeoutSeconds    int            `json:"command_timeout_seconds"`
 }
 

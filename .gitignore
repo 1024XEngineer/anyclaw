@@ -31,3 +31,7 @@ skills-lock.json
 
 # Build artifacts
 bin/
+.gstack/
+
+# Delegate LLM config (contains API keys)
+.anyclaw/delegate_config.json

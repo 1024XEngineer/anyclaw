@@ -12,8 +12,9 @@ import (
 )
 
 type FileMemory struct {
-	baseDir string
-	mu      sync.RWMutex
+	baseDir  string
+	dailyDir string
+	mu       sync.RWMutex
 }
 
 type MemoryEntry struct {
@@ -37,8 +38,10 @@ const (
 )
 
 func NewFileMemory(workDir string) *FileMemory {
+	memoryDir := filepath.Join(workDir, "memory")
 	return &FileMemory{
-		baseDir: filepath.Join(workDir, "memory"),
+		baseDir:  memoryDir,
+		dailyDir: memoryDir,
 	}
 }
 
@@ -54,6 +57,11 @@ func (m *FileMemory) Init() error {
 
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(m.dailyDir) != "" {
+		if err := os.MkdirAll(m.dailyDir, 0o755); err != nil {
 			return err
 		}
 	}
@@ -89,7 +97,10 @@ func (m *FileMemory) Add(entry MemoryEntry) error {
 		return err
 	}
 
-	return m.updateIndexLocked(entry)
+	if err := m.updateIndexLocked(entry); err != nil {
+		return err
+	}
+	return m.appendDailyMarkdownLocked(entry)
 }
 
 func (m *FileMemory) initLocked() error {
@@ -101,6 +112,11 @@ func (m *FileMemory) initLocked() error {
 
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(m.dailyDir) != "" {
+		if err := os.MkdirAll(m.dailyDir, 0o755); err != nil {
 			return err
 		}
 	}

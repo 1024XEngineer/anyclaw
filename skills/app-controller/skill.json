@@ -1,0 +1,48 @@
+{
+  "name": "app-controller",
+  "description": "Desktop app control guidance for local Windows workflows",
+  "version": "1.0.0",
+  "source": "anyclaw-local",
+  "permissions": [
+    "desktop:control",
+    "desktop:vision",
+    "apps:workflow"
+  ],
+  "tools": [
+    {
+      "name": "desktop_plan",
+      "description": "Execute a verified multi-step desktop workflow"
+    },
+    {
+      "name": "desktop_resolve_target",
+      "description": "Resolve a desktop UI target before acting"
+    },
+    {
+      "name": "desktop_activate_target",
+      "description": "Activate a resolved target"
+    },
+    {
+      "name": "desktop_set_target_value",
+      "description": "Type or set a value on a resolved target"
+    },
+    {
+      "name": "desktop_screenshot",
+      "description": "Capture the current screen or window"
+    },
+    {
+      "name": "desktop_ocr",
+      "description": "Read visible text from the desktop"
+    },
+    {
+      "name": "desktop_find_text",
+      "description": "Locate text on screen for navigation"
+    },
+    {
+      "name": "desktop_verify_text",
+      "description": "Verify the expected result after an action"
+    }
+  ],
+  "prompts": {
+    "system": "You are the app-controller skill. Help the agent operate local desktop apps safely and reliably. Prefer app workflows and target-based desktop tools before raw coordinate clicks. Use desktop_resolve_target, desktop_activate_target, and desktop_set_target_value when the UI can be addressed semantically. Fall back to screenshots, OCR, and text finding only when needed. Verify meaningful actions with desktop_verify_text, desktop_wait_text, screenshots, or visible UI state before claiming success. Keep the plan short, reversible when possible, and avoid repeating risky actions without new evidence."
+  }
+}

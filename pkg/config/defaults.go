@@ -16,7 +16,7 @@ func DefaultConfig() *Config {
 			Temperature: 0.7,
 			Routing: ModelRoutingConfig{
 				Enabled:           false,
-				ReasoningKeywords: []string{"计划", "复杂", "步骤", "自动化", "脚本", "代码", "debug", "plan", "complex", "script", "code"},
+				ReasoningKeywords: []string{"plan", "complex", "reasoning", "analysis", "debug", "script", "code", "refactor", "architecture", "design"},
 			},
 		},
 		Agent: AgentConfig{
@@ -41,6 +41,7 @@ func DefaultConfig() *Config {
 			Host:                 "127.0.0.1",
 			Port:                 18789,
 			Bind:                 "loopback",
+			WorkerCount:          0,
 			RuntimeMaxInstances:  16,
 			RuntimeIdleSeconds:   900,
 			JobWorkerCount:       2,

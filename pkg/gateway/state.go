@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	appstate "github.com/anyclaw/anyclaw/pkg/apps"
 	"github.com/anyclaw/anyclaw/pkg/prompt"
 )
 
@@ -143,22 +144,65 @@ type Job struct {
 }
 
 type Task struct {
-	ID            string    `json:"id"`
-	Title         string    `json:"title"`
-	Input         string    `json:"input"`
-	Status        string    `json:"status"`
-	Assistant     string    `json:"assistant,omitempty"`
-	Org           string    `json:"org,omitempty"`
-	Project       string    `json:"project,omitempty"`
-	Workspace     string    `json:"workspace,omitempty"`
-	SessionID     string    `json:"session_id,omitempty"`
-	PlanSummary   string    `json:"plan_summary,omitempty"`
-	Result        string    `json:"result,omitempty"`
-	Error         string    `json:"error,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	StartedAt     string    `json:"started_at,omitempty"`
-	CompletedAt   string    `json:"completed_at,omitempty"`
-	LastUpdatedAt time.Time `json:"last_updated_at"`
+	ID             string              `json:"id"`
+	Title          string              `json:"title"`
+	Input          string              `json:"input"`
+	Status         string              `json:"status"`
+	Assistant      string              `json:"assistant,omitempty"`
+	Org            string              `json:"org,omitempty"`
+	Project        string              `json:"project,omitempty"`
+	Workspace      string              `json:"workspace,omitempty"`
+	SessionID      string              `json:"session_id,omitempty"`
+	PlanSummary    string              `json:"plan_summary,omitempty"`
+	ExecutionState *TaskExecutionState `json:"execution_state,omitempty"`
+	Evidence       []*TaskEvidence     `json:"evidence,omitempty"`
+	RecoveryPoint  *TaskRecoveryPoint  `json:"recovery_point,omitempty"`
+	Artifacts      []*TaskArtifact     `json:"artifacts,omitempty"`
+	Result         string              `json:"result,omitempty"`
+	Error          string              `json:"error,omitempty"`
+	CreatedAt      time.Time           `json:"created_at"`
+	StartedAt      string              `json:"started_at,omitempty"`
+	CompletedAt    string              `json:"completed_at,omitempty"`
+	LastUpdatedAt  time.Time           `json:"last_updated_at"`
+}
+
+type TaskEvidence struct {
+	ID        string         `json:"id"`
+	Kind      string         `json:"kind"`
+	Summary   string         `json:"summary"`
+	Detail    string         `json:"detail,omitempty"`
+	StepIndex int            `json:"step_index,omitempty"`
+	Status    string         `json:"status,omitempty"`
+	ToolName  string         `json:"tool_name,omitempty"`
+	Source    string         `json:"source,omitempty"`
+	Data      map[string]any `json:"data,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+type TaskRecoveryPoint struct {
+	Kind      string         `json:"kind"`
+	Summary   string         `json:"summary,omitempty"`
+	StepIndex int            `json:"step_index,omitempty"`
+	Status    string         `json:"status,omitempty"`
+	SessionID string         `json:"session_id,omitempty"`
+	ToolName  string         `json:"tool_name,omitempty"`
+	Data      map[string]any `json:"data,omitempty"`
+	UpdatedAt time.Time      `json:"updated_at,omitempty"`
+}
+
+type TaskArtifact struct {
+	ID          string         `json:"id"`
+	Kind        string         `json:"kind"`
+	Label       string         `json:"label,omitempty"`
+	Path        string         `json:"path,omitempty"`
+	ToolName    string         `json:"tool_name,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Meta        map[string]any `json:"meta,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+}
+
+type TaskExecutionState struct {
+	DesktopPlan *appstate.DesktopPlanExecutionState `json:"desktop_plan,omitempty"`
 }
 
 type TaskStep struct {
@@ -464,6 +508,25 @@ func (s *Store) ListTaskApprovals(taskID string) []*Approval {
 	items := make([]*Approval, 0, len(s.approvals))
 	for _, approval := range s.approvals {
 		if taskID != "" && approval.TaskID != taskID {
+			continue
+		}
+		items = append(items, cloneApproval(approval))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].RequestedAt.After(items[j].RequestedAt)
+	})
+	return items
+}
+
+func (s *Store) ListSessionApprovals(sessionID string) []*Approval {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]*Approval, 0, len(s.approvals))
+	for _, approval := range s.approvals {
+		if sessionID != "" && approval.SessionID != sessionID {
+			continue
+		}
+		if strings.TrimSpace(approval.TaskID) != "" {
 			continue
 		}
 		items = append(items, cloneApproval(approval))
@@ -925,7 +988,7 @@ func (m *SessionManager) CreateWithOptions(opts SessionCreateOptions) (*Session,
 		ID:              m.nextID(),
 		Title:           opts.Title,
 		Agent:           primaryAgent,
-		Participants:    participants,
+		Participants:    nil,
 		Org:             opts.Org,
 		Project:         opts.Project,
 		Workspace:       opts.Workspace,
@@ -944,8 +1007,8 @@ func (m *SessionManager) CreateWithOptions(opts SessionCreateOptions) (*Session,
 		ThreadID:        opts.ThreadID,
 		TransportMeta:   cloneStringMap(opts.TransportMeta),
 		ParentSessionID: opts.ParentSessionID,
-		GroupKey:        opts.GroupKey,
-		IsGroup:         opts.IsGroup,
+		GroupKey:        "",
+		IsGroup:         false,
 		Presence:        "idle",
 		Typing:          false,
 		LastActiveAt:    now,
@@ -1117,8 +1180,12 @@ func (m *SessionManager) EnqueueTurn(sessionID string) (*Session, error) {
 }
 
 func defaultSessionMode(value string) string {
-	value = strings.TrimSpace(value)
+	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "" {
+		return "main"
+	}
+	switch value {
+	case "group", "group-shared", "channel-group":
 		return "main"
 	}
 	return value
@@ -1149,7 +1216,9 @@ func cloneSession(session *Session) *Session {
 	}
 	clone := *session
 	clone.TransportMeta = cloneStringMap(session.TransportMeta)
-	clone.Participants = append([]string(nil), session.Participants...)
+	clone.Participants = nil
+	clone.GroupKey = ""
+	clone.IsGroup = false
 	clone.History = append([]prompt.Message(nil), session.History...)
 	clone.Messages = cloneSessionMessages(session.Messages)
 	if len(clone.Messages) == 0 && len(clone.History) > 0 {
@@ -1232,17 +1301,12 @@ func buildPromptHistory(session *Session) []prompt.Message {
 		return append([]prompt.Message(nil), session.History...)
 	}
 	history := make([]prompt.Message, 0, len(messages))
-	group := len(normalizeParticipants(session.Agent, session.Participants)) > 1
 	for _, message := range messages {
 		switch message.Role {
 		case "user":
 			history = append(history, prompt.Message{Role: "user", Content: message.Content})
 		case "assistant":
-			content := message.Content
-			if group && message.Agent != "" {
-				content = fmt.Sprintf("[%s] %s", message.Agent, content)
-			}
-			history = append(history, prompt.Message{Role: "assistant", Content: content})
+			history = append(history, prompt.Message{Role: "assistant", Content: message.Content})
 		case "system":
 			history = append(history, prompt.Message{Role: "assistant", Content: fmt.Sprintf("[system] %s", message.Content)})
 		}
@@ -1294,7 +1358,69 @@ func cloneTask(task *Task) *Task {
 		return nil
 	}
 	clone := *task
+	clone.ExecutionState = cloneTaskExecutionState(task.ExecutionState)
+	clone.Evidence = cloneTaskEvidenceList(task.Evidence)
+	clone.RecoveryPoint = cloneTaskRecoveryPoint(task.RecoveryPoint)
+	clone.Artifacts = cloneTaskArtifactList(task.Artifacts)
 	return &clone
+}
+
+func cloneTaskEvidence(evidence *TaskEvidence) *TaskEvidence {
+	if evidence == nil {
+		return nil
+	}
+	clone := *evidence
+	clone.Data = cloneAnyMap(evidence.Data)
+	return &clone
+}
+
+func cloneTaskEvidenceList(items []*TaskEvidence) []*TaskEvidence {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]*TaskEvidence, 0, len(items))
+	for _, item := range items {
+		result = append(result, cloneTaskEvidence(item))
+	}
+	return result
+}
+
+func cloneTaskRecoveryPoint(point *TaskRecoveryPoint) *TaskRecoveryPoint {
+	if point == nil {
+		return nil
+	}
+	clone := *point
+	clone.Data = cloneAnyMap(point.Data)
+	return &clone
+}
+
+func cloneTaskArtifact(artifact *TaskArtifact) *TaskArtifact {
+	if artifact == nil {
+		return nil
+	}
+	clone := *artifact
+	clone.Meta = cloneAnyMap(artifact.Meta)
+	return &clone
+}
+
+func cloneTaskArtifactList(items []*TaskArtifact) []*TaskArtifact {
+	if len(items) == 0 {
+		return nil
+	}
+	result := make([]*TaskArtifact, 0, len(items))
+	for _, item := range items {
+		result = append(result, cloneTaskArtifact(item))
+	}
+	return result
+}
+
+func cloneTaskExecutionState(state *TaskExecutionState) *TaskExecutionState {
+	if state == nil {
+		return nil
+	}
+	cloned := *state
+	cloned.DesktopPlan = appstate.CloneDesktopPlanExecutionState(state.DesktopPlan)
+	return &cloned
 }
 
 func cloneTasks(tasks []*Task) []*Task {

@@ -11,29 +11,33 @@ import (
 )
 
 type AgentPackage struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	DisplayName  string   `json:"display_name"`
-	Description  string   `json:"description"`
-	Author       string   `json:"author"`
-	Version      string   `json:"version"`
-	Category     string   `json:"category"`
-	Tags         []string `json:"tags"`
-	Icon         string   `json:"icon,omitempty"`
-	Persona      string   `json:"persona"`
-	Domain       string   `json:"domain"`
-	Expertise    []string `json:"expertise"`
-	SystemPrompt string   `json:"system_prompt"`
-	Tone         string   `json:"tone"`
-	Style        string   `json:"style"`
-	Skills       []string `json:"skills"`
-	Permission   string   `json:"permission"`
-	Downloads    int      `json:"downloads"`
-	Rating       float64  `json:"rating"`
-	RatingCount  int      `json:"rating_count"`
-	IsBuiltin    bool     `json:"is_builtin"`
-	InstalledAt  string   `json:"installed_at,omitempty"`
-	UpdatedAt    string   `json:"updated_at"`
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	DisplayName  string        `json:"display_name"`
+	Description  string        `json:"description"`
+	Author       string        `json:"author"`
+	Version      string        `json:"version"`
+	Category     string        `json:"category"`
+	Tags         []string      `json:"tags"`
+	Icon         string        `json:"icon,omitempty"`
+	Persona      string        `json:"persona"`
+	Domain       string        `json:"domain"`
+	Expertise    []string      `json:"expertise"`
+	SystemPrompt string        `json:"system_prompt"`
+	Tone         string        `json:"tone"`
+	Style        string        `json:"style"`
+	Skills       []string      `json:"skills"`
+	Permission   string        `json:"permission"`
+	Downloads    int           `json:"downloads"`
+	Rating       float64       `json:"rating"`
+	RatingCount  int           `json:"rating_count"`
+	IsBuiltin    bool          `json:"is_builtin"`
+	InstalledAt  string        `json:"installed_at,omitempty"`
+	UpdatedAt    string        `json:"updated_at"`
+	Install      *InstallSpec  `json:"install,omitempty"`
+	Bundle       PackageBundle `json:"bundle"`
+
+	sourcePath string
 }
 
 type StoreFilter struct {
@@ -120,6 +124,7 @@ func (sm *storeManager) loadStorePackages() error {
 		}
 		if pkg.ID != "" {
 			pkg.UpdatedAt = time.Now().Format(time.RFC3339)
+			pkg.sourcePath = filepath.Join(storeDir, entry.Name())
 			sm.packages[pkg.ID] = &pkg
 		}
 	}
@@ -161,6 +166,7 @@ func (sm *storeManager) List(filter StoreFilter) []AgentPackage {
 			continue
 		}
 		p := *pkg
+		p.Bundle = summarizePackageBundle(p)
 		if sm.installedIDs[p.ID] {
 			p.InstalledAt = time.Now().Format(time.RFC3339)
 		}
@@ -212,6 +218,7 @@ func (sm *storeManager) Get(id string) (*AgentPackage, error) {
 		return nil, fmt.Errorf("agent package not found: %s", id)
 	}
 	p := *pkg
+	p.Bundle = summarizePackageBundle(p)
 	if sm.installedIDs[p.ID] {
 		p.InstalledAt = time.Now().Format(time.RFC3339)
 	}
@@ -223,14 +230,25 @@ func (sm *storeManager) Search(keyword string) []AgentPackage {
 }
 
 func (sm *storeManager) Install(id string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
+	sm.mu.RLock()
 	pkg, ok := sm.packages[id]
 	if !ok {
+		sm.mu.RUnlock()
 		return fmt.Errorf("agent package not found: %s", id)
 	}
+	if sm.installedIDs[id] {
+		sm.mu.RUnlock()
+		return nil
+	}
+	packageCopy := *pkg
+	sm.mu.RUnlock()
 
+	if err := sm.installPackage(packageCopy); err != nil {
+		return err
+	}
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	sm.installedIDs[id] = true
 	sm.saveInstalledMarkers()
 
@@ -241,13 +259,22 @@ func (sm *storeManager) Install(id string) error {
 }
 
 func (sm *storeManager) Uninstall(id string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
+	sm.mu.RLock()
 	if !sm.installedIDs[id] {
+		sm.mu.RUnlock()
 		return fmt.Errorf("agent not installed: %s", id)
 	}
+	packageCopy, _ := sm.packages[id]
+	sm.mu.RUnlock()
 
+	if packageCopy != nil {
+		if err := sm.uninstallPackage(*packageCopy); err != nil {
+			return err
+		}
+	}
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	delete(sm.installedIDs, id)
 	sm.saveInstalledMarkers()
 	return nil
@@ -261,6 +288,7 @@ func (sm *storeManager) Installed() []AgentPackage {
 	for id := range sm.installedIDs {
 		if pkg, ok := sm.packages[id]; ok {
 			p := *pkg
+			p.Bundle = summarizePackageBundle(p)
 			p.InstalledAt = time.Now().Format(time.RFC3339)
 			result = append(result, p)
 		}

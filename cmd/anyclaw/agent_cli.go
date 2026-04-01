@@ -6,10 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/chat"
 	"github.com/anyclaw/anyclaw/pkg/config"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
 	"github.com/anyclaw/anyclaw/pkg/ui"
@@ -52,7 +50,7 @@ func runAgentList() error {
 	}
 
 	fmt.Printf("%s\n\n", ui.Bold.Sprint("Available agents"))
-	fmt.Printf("  %sCurrent: %s%s\n\n", ui.Dim.Sprint(""), cfg.Agent.Name, ui.Reset.Sprint(""))
+	fmt.Printf("  %sCurrent: %s%s\n\n", ui.Dim.Sprint(""), cfg.ResolveMainAgentName(), ui.Reset.Sprint(""))
 
 	if len(cfg.Agent.Profiles) == 0 {
 		fmt.Println("  (no agent profiles configured in anyclaw.json)")
@@ -120,59 +118,26 @@ func runAgentChat(ctx context.Context, args []string) error {
 		*agentName = strings.Join(fs.Args(), " ")
 	}
 
-	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
-		ConfigPath: "anyclaw.json",
-		Progress:   func(ev appRuntime.BootEvent) {},
-	})
+	cfg, err := config.Load("anyclaw.json")
 	if err != nil {
-		return fmt.Errorf("bootstrap failed: %w", err)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
-
-	if app.Orchestrator == nil {
-		return fmt.Errorf("orchestrator is disabled; set orchestrator.enabled=true in anyclaw.json")
-	}
-
-	agents := app.Orchestrator.ListAgents()
-	if len(agents) == 0 {
-		return fmt.Errorf("no agents available")
-	}
-
 	if *agentName == "" {
-		fmt.Printf("%s\n\n", ui.Bold.Sprint("Choose an agent"))
-		for i, a := range agents {
-			domain := ""
-			if a.Domain != "" {
-				domain = " [" + a.Domain + "]"
-			}
-			fmt.Printf("  %s %s%s\n", ui.Cyan.Sprint(fmt.Sprintf("%d.", i+1)), ui.Bold.Sprint(a.Name), ui.Dim.Sprint(domain))
-			fmt.Printf("     %s\n\n", a.Description)
+		*agentName = cfg.ResolveMainAgentName()
+	} else if profile, ok := cfg.ResolveAgentProfile(*agentName); ok {
+		*agentName = profile.Name
+	} else if !strings.EqualFold(strings.TrimSpace(*agentName), cfg.ResolveMainAgentName()) {
+		if profile, ok := cfg.FindAgentProfile(*agentName); ok && !profile.IsEnabled() {
+			return fmt.Errorf("agent is disabled: %s", *agentName)
 		}
-		fmt.Printf("%sEnter agent number or name: %s", ui.Green.Sprint(""), ui.Reset.Sprint(""))
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-
-		if idx, err := strconv.Atoi(input); err == nil && idx >= 1 && idx <= len(agents) {
-			*agentName = agents[idx-1].Name
-		} else {
-			*agentName = input
-		}
-	}
-
-	found := false
-	for _, a := range agents {
-		if a.Name == *agentName {
-			found = true
-			break
-		}
-	}
-	if !found {
 		return fmt.Errorf("agent not found: %s", *agentName)
 	}
 
-	chatMgr := chat.NewChatManager(app.Orchestrator)
+	app, err := appRuntime.NewTargetApp("anyclaw.json", *agentName, "")
+	if err != nil {
+		return fmt.Errorf("bootstrap failed: %w", err)
+	}
 	reader := bufio.NewReader(os.Stdin)
-	var sessionID string
 
 	fmt.Println()
 	printSuccess("Chatting with [%s] (/exit to quit, /clear to reset)", *agentName)
@@ -194,22 +159,17 @@ func runAgentChat(ctx context.Context, args []string) error {
 			break
 		}
 		if input == "/clear" {
-			sessionID = ""
+			app.Agent.ClearHistory()
 			printSuccess("Chat history cleared")
 			continue
 		}
 
-		resp, err := chatMgr.Chat(ctx, chat.ChatRequest{
-			AgentName: *agentName,
-			SessionID: sessionID,
-			Message:   input,
-		})
+		resp, err := app.Agent.Run(ctx, input)
 		if err != nil {
 			printError("%v", err)
 			continue
 		}
-		sessionID = resp.SessionID
-		fmt.Printf("\n%s\n\n", ui.Bold.Sprint(resp.Message.Content))
+		fmt.Printf("\n%s\n\n", ui.Bold.Sprint(resp))
 	}
 	return nil
 }

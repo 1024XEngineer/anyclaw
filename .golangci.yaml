@@ -1,0 +1,34 @@
+run:
+  timeout: 5m
+  tests: false
+
+linters:
+  enable:
+    - gofmt
+    - goimports
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    - errcheck
+    - gosec
+    - prealloc
+
+linters-settings:
+  govet:
+    check-type-assertion: true
+  errcheck:
+    check-type-assertion: true
+  gosec:
+    excludes:
+      - G104  # G104: IO checks are disabled
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  format: colored-line-number

@@ -11,13 +11,16 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/memory"
+	"github.com/anyclaw/anyclaw/pkg/plugin"
 	"github.com/anyclaw/anyclaw/pkg/prompt"
 	"github.com/anyclaw/anyclaw/pkg/skills"
 	"github.com/anyclaw/anyclaw/pkg/tools"
+	"github.com/anyclaw/anyclaw/pkg/workspace"
 )
 
 type LLMCaller interface {
 	Chat(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition) (*llm.Response, error)
+	StreamChat(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, onChunk func(string)) error
 	Name() string
 }
 
@@ -28,6 +31,7 @@ type Agent struct {
 	skills             *skills.SkillsManager
 	tools              *tools.Registry
 	workDir            string
+	workingDir         string
 	history            []prompt.Message
 	maxToolCalls       int
 	observer           Observer
@@ -44,6 +48,7 @@ type Config struct {
 	Skills      *skills.SkillsManager
 	Tools       *tools.Registry
 	WorkDir     string
+	WorkingDir  string
 }
 
 var (
@@ -63,6 +68,7 @@ func New(cfg Config) *Agent {
 		skills:       cfg.Skills,
 		tools:        cfg.Tools,
 		workDir:      cfg.WorkDir,
+		workingDir:   cfg.WorkingDir,
 		history:      []prompt.Message{},
 		maxToolCalls: 10,
 	}
@@ -70,6 +76,9 @@ func New(cfg Config) *Agent {
 
 func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	a.resetToolActivities()
+	if bootstrapResult, handled, err := a.handleBootstrapRitual(userInput); handled {
+		return bootstrapResult, err
+	}
 	systemPrompt, err := a.buildSystemPrompt()
 	if err != nil {
 		return "", fmt.Errorf("failed to build system prompt: %w", err)
@@ -92,11 +101,62 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	return response, nil
 }
 
+func (a *Agent) RunStream(ctx context.Context, userInput string, onChunk func(string)) error {
+	a.resetToolActivities()
+
+	a.history = append(a.history, prompt.Message{Role: "user", Content: userInput})
+	messages := a.buildMessages("")
+	toolDefs := a.buildToolDefinitions()
+
+	err := a.llm.StreamChat(ctx, messages, toolDefs, func(chunk string) {
+		onChunk(chunk)
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (a *Agent) handleBootstrapRitual(userInput string) (string, bool, error) {
+	if strings.TrimSpace(a.workingDir) == "" {
+		return "", false, nil
+	}
+	result, err := workspace.AdvanceBootstrapRitual(a.workingDir, userInput, workspace.BootstrapRitualOptions{
+		AgentName:        a.config.Name,
+		AgentDescription: a.config.Description,
+	})
+	if err != nil {
+		return "", true, err
+	}
+	if result == nil || !result.Active {
+		return "", false, nil
+	}
+	a.history = append(a.history, prompt.Message{Role: "user", Content: userInput})
+	a.history = append(a.history, prompt.Message{Role: "assistant", Content: result.Response})
+	a.recordConversation(userInput, result.Response)
+	return result.Response, true, nil
+}
+
 func (a *Agent) chatWithTools(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (string, error) {
 	for toolCalls := 0; ; toolCalls++ {
 		resp, err := a.llm.Chat(ctx, messages, toolDefs)
 		if err != nil {
 			return "", fmt.Errorf("LLM error: %w", err)
+		}
+
+		if len(resp.ToolCalls) == 0 {
+			if result, handled, err := a.executeProtocolResponse(ctx, resp); handled {
+				if err != nil {
+					return "", err
+				}
+				if toolCalls >= a.maxToolCalls {
+					return result + "\n\n[Max tool calls reached]", nil
+				}
+				messages = append(messages, llm.Message{Role: "assistant", Content: resp.Content})
+				messages = append(messages, llm.Message{Role: "user", Content: a.protocolContinuationPrompt(result)})
+				continue
+			}
 		}
 
 		calls := a.extractToolCalls(resp)
@@ -132,9 +192,7 @@ func (a *Agent) chatWithTools(ctx context.Context, messages []llm.Message, toolD
 
 		messages = append(messages, assistantCallMsg)
 		messages = append(messages, toolMessages...)
-		if len(toolMessages) == 0 {
-			messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("Tool results:\n%s\n\nContinue if needed.", strings.Join(results, "\n"))})
-		}
+		messages = append(messages, llm.Message{Role: "user", Content: a.toolContinuationPrompt(results)})
 	}
 }
 
@@ -252,6 +310,26 @@ func (a *Agent) executeTool(ctx context.Context, tc ToolCall) (string, error) {
 	return result, nil
 }
 
+func (a *Agent) executeProtocolResponse(ctx context.Context, resp *llm.Response) (string, bool, error) {
+	if resp == nil || a.tools == nil {
+		return "", false, nil
+	}
+	for _, payload := range extractProtocolPayloads(resp.Content) {
+		result, handled, err := plugin.ExecuteProtocolOutput(ctx, a.tools, plugin.ProtocolExecutionMeta{
+			ToolName: "agent_desktop_plan",
+			App:      strings.TrimSpace(a.config.Name),
+			Action:   "user_request",
+			Input: map[string]any{
+				"request": a.latestUserInput(),
+			},
+		}, payload)
+		if handled {
+			return result, true, err
+		}
+	}
+	return "", false, nil
+}
+
 func (a *Agent) defaultBrowserSessionID() string {
 	for i := len(a.history) - 1; i >= 0; i-- {
 		msg := a.history[i]
@@ -262,29 +340,102 @@ func (a *Agent) defaultBrowserSessionID() string {
 	return "agent-default"
 }
 
-func (a *Agent) buildSystemPrompt() (string, error) {
-	memoryContent, _ := a.memory.FormatAsMarkdown()
+func (a *Agent) latestUserInput() string {
+	for i := len(a.history) - 1; i >= 0; i-- {
+		if strings.TrimSpace(a.history[i].Role) == "user" && strings.TrimSpace(a.history[i].Content) != "" {
+			return strings.TrimSpace(a.history[i].Content)
+		}
+	}
+	return ""
+}
 
-	toolList := a.tools.List()
-	toolInfos := make([]prompt.ToolInfo, len(toolList))
-	for i, t := range toolList {
-		toolInfos[i] = prompt.ToolInfo{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
+func (a *Agent) protocolContinuationPrompt(result string) string {
+	lines := []string{
+		"Desktop plan execution result:",
+		strings.TrimSpace(result),
+		"",
+		"Treat this as observable evidence about the current world state.",
+		"Decide whether the user's requested outcome is now complete.",
+		"If more work is still genuinely required, continue with the next best action or emit another desktop plan only for the remaining work.",
+		"Before claiming completion, verify the requested outcome with the most reliable available checks.",
+		"When you finish, provide a concise user-facing update that states what was done, what was verified, and anything still blocked or unverified.",
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (a *Agent) toolContinuationPrompt(results []string) string {
+	lines := []string{
+		"Tool results above are evidence about the current world state, not proof that the task is fully complete.",
+	}
+	if len(results) > 0 {
+		lines = append(lines, "Latest evidence:")
+		for _, item := range limitStrings(results, 8) {
+			lines = append(lines, "- "+item)
+		}
+	}
+	lines = append(lines,
+		"Use the observed state to decide the next step.",
+		"If the requested outcome is not there yet, keep working or switch strategy instead of guessing.",
+		"Before claiming completion, verify the outcome with the strongest available checks such as files, command output, browser state, UI inspection, OCR, screenshots, or app/window state.",
+		"If part of the task is done but not yet verified, continue or say exactly what remains unconfirmed.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func (a *Agent) buildSystemPrompt() (string, error) {
+	memoryContent := ""
+	if a.memory != nil {
+		memoryContent, _ = a.memory.FormatAsMarkdown()
+	}
+
+	workspaceFiles := []prompt.WorkspaceFile{}
+	if strings.TrimSpace(a.workingDir) != "" {
+		files, err := workspace.LoadBootstrapFiles(a.workingDir, workspace.BootstrapOptions{})
+		if err == nil {
+			workspaceFiles = make([]prompt.WorkspaceFile, 0, len(files))
+			for _, file := range files {
+				workspaceFiles = append(workspaceFiles, prompt.WorkspaceFile{
+					Name:    file.Name,
+					Content: file.Content,
+				})
+			}
+			if workspace.HasInjectedMemoryFile(files) && strings.Contains(strings.TrimSpace(memoryContent), "(No entries)") {
+				memoryContent = ""
+			}
 		}
 	}
 
-	data := prompt.PromptData{
-		Name:         a.config.Name,
-		Description:  strings.TrimSpace(strings.Join([]string{a.config.Description, a.config.Personality}, "\n\n")),
-		Memory:       memoryContent,
-		SkillPrompts: a.skills.GetSystemPrompts(),
-		Tools:        toolInfos,
-		History:      a.history,
+	var toolInfos []prompt.ToolInfo
+	if a.tools != nil {
+		toolList := a.tools.List()
+		toolInfos = make([]prompt.ToolInfo, len(toolList))
+		for i, t := range toolList {
+			toolInfos[i] = prompt.ToolInfo{
+				Name:        t.Name,
+				Description: t.Description,
+				InputSchema: t.InputSchema,
+			}
+		}
 	}
 
-	return prompt.BuildSystemPrompt(a.config.Name, a.config.Description, data)
+	var skillPrompts []string
+	if a.skills != nil {
+		skillPrompts = a.skills.GetSystemPrompts()
+	}
+
+	description := strings.TrimSpace(strings.Join(compactStrings(a.config.Description, a.config.Personality), "\n\n"))
+	data := prompt.PromptData{
+		Name:           a.config.Name,
+		Description:    description,
+		WorkingDir:     a.workingDir,
+		Memory:         memoryContent,
+		SkillPrompts:   skillPrompts,
+		Tools:          toolInfos,
+		WorkspaceFiles: workspaceFiles,
+		History:        a.history,
+	}
+
+	return prompt.BuildSystemPrompt(a.config.Name, description, data)
 }
 
 func (a *Agent) buildMessages(systemPrompt string) []llm.Message {
@@ -339,8 +490,56 @@ func sanitizeBrowserSessionID(input string) string {
 	return input
 }
 
+func extractProtocolPayloads(content string) [][]byte {
+	items := make([][]byte, 0, 2)
+	seen := map[string]bool{}
+	appendCandidate := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || seen[candidate] {
+			return
+		}
+		seen[candidate] = true
+		items = append(items, []byte(candidate))
+	}
+	appendCandidate(content)
+	for _, match := range codeBlockRegex.FindAllStringSubmatch(content, -1) {
+		if len(match) > 1 {
+			appendCandidate(match[1])
+		}
+	}
+	return items
+}
+
+func compactStrings(items ...string) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func limitStrings(items []string, limit int) []string {
+	if limit <= 0 || len(items) <= limit {
+		return append([]string(nil), items...)
+	}
+	result := append([]string(nil), items[:limit]...)
+	result = append(result, fmt.Sprintf("...and %d more result(s)", len(items)-limit))
+	return result
+}
+
 func (a *Agent) ShowMemory() (string, error) {
 	return a.memory.FormatAsMarkdown()
+}
+
+func (a *Agent) recordConversation(userInput string, response string) {
+	if a.memory == nil {
+		return
+	}
+	_ = a.memory.Add(memory.MemoryEntry{Type: "conversation", Role: "user", Content: userInput})
+	_ = a.memory.Add(memory.MemoryEntry{Type: "conversation", Role: "assistant", Content: response})
 }
 
 func (a *Agent) ListSkills() []skills.SkillInfo {

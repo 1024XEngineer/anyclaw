@@ -82,19 +82,19 @@ func (u *UI) Printf(format string, args ...interface{}) {
 }
 
 func (u *UI) Success(text string) {
-	u.Println(Success.Sprint("✓ ") + text)
+	u.Println(Success.Sprint("[ok] ") + text)
 }
 
 func (u *UI) Error(text string) {
-	u.Println(Error.Sprint("✗ ") + text)
+	u.Println(Error.Sprint("[err] ") + text)
 }
 
 func (u *UI) Info(text string) {
-	u.Println(Info.Sprint("ℹ ") + text)
+	u.Println(Info.Sprint("[info] ") + text)
 }
 
 func (u *UI) Warning(text string) {
-	u.Println(Warning.Sprint("⚠ ") + text)
+	u.Println(Warning.Sprint("[warn] ") + text)
 }
 
 func (u *UI) Header(text string) {
@@ -111,7 +111,7 @@ func (u *UI) KeyValue(key string, value ...interface{}) {
 }
 
 func (u *UI) Divider() {
-	u.Println(Dim.Sprint(strings.Repeat("─", 50)))
+	u.Println(Dim.Sprint(strings.Repeat("-", 50)))
 }
 
 func (u *UI) Spacer() {
@@ -120,48 +120,55 @@ func (u *UI) Spacer() {
 
 func (u *UI) Box(title, content string) {
 	lines := strings.Split(content, "\n")
-	width := 60
-	if len(title) > width-4 {
-		width = len(title) + 6
+	width := len(title) + 4
+	if width < 24 {
+		width = 24
 	}
 	for _, line := range lines {
-		if len(line) > width-4 {
-			width = len(line) + 6
+		if lineWidth := len(line) + 4; lineWidth > width {
+			width = lineWidth
 		}
 	}
 
-	border := "┌" + strings.Repeat("─", width-2) + "┐"
-	bottom := "└" + strings.Repeat("─", width-2) + "┘"
+	top := "+" + strings.Repeat("-", width-2) + "+"
+	separator := "|" + strings.Repeat("-", width-2) + "|"
 
 	u.Println("")
-	u.Println(Cyan.Sprint(border))
-	u.Println(Cyan.Sprint("│ ") + Bold.Sprint(title) + strings.Repeat(" ", width-4-len(title)) + Cyan.Sprint(" │"))
-	u.Println(Cyan.Sprint("├") + strings.Repeat("─", width-2) + Cyan.Sprint("┤"))
-
+	u.Println(Cyan.Sprint(top))
+	u.Println(Cyan.Sprint("| ") + Bold.Sprint(title) + strings.Repeat(" ", width-4-len(title)) + Cyan.Sprint(" |"))
+	u.Println(Cyan.Sprint(separator))
 	for _, line := range lines {
 		padding := width - 4 - len(line)
 		if padding < 0 {
 			padding = 0
 		}
-		u.Println(Cyan.Sprint("│ ") + line + strings.Repeat(" ", padding) + Cyan.Sprint(" │"))
+		u.Println(Cyan.Sprint("| ") + line + strings.Repeat(" ", padding) + Cyan.Sprint(" |"))
 	}
-
-	u.Println(Cyan.Sprint(bottom))
+	u.Println(Cyan.Sprint(top))
 	u.Println("")
 }
 
-func Banner() {
-	banner := `
-` + Cyan.Sprint(`    ╔══════════════════════════════════════════╗`) + `
-` + Cyan.Sprint(`    ║`) + `  ` + Bold.Sprint("AnyClaw") + `  ` + Dim.Sprint("v2026.3.13") + `
-` + Cyan.Sprint(`    ║`) + `  ` + Faint.Sprint("基于文件的记忆 AI 智能体") + `
-` + Cyan.Sprint(`    ╚══════════════════════════════════════════╝`)
+func Banner(version string) {
+	lines := []string{
+		"+--------------------------------------------------+",
+		fmt.Sprintf("| AnyClaw %-40s|", "v"+version),
+		"| Local-first AI agent workspace                  |",
+		"+--------------------------------------------------+",
+	}
 
-	fmt.Println(banner)
+	fmt.Println()
+	for i, line := range lines {
+		if i == 1 {
+			fmt.Println(Cyan.Sprint(line[:2]) + Bold.Sprint(line[2:len(line)-1]) + Cyan.Sprint(line[len(line)-1:]))
+			continue
+		}
+		fmt.Println(Cyan.Sprint(line))
+	}
+	fmt.Println()
 }
 
 func Prompt() string {
-	return Cyan.Sprint("❯ ") + " "
+	return Cyan.Sprint(">") + " "
 }
 
 func Response(text string) string {
@@ -173,6 +180,6 @@ func System(text string) string {
 }
 
 func Spinner(step int) string {
-	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	frames := []string{"-", "\\", "|", "/"}
 	return Cyan.Sprint(frames[step%len(frames)])
 }

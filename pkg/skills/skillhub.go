@@ -3,7 +3,6 @@ package skills
 import (
 	"archive/zip"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,34 +29,11 @@ type SkillhubSearchResult struct {
 }
 
 func SearchSkillhub(ctx context.Context, query string, limit int) ([]SkillhubSearchResult, error) {
-	if limit <= 0 {
-		limit = 10
-	}
+	limit = normalizeSearchLimit(limit)
 
 	searchURL := fmt.Sprintf("%s?q=%s&limit=%d", SKILLHUB_SEARCH_URL, url.QueryEscape(query), limit)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "AnyClaw-Skillhub/1.0")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search failed: status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
+	client := newRemoteClient(30 * time.Second)
 	var apiResponse struct {
 		Results []struct {
 			DisplayName string  `json:"displayName"`
@@ -68,7 +44,7 @@ func SearchSkillhub(ctx context.Context, query string, limit int) ([]SkillhubSea
 			Version     string  `json:"version"`
 		} `json:"results"`
 	}
-	if err := json.Unmarshal(body, &apiResponse); err != nil {
+	if err := fetchRemoteJSON(ctx, client, searchURL, &apiResponse); err != nil {
 		return nil, err
 	}
 
@@ -88,23 +64,8 @@ func SearchSkillhub(ctx context.Context, query string, limit int) ([]SkillhubSea
 func InstallSkillhubSkill(ctx context.Context, skillName string, destDir string) error {
 	downloadURL := fmt.Sprintf("%s?slug=%s", SKILLHUB_DOWNLOAD_URL, url.QueryEscape(skillName))
 
-	client := &http.Client{
-		Timeout: 60 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("User-Agent", "AnyClaw-Skillhub/1.0")
-
-	resp, err := client.Do(req)
+	client := newRemoteDownloadClient(60 * time.Second)
+	resp, err := doRemoteRequest(ctx, client, downloadURL)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
@@ -152,12 +113,14 @@ func extractZip(zipPath, destDir string) error {
 	for _, file := range reader.File {
 		path := filepath.Join(destDir, file.Name)
 
-		if !strings.HasPrefix(filepath.Clean(path), filepath.Clean(destDir)) {
+		if !pathWithinBase(destDir, path) {
 			return fmt.Errorf("invalid file path: %s", file.Name)
 		}
 
 		if file.FileInfo().IsDir() {
-			os.MkdirAll(path, file.Mode())
+			if err := os.MkdirAll(path, file.Mode()); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -205,7 +168,12 @@ func ConvertSkillhubToSkillJSON(skillDir string) error {
 		return err
 	}
 
-	lines := strings.Split(string(content), "\n")
+	definition := buildSkillhubFileDefinition(skillDir, string(content))
+	return writeSkillFile(skillDir, definition)
+}
+
+func buildSkillhubFileDefinition(skillDir string, content string) skillFileDefinition {
+	lines := strings.Split(content, "\n")
 	var name, description, systemPrompt strings.Builder
 	inFrontmatter := false
 	frontmatterDone := false
@@ -247,17 +215,15 @@ func ConvertSkillhubToSkillJSON(skillDir string) error {
 		systemPrompt.WriteString("You are a helpful assistant.")
 	}
 
-	skillJSON := fmt.Sprintf(`{
-  "name": %q,
-  "description": %q,
-  "version": "1.0.0",
-  "source": "skillhub",
-  "prompts": {
-    "system": %q
-  }
-}`, name.String(), description.String(), systemPrompt.String())
-
-	return os.WriteFile(skillJSONPath, []byte(skillJSON), 0644)
+	return skillFileDefinition{
+		Name:        name.String(),
+		Description: description.String(),
+		Version:     "1.0.0",
+		Source:      "skillhub",
+		Prompts: map[string]string{
+			"system": strings.TrimSpace(systemPrompt.String()),
+		},
+	}
 }
 
 func IsSkillhubInstalled() bool {
@@ -285,7 +251,7 @@ func SearchSkillhubCatalog(ctx context.Context, query string, limit int) ([]Skil
 			Registry:    "skillhub",
 			Homepage:    r.URL,
 			Source:      r.URL,
-			InstallHint: "anyclaw skillhub install " + r.Name,
+			InstallHint: "anyclaw clawhub install " + r.Name,
 		})
 	}
 

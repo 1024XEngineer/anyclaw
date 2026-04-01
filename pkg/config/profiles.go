@@ -1,9 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
+
+var mainAgentAliasReplacer = strings.NewReplacer("-", "", "_", "", " ", "")
 
 func (p ProviderProfile) IsEnabled() bool {
 	return p.Enabled == nil || *p.Enabled
@@ -25,6 +28,19 @@ func Float64Ptr(value float64) *float64 {
 	return &value
 }
 
+func normalizeAgentAlias(name string) string {
+	return mainAgentAliasReplacer.Replace(strings.ToLower(strings.TrimSpace(name)))
+}
+
+func IsMainAgentAlias(name string) bool {
+	switch normalizeAgentAlias(name) {
+	case "mainagent", "defaultagent":
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Config) FindAgentProfile(name string) (AgentProfile, bool) {
 	needle := strings.TrimSpace(strings.ToLower(name))
 	for _, profile := range c.Agent.Profiles {
@@ -35,9 +51,49 @@ func (c *Config) FindAgentProfile(name string) (AgentProfile, bool) {
 	return AgentProfile{}, false
 }
 
-func (c *Config) ApplyAgentProfile(name string) bool {
+func (c *Config) ResolveMainAgentProfile() (AgentProfile, bool) {
+	for _, name := range []string{c.Agent.ActiveProfile, c.Agent.Name} {
+		profile, ok := c.FindAgentProfile(name)
+		if ok && profile.IsEnabled() {
+			return profile, true
+		}
+	}
+	return AgentProfile{}, false
+}
+
+func (c *Config) ResolveMainAgentName() string {
+	if profile, ok := c.ResolveMainAgentProfile(); ok {
+		return profile.Name
+	}
+	return strings.TrimSpace(c.Agent.Name)
+}
+
+func (c *Config) ResolveAgentProfile(name string) (AgentProfile, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" || IsMainAgentAlias(name) {
+		return c.ResolveMainAgentProfile()
+	}
 	profile, ok := c.FindAgentProfile(name)
 	if !ok || !profile.IsEnabled() {
+		return AgentProfile{}, false
+	}
+	return profile, true
+}
+
+func (c *Config) IsCurrentAgentProfile(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	if profile, ok := c.ResolveMainAgentProfile(); ok && strings.EqualFold(strings.TrimSpace(profile.Name), name) {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(c.Agent.Name), name)
+}
+
+func (c *Config) ApplyAgentProfile(name string) bool {
+	profile, ok := c.ResolveAgentProfile(name)
+	if !ok {
 		return false
 	}
 	if profile.Name != "" {
@@ -66,15 +122,19 @@ func (c *Config) ApplyAgentProfile(name string) bool {
 }
 
 func (c *Config) ApplyAgentRuntimeProfile(name string) bool {
-	profile, ok := c.FindAgentProfile(name)
-	if !ok || !profile.IsEnabled() {
+	profile, ok := c.ResolveAgentProfile(name)
+	if !ok {
 		return false
 	}
 	if profile.Name != "" {
 		c.Agent.Name = profile.Name
+		c.Agent.ActiveProfile = profile.Name
 	}
 	if profile.Description != "" {
 		c.Agent.Description = profile.Description
+	}
+	if profile.WorkingDir != "" {
+		c.Agent.WorkingDir = profile.WorkingDir
 	}
 	if profile.PermissionLevel != "" {
 		c.Agent.PermissionLevel = profile.PermissionLevel
@@ -93,6 +153,8 @@ func (c *Config) UpsertAgentProfile(profile AgentProfile) error {
 	profile.Description = strings.TrimSpace(profile.Description)
 	profile.Role = strings.TrimSpace(profile.Role)
 	profile.Persona = strings.TrimSpace(profile.Persona)
+	profile.AvatarPreset = strings.TrimSpace(profile.AvatarPreset)
+	profile.AvatarDataURL = strings.TrimSpace(profile.AvatarDataURL)
 	profile.Domain = strings.TrimSpace(profile.Domain)
 	profile.SystemPrompt = strings.TrimSpace(profile.SystemPrompt)
 	profile.WorkingDir = strings.TrimSpace(profile.WorkingDir)
@@ -143,6 +205,15 @@ func (c *Config) UpsertAgentProfile(profile AgentProfile) error {
 	profile.Skills = filteredSkills
 	if profile.Name == "" {
 		return os.ErrInvalid
+	}
+	if profile.AvatarDataURL != "" {
+		if !strings.HasPrefix(profile.AvatarDataURL, "data:image/") {
+			return fmt.Errorf("avatar_data_url must be a data:image/* URL")
+		}
+		if len(profile.AvatarDataURL) > 2_000_000 {
+			return fmt.Errorf("avatar_data_url is too large")
+		}
+		profile.AvatarPreset = ""
 	}
 	for i, existing := range c.Agent.Profiles {
 		if strings.EqualFold(strings.TrimSpace(existing.Name), profile.Name) {
@@ -207,6 +278,30 @@ func (c *Config) ApplyProviderProfile(ref string) bool {
 		}
 	}
 	return true
+}
+
+func (c *Config) FindDefaultProviderProfile() (ProviderProfile, bool) {
+	ref := strings.TrimSpace(c.LLM.DefaultProviderRef)
+	if ref == "" {
+		return ProviderProfile{}, false
+	}
+	return c.FindProviderProfile(ref)
+}
+
+func (c *Config) ApplyDefaultProviderProfile() bool {
+	if ref := strings.TrimSpace(c.LLM.DefaultProviderRef); ref != "" {
+		return c.ApplyProviderProfile(ref)
+	}
+	return false
+}
+
+func (c *Config) SetDefaultProviderProfile(ref string) bool {
+	provider, ok := c.FindProviderProfile(ref)
+	if !ok || !provider.IsEnabled() {
+		return false
+	}
+	c.LLM.DefaultProviderRef = provider.ID
+	return c.ApplyProviderProfile(provider.ID)
 }
 
 func (c *Config) UpsertProviderProfile(provider ProviderProfile) error {

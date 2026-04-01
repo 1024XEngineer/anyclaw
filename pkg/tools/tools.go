@@ -4,6 +4,7 @@ import "context"
 
 func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 	RegisterFileTools(r, opts)
+	RegisterMemoryTools(r, opts)
 	RegisterWebTools(r, opts)
 	RegisterDesktopTools(r, opts)
 }
@@ -22,7 +23,7 @@ func RegisterFileTools(r *Registry, opts BuiltinOptions) {
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "read_file", input, func(ctx context.Context, input map[string]any) (string, error) {
-				return ReadFileToolWithCwd(ctx, input, workingDir)
+				return ReadFileToolWithPolicy(ctx, input, workingDir, opts)
 			})(ctx, input)
 		},
 	)
@@ -57,7 +58,7 @@ func RegisterFileTools(r *Registry, opts BuiltinOptions) {
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "list_directory", input, func(ctx context.Context, input map[string]any) (string, error) {
-				return ListDirectoryToolWithCwd(ctx, input, workingDir)
+				return ListDirectoryToolWithPolicy(ctx, input, workingDir, opts)
 			})(ctx, input)
 		},
 	)
@@ -75,7 +76,7 @@ func RegisterFileTools(r *Registry, opts BuiltinOptions) {
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "search_files", input, func(ctx context.Context, input map[string]any) (string, error) {
-				return SearchFilesToolWithCwd(ctx, input, workingDir)
+				return SearchFilesToolWithPolicy(ctx, input, workingDir, opts)
 			})(ctx, input)
 		},
 	)
@@ -95,6 +96,46 @@ func RegisterFileTools(r *Registry, opts BuiltinOptions) {
 		func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "run_command", input, func(ctx context.Context, input map[string]any) (string, error) {
 				return RunCommandToolWithPolicy(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+}
+
+func RegisterMemoryTools(r *Registry, opts BuiltinOptions) {
+	workingDir := opts.WorkingDir
+
+	r.RegisterTool(
+		"memory_search",
+		"Search daily workspace memory files under memory/*.md",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]string{"type": "string", "description": "Text to search for in daily memory files"},
+				"limit": map[string]string{"type": "number", "description": "Maximum number of matches to return"},
+				"date":  map[string]string{"type": "string", "description": "Optional day filter: YYYY-MM-DD, today, yesterday, or latest"},
+			},
+			"required": []string{"query"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "memory_search", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return MemorySearchToolWithCwd(ctx, input, workingDir)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"memory_get",
+		"Read a specific daily workspace memory file from memory/*.md",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"date": map[string]string{"type": "string", "description": "Target day: YYYY-MM-DD, today, yesterday, or latest"},
+			},
+			"required": []string{"date"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "memory_get", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return MemoryGetToolWithCwd(ctx, input, workingDir)
 			})(ctx, input)
 		},
 	)
@@ -194,7 +235,7 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 			"required": []string{"path"},
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
-			return BrowserScreenshotTool(ctx, input)
+			return BrowserScreenshotToolWithPolicy(ctx, input, opts)
 		},
 	)
 
@@ -211,7 +252,9 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 			},
 			"required": []string{"selector", "path"},
 		},
-		func(ctx context.Context, input map[string]any) (string, error) { return BrowserUploadTool(ctx, input) },
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserUploadToolWithPolicy(ctx, input, opts)
+		},
 	)
 
 	r.RegisterTool(
@@ -293,7 +336,7 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 			"required": []string{"path"},
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
-			return BrowserDownloadTool(ctx, input)
+			return BrowserDownloadToolWithPolicy(ctx, input, opts)
 		},
 	)
 
@@ -341,7 +384,9 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 			},
 			"required": []string{"path"},
 		},
-		func(ctx context.Context, input map[string]any) (string, error) { return BrowserPDFTool(ctx, input) },
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserPDFToolWithPolicy(ctx, input, opts)
+		},
 	)
 
 	r.RegisterTool(
@@ -452,6 +497,28 @@ func RegisterDesktopTools(r *Registry, opts BuiltinOptions) {
 	)
 
 	r.RegisterTool(
+		"desktop_type_human",
+		"Type text into the active desktop window with small delays to resemble human input",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text":        map[string]string{"type": "string", "description": "Text to send to the active window"},
+				"delay_ms":    map[string]string{"type": "number", "description": "Base delay between characters"},
+				"jitter_ms":   map[string]string{"type": "number", "description": "Additional random per-character delay"},
+				"pause_every": map[string]string{"type": "number", "description": "Insert a longer pause after this many characters"},
+				"pause_ms":    map[string]string{"type": "number", "description": "Duration of the longer pause"},
+				"submit":      map[string]string{"type": "boolean", "description": "Whether to press Enter after typing"},
+			},
+			"required": []string{"text"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_type_human", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopTypeHumanTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
 		"desktop_hotkey",
 		"Send a desktop hotkey chord to the active window",
 		map[string]any{
@@ -468,6 +535,55 @@ func RegisterDesktopTools(r *Registry, opts BuiltinOptions) {
 		func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "desktop_hotkey", input, func(ctx context.Context, input map[string]any) (string, error) {
 				return DesktopHotkeyTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_clipboard_set",
+		"Set text into the Windows clipboard",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text": map[string]string{"type": "string", "description": "Text to place on the clipboard"},
+			},
+			"required": []string{"text"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_clipboard_set", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopClipboardSetTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_clipboard_get",
+		"Read text from the Windows clipboard",
+		map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_clipboard_get", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopClipboardGetTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_paste",
+		"Paste the current clipboard text, or set clipboard text and paste it into the active window",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text":    map[string]string{"type": "string", "description": "Optional text to place on the clipboard before pasting"},
+				"wait_ms": map[string]string{"type": "number", "description": "Optional pause before sending Ctrl+V"},
+				"submit":  map[string]string{"type": "boolean", "description": "Whether to press Enter after pasting"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_paste", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopPasteTool(ctx, input, opts)
 			})(ctx, input)
 		},
 	)
@@ -492,6 +608,396 @@ func RegisterDesktopTools(r *Registry, opts BuiltinOptions) {
 	)
 
 	r.RegisterTool(
+		"desktop_move",
+		"Move the mouse cursor to a desktop screen coordinate",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"x": map[string]string{"type": "number", "description": "Screen X coordinate"},
+				"y": map[string]string{"type": "number", "description": "Screen Y coordinate"},
+			},
+			"required": []string{"x", "y"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_move", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopMoveTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_double_click",
+		"Double click a desktop screen coordinate on the host",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"x":           map[string]string{"type": "number", "description": "Screen X coordinate"},
+				"y":           map[string]string{"type": "number", "description": "Screen Y coordinate"},
+				"button":      map[string]string{"type": "string", "description": "Optional mouse button: left, right, middle"},
+				"interval_ms": map[string]string{"type": "number", "description": "Delay between clicks in milliseconds"},
+			},
+			"required": []string{"x", "y"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_double_click", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopDoubleClickTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_scroll",
+		"Scroll the mouse wheel on the desktop host",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"x":         map[string]string{"type": "number", "description": "Optional screen X coordinate"},
+				"y":         map[string]string{"type": "number", "description": "Optional screen Y coordinate"},
+				"direction": map[string]string{"type": "string", "description": "Optional direction: up or down"},
+				"clicks":    map[string]string{"type": "number", "description": "Optional wheel clicks when direction is used"},
+				"delta":     map[string]string{"type": "number", "description": "Optional raw wheel delta override"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_scroll", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopScrollTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_drag",
+		"Drag the mouse from one desktop coordinate to another",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"x1":          map[string]string{"type": "number", "description": "Starting screen X coordinate"},
+				"y1":          map[string]string{"type": "number", "description": "Starting screen Y coordinate"},
+				"x2":          map[string]string{"type": "number", "description": "Ending screen X coordinate"},
+				"y2":          map[string]string{"type": "number", "description": "Ending screen Y coordinate"},
+				"button":      map[string]string{"type": "string", "description": "Optional mouse button: left, right, middle"},
+				"steps":       map[string]string{"type": "number", "description": "Optional number of interpolation steps"},
+				"duration_ms": map[string]string{"type": "number", "description": "Optional drag duration in milliseconds"},
+			},
+			"required": []string{"x1", "y1", "x2", "y2"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_drag", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopDragTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_wait",
+		"Pause desktop execution for a fixed number of milliseconds",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"wait_ms": map[string]string{"type": "number", "description": "Milliseconds to wait"},
+			},
+			"required": []string{"wait_ms"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_wait", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopWaitTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_list_windows",
+		"List desktop application windows on the local host",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":        map[string]string{"type": "string", "description": "Optional window title filter"},
+				"process_name": map[string]string{"type": "string", "description": "Optional process name filter, without .exe"},
+				"handle":       map[string]string{"type": "number", "description": "Optional native window handle filter"},
+				"match":        map[string]string{"type": "string", "description": "Optional title match mode: contains or exact"},
+				"active_only":  map[string]string{"type": "boolean", "description": "Whether to return only the focused window"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_list_windows", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopListWindowsTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_wait_window",
+		"Wait until a desktop application window appears on the local host",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":        map[string]string{"type": "string", "description": "Optional window title filter"},
+				"process_name": map[string]string{"type": "string", "description": "Optional process name filter, without .exe"},
+				"handle":       map[string]string{"type": "number", "description": "Optional native window handle filter"},
+				"match":        map[string]string{"type": "string", "description": "Optional title match mode: contains or exact"},
+				"active_only":  map[string]string{"type": "boolean", "description": "Whether to wait for a focused window"},
+				"timeout_ms":   map[string]string{"type": "number", "description": "Optional timeout in milliseconds"},
+				"interval_ms":  map[string]string{"type": "number", "description": "Optional poll interval in milliseconds"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_wait_window", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopWaitWindowTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_focus_window",
+		"Bring a desktop window to the foreground by title or process name",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":        map[string]string{"type": "string", "description": "Window title to match"},
+				"process_name": map[string]string{"type": "string", "description": "Process name to match, without .exe"},
+				"match":        map[string]string{"type": "string", "description": "Optional title match mode: contains or exact"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_focus_window", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopFocusWindowTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_inspect_ui",
+		"Inspect UI automation elements inside a desktop application window",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":             map[string]string{"type": "string", "description": "Window title to match"},
+				"process_name":      map[string]string{"type": "string", "description": "Process name to match, without .exe"},
+				"handle":            map[string]string{"type": "number", "description": "Optional native window handle"},
+				"match":             map[string]string{"type": "string", "description": "Optional match mode for title/name/class filters: contains or exact"},
+				"scope":             map[string]string{"type": "string", "description": "children or descendants"},
+				"name":              map[string]string{"type": "string", "description": "Optional visible control name filter"},
+				"automation_id":     map[string]string{"type": "string", "description": "Optional automation id filter"},
+				"class_name":        map[string]string{"type": "string", "description": "Optional class name filter"},
+				"control_type":      map[string]string{"type": "string", "description": "Optional control type filter, e.g. button or edit"},
+				"max_elements":      map[string]string{"type": "number", "description": "Optional maximum number of matching elements"},
+				"include_offscreen": map[string]string{"type": "boolean", "description": "Whether to include offscreen controls"},
+				"include_disabled":  map[string]string{"type": "boolean", "description": "Whether to include disabled controls"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_inspect_ui", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopInspectUITool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_invoke_ui",
+		"Invoke or click a UI automation control inside a desktop application window",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":             map[string]string{"type": "string", "description": "Window title to match"},
+				"process_name":      map[string]string{"type": "string", "description": "Process name to match, without .exe"},
+				"handle":            map[string]string{"type": "number", "description": "Optional native window handle"},
+				"match":             map[string]string{"type": "string", "description": "Optional match mode for title/name/class filters: contains or exact"},
+				"scope":             map[string]string{"type": "string", "description": "children or descendants"},
+				"name":              map[string]string{"type": "string", "description": "Optional visible control name filter"},
+				"automation_id":     map[string]string{"type": "string", "description": "Optional automation id filter"},
+				"class_name":        map[string]string{"type": "string", "description": "Optional class name filter"},
+				"control_type":      map[string]string{"type": "string", "description": "Optional control type filter, e.g. button or edit"},
+				"index":             map[string]string{"type": "number", "description": "Optional 1-based match index"},
+				"action":            map[string]string{"type": "string", "description": "auto, invoke, click, focus, select, expand, collapse, or toggle"},
+				"include_offscreen": map[string]string{"type": "boolean", "description": "Whether to include offscreen controls"},
+				"include_disabled":  map[string]string{"type": "boolean", "description": "Whether to include disabled controls"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_invoke_ui", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopInvokeUITool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_set_value_ui",
+		"Set the value of a UI automation input control inside a desktop application window",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":             map[string]string{"type": "string", "description": "Window title to match"},
+				"process_name":      map[string]string{"type": "string", "description": "Process name to match, without .exe"},
+				"handle":            map[string]string{"type": "number", "description": "Optional native window handle"},
+				"match":             map[string]string{"type": "string", "description": "Optional match mode for title/name/class filters: contains or exact"},
+				"scope":             map[string]string{"type": "string", "description": "children or descendants"},
+				"name":              map[string]string{"type": "string", "description": "Optional visible control name filter"},
+				"automation_id":     map[string]string{"type": "string", "description": "Optional automation id filter"},
+				"class_name":        map[string]string{"type": "string", "description": "Optional class name filter"},
+				"control_type":      map[string]string{"type": "string", "description": "Optional control type filter, e.g. edit or document"},
+				"index":             map[string]string{"type": "number", "description": "Optional 1-based match index"},
+				"value":             map[string]string{"type": "string", "description": "Text value to enter"},
+				"append":            map[string]string{"type": "boolean", "description": "Whether to append instead of replace"},
+				"submit":            map[string]string{"type": "boolean", "description": "Whether to press Enter after setting the value"},
+				"include_offscreen": map[string]string{"type": "boolean", "description": "Whether to include offscreen controls"},
+				"include_disabled":  map[string]string{"type": "boolean", "description": "Whether to include disabled controls"},
+			},
+			"required": []string{"value"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_set_value_ui", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopSetValueUITool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_resolve_target",
+		"Resolve a local desktop target by combining window, UI automation, OCR text, and image matching",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"strategy":          map[string]string{"type": "string", "description": "Optional single strategy: auto, window, ui, text, or image"},
+				"strategies":        map[string]string{"type": "array", "description": "Optional ordered strategy list: window, ui, text, image"},
+				"title":             map[string]string{"type": "string", "description": "Optional window title to match"},
+				"process_name":      map[string]string{"type": "string", "description": "Optional process name to match, without .exe"},
+				"handle":            map[string]string{"type": "number", "description": "Optional native window handle"},
+				"match":             map[string]string{"type": "string", "description": "Optional title/name/class match mode: contains or exact"},
+				"scope":             map[string]string{"type": "string", "description": "Optional UI automation scope: children or descendants"},
+				"name":              map[string]string{"type": "string", "description": "Optional UI automation control name"},
+				"automation_id":     map[string]string{"type": "string", "description": "Optional UI automation AutomationId"},
+				"class_name":        map[string]string{"type": "string", "description": "Optional UI automation class name"},
+				"control_type":      map[string]string{"type": "string", "description": "Optional UI automation control type"},
+				"index":             map[string]string{"type": "number", "description": "Optional 1-based UI match index"},
+				"include_offscreen": map[string]string{"type": "boolean", "description": "Whether to include offscreen UI controls"},
+				"include_disabled":  map[string]string{"type": "boolean", "description": "Whether to include disabled UI controls"},
+				"text":              map[string]string{"type": "string", "description": "Optional OCR text to find"},
+				"mode":              map[string]string{"type": "string", "description": "Optional OCR match mode: contains, exact, or regex"},
+				"ignore_case":       map[string]string{"type": "boolean", "description": "Whether OCR matching ignores case"},
+				"occurrence":        map[string]string{"type": "number", "description": "Optional 1-based OCR match occurrence"},
+				"min_confidence":    map[string]string{"type": "number", "description": "Optional minimum OCR confidence"},
+				"lang":              map[string]string{"type": "string", "description": "Optional Tesseract language code"},
+				"psm":               map[string]string{"type": "number", "description": "Optional Tesseract page segmentation mode"},
+				"oem":               map[string]string{"type": "number", "description": "Optional Tesseract OCR engine mode"},
+				"template_path":     map[string]string{"type": "string", "description": "Optional template image path"},
+				"threshold":         map[string]string{"type": "number", "description": "Optional image similarity threshold between 0 and 1"},
+				"path":              map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"require_found":     map[string]string{"type": "boolean", "description": "Whether to return an error when the target cannot be resolved"},
+				"crop_to_window":    map[string]string{"type": "boolean", "description": "Whether to crop vision matching to the selected window"},
+				"search_x":          map[string]string{"type": "number", "description": "Optional search area X coordinate for image matching"},
+				"search_y":          map[string]string{"type": "number", "description": "Optional search area Y coordinate for image matching"},
+				"search_width":      map[string]string{"type": "number", "description": "Optional search area width for image matching"},
+				"search_height":     map[string]string{"type": "number", "description": "Optional search area height for image matching"},
+				"step":              map[string]string{"type": "number", "description": "Optional coarse image search step in pixels"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_resolve_target", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopResolveTargetTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_activate_target",
+		"Activate a resolved desktop target by invoking a UI control or clicking the matched text, image, or window",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"strategy":          map[string]string{"type": "string", "description": "Optional single strategy: auto, window, ui, text, or image"},
+				"strategies":        map[string]string{"type": "array", "description": "Optional ordered strategy list: window, ui, text, image"},
+				"action":            map[string]string{"type": "string", "description": "Optional action: auto, click, double_click, focus, invoke, select, expand, collapse, or toggle"},
+				"button":            map[string]string{"type": "string", "description": "Optional mouse button for click-based fallback: left, right, middle"},
+				"interval_ms":       map[string]string{"type": "number", "description": "Optional double click interval in milliseconds"},
+				"title":             map[string]string{"type": "string", "description": "Optional window title to match"},
+				"process_name":      map[string]string{"type": "string", "description": "Optional process name to match, without .exe"},
+				"handle":            map[string]string{"type": "number", "description": "Optional native window handle"},
+				"match":             map[string]string{"type": "string", "description": "Optional title/name/class match mode: contains or exact"},
+				"scope":             map[string]string{"type": "string", "description": "Optional UI automation scope: children or descendants"},
+				"name":              map[string]string{"type": "string", "description": "Optional UI automation control name"},
+				"automation_id":     map[string]string{"type": "string", "description": "Optional UI automation AutomationId"},
+				"class_name":        map[string]string{"type": "string", "description": "Optional UI automation class name"},
+				"control_type":      map[string]string{"type": "string", "description": "Optional UI automation control type"},
+				"index":             map[string]string{"type": "number", "description": "Optional 1-based UI match index"},
+				"include_offscreen": map[string]string{"type": "boolean", "description": "Whether to include offscreen UI controls"},
+				"include_disabled":  map[string]string{"type": "boolean", "description": "Whether to include disabled UI controls"},
+				"text":              map[string]string{"type": "string", "description": "Optional OCR text to find"},
+				"mode":              map[string]string{"type": "string", "description": "Optional OCR match mode: contains, exact, or regex"},
+				"ignore_case":       map[string]string{"type": "boolean", "description": "Whether OCR matching ignores case"},
+				"occurrence":        map[string]string{"type": "number", "description": "Optional 1-based OCR match occurrence"},
+				"min_confidence":    map[string]string{"type": "number", "description": "Optional minimum OCR confidence"},
+				"lang":              map[string]string{"type": "string", "description": "Optional Tesseract language code"},
+				"psm":               map[string]string{"type": "number", "description": "Optional Tesseract page segmentation mode"},
+				"oem":               map[string]string{"type": "number", "description": "Optional Tesseract OCR engine mode"},
+				"template_path":     map[string]string{"type": "string", "description": "Optional template image path"},
+				"threshold":         map[string]string{"type": "number", "description": "Optional image similarity threshold between 0 and 1"},
+				"path":              map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"crop_to_window":    map[string]string{"type": "boolean", "description": "Whether to crop vision matching to the selected window"},
+				"search_x":          map[string]string{"type": "number", "description": "Optional search area X coordinate for image matching"},
+				"search_y":          map[string]string{"type": "number", "description": "Optional search area Y coordinate for image matching"},
+				"search_width":      map[string]string{"type": "number", "description": "Optional search area width for image matching"},
+				"search_height":     map[string]string{"type": "number", "description": "Optional search area height for image matching"},
+				"step":              map[string]string{"type": "number", "description": "Optional coarse image search step in pixels"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_activate_target", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopActivateTargetTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_set_target_value",
+		"Set text into a resolved desktop target, preferring UI automation and falling back to click-and-type",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"strategy":          map[string]string{"type": "string", "description": "Optional single strategy: auto, window, ui, text, or image"},
+				"strategies":        map[string]string{"type": "array", "description": "Optional ordered strategy list: window, ui, text, image"},
+				"title":             map[string]string{"type": "string", "description": "Optional window title to match"},
+				"process_name":      map[string]string{"type": "string", "description": "Optional process name to match, without .exe"},
+				"handle":            map[string]string{"type": "number", "description": "Optional native window handle"},
+				"match":             map[string]string{"type": "string", "description": "Optional title/name/class match mode: contains or exact"},
+				"scope":             map[string]string{"type": "string", "description": "Optional UI automation scope: children or descendants"},
+				"name":              map[string]string{"type": "string", "description": "Optional UI automation control name"},
+				"automation_id":     map[string]string{"type": "string", "description": "Optional UI automation AutomationId"},
+				"class_name":        map[string]string{"type": "string", "description": "Optional UI automation class name"},
+				"control_type":      map[string]string{"type": "string", "description": "Optional UI automation control type"},
+				"index":             map[string]string{"type": "number", "description": "Optional 1-based UI match index"},
+				"include_offscreen": map[string]string{"type": "boolean", "description": "Whether to include offscreen UI controls"},
+				"include_disabled":  map[string]string{"type": "boolean", "description": "Whether to include disabled UI controls"},
+				"text":              map[string]string{"type": "string", "description": "Optional OCR text to find"},
+				"mode":              map[string]string{"type": "string", "description": "Optional OCR match mode: contains, exact, or regex"},
+				"ignore_case":       map[string]string{"type": "boolean", "description": "Whether OCR matching ignores case"},
+				"occurrence":        map[string]string{"type": "number", "description": "Optional 1-based OCR match occurrence"},
+				"min_confidence":    map[string]string{"type": "number", "description": "Optional minimum OCR confidence"},
+				"lang":              map[string]string{"type": "string", "description": "Optional Tesseract language code"},
+				"psm":               map[string]string{"type": "number", "description": "Optional Tesseract page segmentation mode"},
+				"oem":               map[string]string{"type": "number", "description": "Optional Tesseract OCR engine mode"},
+				"template_path":     map[string]string{"type": "string", "description": "Optional template image path"},
+				"threshold":         map[string]string{"type": "number", "description": "Optional image similarity threshold between 0 and 1"},
+				"path":              map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"crop_to_window":    map[string]string{"type": "boolean", "description": "Whether to crop vision matching to the selected window"},
+				"search_x":          map[string]string{"type": "number", "description": "Optional search area X coordinate for image matching"},
+				"search_y":          map[string]string{"type": "number", "description": "Optional search area Y coordinate for image matching"},
+				"search_width":      map[string]string{"type": "number", "description": "Optional search area width for image matching"},
+				"search_height":     map[string]string{"type": "number", "description": "Optional search area height for image matching"},
+				"step":              map[string]string{"type": "number", "description": "Optional coarse image search step in pixels"},
+				"value":             map[string]string{"type": "string", "description": "Text value to enter"},
+				"append":            map[string]string{"type": "boolean", "description": "Whether to append instead of replacing the current value"},
+				"submit":            map[string]string{"type": "boolean", "description": "Whether to press Enter after entering the value"},
+			},
+			"required": []string{"value"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_set_target_value", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopSetTargetValueTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
 		"desktop_screenshot",
 		"Capture a screenshot of the desktop and save it to a file",
 		map[string]any{
@@ -504,6 +1010,230 @@ func RegisterDesktopTools(r *Registry, opts BuiltinOptions) {
 		func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "desktop_screenshot", input, func(ctx context.Context, input map[string]any) (string, error) {
 				return DesktopScreenshotTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_screenshot_window",
+		"Capture a screenshot of a desktop window and save it to a file",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":         map[string]string{"type": "string", "description": "Destination PNG path inside the working directory"},
+				"title":        map[string]string{"type": "string", "description": "Optional window title to match"},
+				"process_name": map[string]string{"type": "string", "description": "Optional process name to match, without .exe"},
+				"handle":       map[string]string{"type": "number", "description": "Optional native window handle"},
+				"match":        map[string]string{"type": "string", "description": "Optional title match mode: contains or exact"},
+				"active_only":  map[string]string{"type": "boolean", "description": "Whether to capture only a focused window match"},
+			},
+			"required": []string{"path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_screenshot_window", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopScreenshotWindowTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_match_image",
+		"Find a template image on the desktop or in a screenshot",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":          map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"template_path": map[string]string{"type": "string", "description": "Template image path to locate"},
+				"threshold":     map[string]string{"type": "number", "description": "Optional similarity threshold between 0 and 1"},
+				"search_x":      map[string]string{"type": "number", "description": "Optional search area X coordinate"},
+				"search_y":      map[string]string{"type": "number", "description": "Optional search area Y coordinate"},
+				"search_width":  map[string]string{"type": "number", "description": "Optional search area width"},
+				"search_height": map[string]string{"type": "number", "description": "Optional search area height"},
+				"step":          map[string]string{"type": "number", "description": "Optional coarse search step in pixels"},
+			},
+			"required": []string{"template_path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_match_image", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopMatchImageTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_click_image",
+		"Find a template image on the desktop and click its center",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":          map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"template_path": map[string]string{"type": "string", "description": "Template image path to locate"},
+				"threshold":     map[string]string{"type": "number", "description": "Optional similarity threshold between 0 and 1"},
+				"search_x":      map[string]string{"type": "number", "description": "Optional search area X coordinate"},
+				"search_y":      map[string]string{"type": "number", "description": "Optional search area Y coordinate"},
+				"search_width":  map[string]string{"type": "number", "description": "Optional search area width"},
+				"search_height": map[string]string{"type": "number", "description": "Optional search area height"},
+				"step":          map[string]string{"type": "number", "description": "Optional coarse search step in pixels"},
+				"button":        map[string]string{"type": "string", "description": "Optional mouse button: left, right, middle"},
+				"offset_x":      map[string]string{"type": "number", "description": "Optional X offset from the matched center"},
+				"offset_y":      map[string]string{"type": "number", "description": "Optional Y offset from the matched center"},
+				"double":        map[string]string{"type": "boolean", "description": "Optional double click toggle"},
+				"interval_ms":   map[string]string{"type": "number", "description": "Optional double click interval in milliseconds"},
+			},
+			"required": []string{"template_path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_click_image", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopClickImageTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_wait_image",
+		"Wait until a template image appears on the desktop",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"template_path": map[string]string{"type": "string", "description": "Template image path to locate"},
+				"threshold":     map[string]string{"type": "number", "description": "Optional similarity threshold between 0 and 1"},
+				"search_x":      map[string]string{"type": "number", "description": "Optional search area X coordinate"},
+				"search_y":      map[string]string{"type": "number", "description": "Optional search area Y coordinate"},
+				"search_width":  map[string]string{"type": "number", "description": "Optional search area width"},
+				"search_height": map[string]string{"type": "number", "description": "Optional search area height"},
+				"step":          map[string]string{"type": "number", "description": "Optional coarse search step in pixels"},
+				"timeout_ms":    map[string]string{"type": "number", "description": "Optional timeout in milliseconds"},
+				"interval_ms":   map[string]string{"type": "number", "description": "Optional poll interval in milliseconds"},
+			},
+			"required": []string{"template_path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_wait_image", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopWaitImageTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_ocr",
+		"Run OCR on the desktop or a screenshot image using the local OCR engine",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"lang": map[string]string{"type": "string", "description": "Optional Tesseract language code, e.g. eng or chi_sim"},
+				"psm":  map[string]string{"type": "number", "description": "Optional Tesseract page segmentation mode"},
+				"oem":  map[string]string{"type": "number", "description": "Optional Tesseract OCR engine mode"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_ocr", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopOCRTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_verify_text",
+		"Verify that OCR output contains expected text on the desktop",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":        map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"expected":    map[string]string{"type": "string", "description": "Expected OCR text"},
+				"mode":        map[string]string{"type": "string", "description": "contains, exact, or regex"},
+				"ignore_case": map[string]string{"type": "boolean", "description": "Whether to ignore case during matching"},
+				"lang":        map[string]string{"type": "string", "description": "Optional Tesseract language code"},
+				"psm":         map[string]string{"type": "number", "description": "Optional Tesseract page segmentation mode"},
+				"oem":         map[string]string{"type": "number", "description": "Optional Tesseract OCR engine mode"},
+			},
+			"required": []string{"expected"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_verify_text", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopVerifyTextTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_find_text",
+		"Find visible text on the desktop via OCR and return its screen bounds",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":           map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"text":           map[string]string{"type": "string", "description": "Visible text to locate"},
+				"mode":           map[string]string{"type": "string", "description": "contains, exact, or regex"},
+				"ignore_case":    map[string]string{"type": "boolean", "description": "Whether to ignore case during matching"},
+				"occurrence":     map[string]string{"type": "number", "description": "Optional 1-based match occurrence to return"},
+				"min_confidence": map[string]string{"type": "number", "description": "Optional minimum OCR confidence threshold"},
+				"lang":           map[string]string{"type": "string", "description": "Optional Tesseract language code"},
+				"psm":            map[string]string{"type": "number", "description": "Optional Tesseract page segmentation mode"},
+				"oem":            map[string]string{"type": "number", "description": "Optional Tesseract OCR engine mode"},
+			},
+			"required": []string{"text"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_find_text", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopFindTextTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_click_text",
+		"Find visible text on the desktop via OCR and click it",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":           map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"text":           map[string]string{"type": "string", "description": "Visible text to locate"},
+				"mode":           map[string]string{"type": "string", "description": "contains, exact, or regex"},
+				"ignore_case":    map[string]string{"type": "boolean", "description": "Whether to ignore case during matching"},
+				"occurrence":     map[string]string{"type": "number", "description": "Optional 1-based match occurrence to return"},
+				"min_confidence": map[string]string{"type": "number", "description": "Optional minimum OCR confidence threshold"},
+				"lang":           map[string]string{"type": "string", "description": "Optional Tesseract language code"},
+				"psm":            map[string]string{"type": "number", "description": "Optional Tesseract page segmentation mode"},
+				"oem":            map[string]string{"type": "number", "description": "Optional Tesseract OCR engine mode"},
+				"button":         map[string]string{"type": "string", "description": "Optional mouse button: left, right, middle"},
+				"offset_x":       map[string]string{"type": "number", "description": "Optional X offset from the matched center"},
+				"offset_y":       map[string]string{"type": "number", "description": "Optional Y offset from the matched center"},
+				"double":         map[string]string{"type": "boolean", "description": "Optional double click toggle"},
+				"interval_ms":    map[string]string{"type": "number", "description": "Optional double click interval in milliseconds"},
+			},
+			"required": []string{"text"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_click_text", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopClickTextTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"desktop_wait_text",
+		"Wait until visible text appears on the desktop via OCR",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"text":           map[string]string{"type": "string", "description": "Visible text to wait for"},
+				"path":           map[string]string{"type": "string", "description": "Optional screenshot path; omit to capture the current desktop"},
+				"mode":           map[string]string{"type": "string", "description": "contains, exact, or regex"},
+				"ignore_case":    map[string]string{"type": "boolean", "description": "Whether to ignore case during matching"},
+				"occurrence":     map[string]string{"type": "number", "description": "Optional 1-based match occurrence to return"},
+				"min_confidence": map[string]string{"type": "number", "description": "Optional minimum OCR confidence threshold"},
+				"timeout_ms":     map[string]string{"type": "number", "description": "Optional timeout in milliseconds"},
+				"interval_ms":    map[string]string{"type": "number", "description": "Optional poll interval in milliseconds"},
+				"lang":           map[string]string{"type": "string", "description": "Optional Tesseract language code"},
+				"psm":            map[string]string{"type": "number", "description": "Optional Tesseract page segmentation mode"},
+				"oem":            map[string]string{"type": "number", "description": "Optional Tesseract OCR engine mode"},
+			},
+			"required": []string{"text"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "desktop_wait_text", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return DesktopWaitTextTool(ctx, input, opts)
 			})(ctx, input)
 		},
 	)
