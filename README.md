@@ -86,6 +86,32 @@ workflows/       workspace bootstrap files
 - The web control page lives under `/control/`.
 - The canvas page lives under `/canvas/`.
 
+## 中文显示说明
+
+在 Windows 环境下运行 AnyClaw 时，如果控制台显示中文乱码，请先设置 UTF-8 代码页：
+
+```bash
+chcp 65001
+```
+
+或者在 PowerShell 中运行：
+
+```powershell
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+```
+
+## 快速修复脚本
+
+创建一个 `run-anyclaw.bat` 文件，内容如下：
+
+```batch
+@echo off
+chcp 65001 >nul
+anyclaw.exe %*
+```
+
+然后使用 `run-anyclaw.bat` 启动 AnyClaw，即可正确显示中文。
+
 ## Version
 
 `2026.3.13`
