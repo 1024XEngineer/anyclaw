@@ -2,11 +2,11 @@
 package ui
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/anyclaw/anyclaw/pkg/consoleio"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -107,14 +107,14 @@ func RunSpinner(msg string, fn func() error) error {
 
 func Prompt(label string) string {
 	fmt.Printf("%s > ", label)
-	reader := bufio.NewReader(os.Stdin)
+	reader := consoleio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	return strings.TrimSpace(line)
 }
 
 func PromptWithDefault(label, defaultVal string) string {
 	fmt.Printf("%s (%s) > ", label, defaultVal)
-	reader := bufio.NewReader(os.Stdin)
+	reader := consoleio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	val := strings.TrimSpace(line)
 	if val == "" {
@@ -125,7 +125,7 @@ func PromptWithDefault(label, defaultVal string) string {
 
 func Confirm(label string) bool {
 	fmt.Printf("%s (y/N) > ", label)
-	reader := bufio.NewReader(os.Stdin)
+	reader := consoleio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	val := strings.TrimSpace(strings.ToLower(line))
 	return val == "y" || val == "yes"

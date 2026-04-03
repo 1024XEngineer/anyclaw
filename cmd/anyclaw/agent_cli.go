@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -9,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/anyclaw/anyclaw/pkg/consoleio"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
 	"github.com/anyclaw/anyclaw/pkg/ui"
 )
@@ -137,7 +137,7 @@ func runAgentChat(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
-	reader := bufio.NewReader(os.Stdin)
+	reader := consoleio.NewReader(os.Stdin)
 
 	fmt.Println()
 	printSuccess("Chatting with [%s] (/exit to quit, /clear to reset)", *agentName)

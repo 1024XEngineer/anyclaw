@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/anyclaw/anyclaw/pkg/consoleio"
 	"github.com/anyclaw/anyclaw/pkg/workspace"
 )
 
@@ -96,7 +96,7 @@ func applyOnboardingDefaults(cfg *config.Config) {
 }
 
 func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Writer) error {
-	reader := bufio.NewReader(input)
+	reader := consoleio.NewReader(input)
 	currentProvider := firstNonEmpty(cfg.LLM.Provider, "openai")
 	sameProvider := false
 
@@ -198,7 +198,7 @@ func prepareRuntimePaths(configPath string, cfg *config.Config) error {
 	})
 }
 
-func prompt(reader *bufio.Reader, output io.Writer, label string) (string, error) {
+func prompt(reader *consoleio.Reader, output io.Writer, label string) (string, error) {
 	fmt.Fprintf(output, "%s: ", label)
 	line, err := reader.ReadString('\n')
 	if err != nil && err != io.EOF {

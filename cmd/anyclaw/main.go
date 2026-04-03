@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/agent"
 	"github.com/anyclaw/anyclaw/pkg/audit"
 	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/anyclaw/anyclaw/pkg/consoleio"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/routing"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
@@ -32,7 +32,7 @@ type RuntimeState struct {
 	agent      *agent.Agent
 	skills     *skills.SkillsManager
 	audit      *audit.Logger
-	reader     *bufio.Reader
+	reader     *consoleio.Reader
 	configPath string
 	workDir    string
 	workingDir string
@@ -206,21 +206,25 @@ func printInfo(format string, args ...any) {
 }
 
 func bootProgress(ev appRuntime.BootEvent) {
+	clear := ""
+	if terminalInteractive() {
+		clear = "\r" + strings.Repeat(" ", 512) + "\r"
+	}
 	switch ev.Status {
 	case "start":
-		fmt.Printf("  %s %-12s %s", ui.Cyan.Sprint("..."), ui.Dim.Sprint(string(ev.Phase)), ev.Message)
+		fmt.Printf("%s  %s %-12s %s", clear, ui.Cyan.Sprint("..."), ui.Dim.Sprint(string(ev.Phase)), ev.Message)
 	case "ok":
-		fmt.Printf("\r  %s %-12s %s %s\n", ui.Green.Sprint("OK"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
+		fmt.Printf("%s  %s %-12s %s %s\n", clear, ui.Green.Sprint("OK"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
 	case "warn":
-		fmt.Printf("\r  %s %-12s %s %s\n", ui.Yellow.Sprint("WARN"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
+		fmt.Printf("%s  %s %-12s %s %s\n", clear, ui.Yellow.Sprint("WARN"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
 	case "skip":
-		fmt.Printf("\r  %s %-12s %s %s\n", ui.Dim.Sprint("SKIP"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
+		fmt.Printf("%s  %s %-12s %s %s\n", clear, ui.Dim.Sprint("SKIP"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
 	case "fail":
 		errMsg := ""
 		if ev.Err != nil {
 			errMsg = ": " + ev.Err.Error()
 		}
-		fmt.Printf("\r  %s %-12s %s%s %s\n", ui.Red.Sprint("FAIL"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, errMsg, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
+		fmt.Printf("%s  %s %-12s %s%s %s\n", clear, ui.Red.Sprint("FAIL"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, errMsg, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
 	}
 }
 
@@ -378,7 +382,7 @@ func runRootCommandStable(ctx context.Context, args []string) error {
 		agent:      app.Agent,
 		skills:     app.Skills,
 		audit:      app.Audit,
-		reader:     bufio.NewReader(os.Stdin),
+		reader:     consoleio.NewReader(os.Stdin),
 		configPath: *configPathFlag,
 		workDir:    app.WorkDir,
 		workingDir: app.WorkingDir,
@@ -389,9 +393,13 @@ func runRootCommandStable(ctx context.Context, args []string) error {
 
 	messageText := strings.TrimSpace(strings.Join(rootFS.Args(), " "))
 	if messageText != "" && !*interactiveFlag {
+		routeLabel := applyLLMRouteStable(state, messageText)
 		responseText, err := state.agent.Run(ctx, messageText)
 		if err != nil {
 			return err
+		}
+		if routeLabel != "" {
+			fmt.Printf("%s%s%s\n", ui.Dim.Sprint(""), routeLabel, ui.Reset.Sprint(""))
 		}
 		fmt.Printf("%s\n", ui.Bold.Sprint(responseText))
 		return nil
@@ -405,7 +413,7 @@ func runSetupWizardStable(cfg *config.Config) {
 	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
 	fmt.Printf("%s\n\n", ui.Bold.Sprint("Setup Wizard"))
 
-	wizardReader := bufio.NewReader(os.Stdin)
+	wizardReader := consoleio.NewReader(os.Stdin)
 
 	fmt.Printf("%s\n\n", ui.Bold.Sprint("Step 1/5: Choose provider"))
 	showAvailableProvidersStable()

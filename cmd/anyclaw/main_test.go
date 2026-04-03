@@ -1,10 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/anyclaw/anyclaw/pkg/consoleio"
 )
 
 func TestNormalizeRootCommandSupportsOpenClawAliases(t *testing.T) {
@@ -55,7 +56,7 @@ func TestReadInteractiveLineStableUsesRuntimeReader(t *testing.T) {
 	os.Stdin = stdinReader
 
 	state := &RuntimeState{
-		reader: bufio.NewReader(strings.NewReader("from-state-reader\n")),
+		reader: consoleio.NewReader(strings.NewReader("from-state-reader\n")),
 	}
 
 	var line string

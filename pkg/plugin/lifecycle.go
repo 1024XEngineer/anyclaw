@@ -109,6 +109,7 @@ func (lm *LifecycleManager) VerifyPlugin(ctx context.Context, pluginID string) e
 	}
 
 	// 检查签名（如果配置了）
+	// Note: Signature verification not yet implemented - trust checking is pending
 	if lm.registry.requireTrust {
 		// TODO: 实现签名验证
 	}

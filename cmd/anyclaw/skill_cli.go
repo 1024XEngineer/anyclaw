@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,9 +9,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/anyclaw/anyclaw/pkg/consoleio"
 	"github.com/anyclaw/anyclaw/pkg/skills"
 	"github.com/anyclaw/anyclaw/pkg/ui"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
+
+var titleCase = cases.Title(language.English)
 
 type remoteSkillSearchItem struct {
 	Name           string
@@ -137,7 +141,7 @@ Usage:
 }
 
 func searchSkillhubFromCLI(query string, commandName string) {
-	fmt.Printf("Searching %s: %s\n", strings.Title(commandName), query)
+	fmt.Printf("Searching %s: %s\n", titleCase.String(commandName), query)
 	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
 
 	ctx := context.Background()
@@ -199,14 +203,14 @@ func listSkillhubSkills(commandName string) {
 		printInfo("No installed skills.")
 		return
 	}
-	fmt.Printf("%s\n\n", ui.Bold.Sprint(strings.Title(commandName)+" skills"))
+	fmt.Printf("%s\n\n", ui.Bold.Sprint(titleCase.String(commandName)+" skills"))
 	for _, name := range list {
 		fmt.Printf("  - %s\n", name)
 	}
 }
 
 func checkSkillhubCLI(commandName string) {
-	printSuccess("%s CLI is available", strings.Title(commandName))
+	printSuccess("%s CLI is available", titleCase.String(commandName))
 	printInfo("Use `anyclaw %s search <query>` to search", commandName)
 }
 
@@ -421,7 +425,7 @@ func showSkillCatalog(query string) {
 }
 
 func createNewSkill() {
-	reader := bufio.NewReader(os.Stdin)
+	reader := consoleio.NewReader(os.Stdin)
 	fmt.Print("Skill name: ")
 	name, _ := reader.ReadString('\n')
 	name = strings.TrimSpace(name)

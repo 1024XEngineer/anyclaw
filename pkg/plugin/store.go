@@ -161,7 +161,7 @@ func (mc *MarketClient) applyFilter(listings []*PluginListing, filter SearchFilt
 			match := false
 			for _, tag := range filter.Tags {
 				for _, listingTag := range listing.Tags {
-					if strings.ToLower(tag) == strings.ToLower(listingTag) {
+					if strings.EqualFold(tag, listingTag) {
 						match = true
 						break
 					}
@@ -176,7 +176,7 @@ func (mc *MarketClient) applyFilter(listings []*PluginListing, filter SearchFilt
 			match := false
 			for _, p := range filter.Platforms {
 				for _, lp := range listing.Platforms {
-					if strings.ToLower(p) == strings.ToLower(lp) {
+					if strings.EqualFold(p, lp) {
 						match = true
 						break
 					}

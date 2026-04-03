@@ -27,6 +27,8 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/runtime"
 	taskModule "github.com/anyclaw/anyclaw/pkg/task"
 	"github.com/anyclaw/anyclaw/pkg/tools"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 type llmPlannerAdapter struct {
@@ -71,6 +73,8 @@ type Server struct {
 	webhooks       *WebhookHandler
 	nodes          *NodeManager
 }
+
+var titleCase = cases.Title(language.English)
 
 type controlPlaneSnapshot struct {
 	Status         Status                `json:"status"`
@@ -735,7 +739,7 @@ func (s *Server) runOrCreateChannelSession(ctx context.Context, source string, s
 		}
 		title := strings.TrimSpace(decision.Title)
 		if title == "" {
-			title = strings.Title(source) + " session"
+			title = titleCase.String(source) + " session"
 		}
 		createOpts := SessionCreateOptions{
 			Title:         title,

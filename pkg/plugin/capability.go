@@ -246,7 +246,7 @@ func (ci *CapabilityIndex) Remove(pluginID string) {
 func (ci *CapabilityIndex) removeFromMap(slice []string, item string) {
 	for i, v := range slice {
 		if v == item {
-			slice = append(slice[:i], slice[i+1:]...)
+			_ = append(slice[:i], slice[i+1:]...)
 			break
 		}
 	}
