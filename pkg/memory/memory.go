@@ -300,6 +300,53 @@ func (m *FileMemory) updateIndexLocked(entry MemoryEntry) error {
 	return os.WriteFile(indexPath, data, 0o644)
 }
 
+func (m *FileMemory) Close() error {
+	return nil
+}
+
+func (m *FileMemory) Delete(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.initLocked(); err != nil {
+		return err
+	}
+
+	dirs := []string{
+		filepath.Join(m.baseDir, TypeConversation),
+		filepath.Join(m.baseDir, TypeReflection),
+		filepath.Join(m.baseDir, TypeFact),
+	}
+
+	for _, dir := range dirs {
+		path := filepath.Join(dir, fmt.Sprintf("%s.json", id))
+		if err := os.Remove(path); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("memory entry not found: %s", id)
+}
+
+func (m *FileMemory) GetStats() (map[string]int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entries, err := m.listLocked()
+	if err != nil {
+		return nil, err
+	}
+
+	stats := make(map[string]int)
+	stats["total"] = len(entries)
+
+	for _, e := range entries {
+		stats[e.Type]++
+	}
+
+	return stats, nil
+}
+
 func randomID(length int) string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	result := make([]byte, length)

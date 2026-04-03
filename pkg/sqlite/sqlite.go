@@ -91,12 +91,12 @@ func (db *DB) configure(cfg Config) error {
 
 func (db *DB) Close() error {
 	db.mu.Lock()
-	defer db.mu.Unlock()
-
 	if db.closed {
+		db.mu.Unlock()
 		return nil
 	}
 	db.closed = true
+	db.mu.Unlock()
 	return db.DB.Close()
 }
 
