@@ -168,11 +168,7 @@ func (eb *EnhancedBrowser) NavigateWithHeaders(url string) error {
 		chromedp.WaitReady("body"),
 	}
 
-	for key, value := range eb.headers {
-		_ = key
-		_ = value
-		actions = append(actions)
-	}
+	_ = eb.headers
 
 	return chromedp.Run(eb.ctx, actions...)
 }

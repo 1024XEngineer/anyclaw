@@ -50,7 +50,7 @@ func (a *IRCAdapter) Run(ctx context.Context, handle InboundHandler) error {
 	a.setRunning(true)
 	defer a.setRunning(false)
 
-	addr := fmt.Sprintf("%s:%d", a.config.Server, a.config.Port)
+	addr := net.JoinHostPort(a.config.Server, fmt.Sprintf("%d", a.config.Port))
 	var conn net.Conn
 	var err error
 

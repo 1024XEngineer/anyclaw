@@ -282,8 +282,9 @@ func (m *ModularConfigManager) applyEnvOverrides(config *Config) *Config {
 			config.Gateway.Host = value
 		case "ANYCLAW_GATEWAY_PORT":
 			// 转换为整数
-			if port, err := fmt.Sscanf(value, "%d", &config.Gateway.Port); err == nil && port == 1 {
-				config.Gateway.Port = config.Gateway.Port
+			var port int
+			if _, err := fmt.Sscanf(value, "%d", &port); err == nil {
+				config.Gateway.Port = port
 			}
 		}
 	}

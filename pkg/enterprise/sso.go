@@ -78,7 +78,7 @@ func (c *LDAPClient) Connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	addr := fmt.Sprintf("%s:%d", c.Addr, c.Port)
+	addr := net.JoinHostPort(c.Addr, fmt.Sprintf("%d", c.Port))
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to connect to LDAP: %w", err)
