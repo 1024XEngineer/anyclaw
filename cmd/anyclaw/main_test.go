@@ -10,6 +10,8 @@ func TestNormalizeRootCommandSupportsOpenClawAliases(t *testing.T) {
 		"plugins":  "plugin",
 		"agent":    "agent",
 		"agents":   "agent",
+		"clihub":   "clihub",
+		"claw":     "claw",
 		"app":      "app",
 		"apps":     "app",
 		"channel":  "channels",

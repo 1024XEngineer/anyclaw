@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/channel"
-	"github.com/anyclaw/anyclaw/pkg/config"
 	"github.com/anyclaw/anyclaw/pkg/gateway"
 	"github.com/anyclaw/anyclaw/pkg/ui"
 )
@@ -55,12 +53,12 @@ func runStatusCommand(args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadGatewayConfig(*configPath)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := newGatewayRequestContext()
 	defer cancel()
 
 	var status gateway.Status
@@ -108,21 +106,10 @@ func runStatusCommand(args []string) error {
 	if len(channels) > 0 {
 		fmt.Println()
 		fmt.Println(ui.Bold.Sprint("Channels"))
-		for _, item := range channels {
-			state := "stopped"
-			switch {
-			case item.Enabled && item.Running && item.Healthy:
-				state = "healthy"
-			case item.Enabled && item.Running:
-				state = "running"
-			case item.Enabled:
-				state = "enabled"
-			}
-			fmt.Printf("  - %s: %s\n", item.Name, state)
-			if strings.TrimSpace(item.LastError) != "" {
-				fmt.Printf("    error: %s\n", item.LastError)
-			}
-		}
+		printChannelStatusLines(channels, channelStatusPrintOptions{
+			DisabledLabel: "stopped",
+			ErrorLabel:    "error: ",
+		})
 	}
 
 	if len(sessions) > 0 {
@@ -147,12 +134,12 @@ func runHealthCommand(args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadGatewayConfig(*configPath)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := newGatewayRequestContext()
 	defer cancel()
 
 	health := map[string]any{}
@@ -210,12 +197,12 @@ func runSessionsCommand(args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadGatewayConfig(*configPath)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := newGatewayRequestContext()
 	defer cancel()
 
 	path := "/sessions"
@@ -301,12 +288,12 @@ func runApprovalsGet(args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadGatewayConfig(*configPath)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := newGatewayRequestContext()
 	defer cancel()
 
 	path := "/approvals"
@@ -367,12 +354,12 @@ func runApprovalsResolve(args []string, approved bool) error {
 		return fmt.Errorf("approval id is required")
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadGatewayConfig(*configPath)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := newGatewayRequestContext()
 	defer cancel()
 
 	var updated approvalListItem

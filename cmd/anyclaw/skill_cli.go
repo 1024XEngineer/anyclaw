@@ -14,6 +14,15 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/ui"
 )
 
+type remoteSkillSearchItem struct {
+	Name           string
+	FullName       string
+	Description    string
+	Category       string
+	Details        string
+	InstallCommand string
+}
+
 func runSkillCommand() {
 	if len(os.Args) < 3 {
 		printSkillUsage()
@@ -142,22 +151,24 @@ func searchSkillhubFromCLI(query string, commandName string) {
 		return
 	}
 
-	fmt.Printf("Found %d skills\n\n", len(results))
-	for i, r := range results {
-		fmt.Printf("%d. %s\n", i+1, skillDisplayName(r.Name, r.FullName))
-		fmt.Printf("   %s\n", skillDescription(r.Description))
-		if r.Category != "" {
-			fmt.Printf("   category: %s\n", r.Category)
-		}
-		fmt.Printf("   install: anyclaw %s install %s\n\n", commandName, r.Name)
+	items := make([]remoteSkillSearchItem, 0, len(results))
+	for _, r := range results {
+		items = append(items, remoteSkillSearchItem{
+			Name:           r.Name,
+			FullName:       r.FullName,
+			Description:    r.Description,
+			Category:       r.Category,
+			InstallCommand: fmt.Sprintf("anyclaw %s install %s", commandName, r.Name),
+		})
 	}
+	printRemoteSkillResults(items)
 }
 
 func installSkillhubFromCLI(skillName string, commandName string) {
 	fmt.Printf("Installing %s skill: %s\n", commandName, skillName)
 	ctx := context.Background()
-	skillsDir := resolveSkillsDir()
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+	skillsDir, err := ensureSkillsDir()
+	if err != nil {
 		printError("failed to create skills dir: %v", err)
 		return
 	}
@@ -257,14 +268,18 @@ func searchSkillsFromHub(query string) {
 		return
 	}
 
-	fmt.Printf("Found %d skills\n\n", len(results))
-	for i, r := range results {
+	items := make([]remoteSkillSearchItem, 0, len(results))
+	for _, r := range results {
 		installs := formatInstalls(r.Installs)
-		fmt.Printf("%d. %s\n", i+1, skillDisplayName(r.Name, r.FullName))
-		fmt.Printf("   %s\n", skillDescription(r.Description))
-		fmt.Printf("   installs: %s  stars: %d  %s\n", installs, r.Stars, getQualityBadge(r.Installs, r.Stars))
-		fmt.Printf("   install: anyclaw skill install %s\n\n", r.Name)
+		items = append(items, remoteSkillSearchItem{
+			Name:           r.Name,
+			FullName:       r.FullName,
+			Description:    r.Description,
+			Details:        fmt.Sprintf("installs: %s  stars: %d  %s", installs, r.Stars, getQualityBadge(r.Installs, r.Stars)),
+			InstallCommand: "anyclaw skill install " + r.Name,
+		})
 	}
+	printRemoteSkillResults(items)
 }
 
 func getQualityBadge(installs int64, stars int) string {
@@ -458,6 +473,14 @@ func resolveSkillsDir() string {
 	return "skills"
 }
 
+func ensureSkillsDir() (string, error) {
+	skillsDir := resolveSkillsDir()
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		return "", err
+	}
+	return skillsDir, nil
+}
+
 func skillDisplayName(name, fullName string) string {
 	if fullName = strings.TrimSpace(fullName); fullName != "" {
 		return fullName
@@ -470,4 +493,19 @@ func skillDescription(description string) string {
 		return description
 	}
 	return "No description"
+}
+
+func printRemoteSkillResults(items []remoteSkillSearchItem) {
+	fmt.Printf("Found %d skills\n\n", len(items))
+	for i, item := range items {
+		fmt.Printf("%d. %s\n", i+1, skillDisplayName(item.Name, item.FullName))
+		fmt.Printf("   %s\n", skillDescription(item.Description))
+		if strings.TrimSpace(item.Category) != "" {
+			fmt.Printf("   category: %s\n", item.Category)
+		}
+		if strings.TrimSpace(item.Details) != "" {
+			fmt.Printf("   %s\n", item.Details)
+		}
+		fmt.Printf("   install: %s\n\n", item.InstallCommand)
+	}
 }

@@ -1,0 +1,361 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+)
+
+// AuditLogger 审计日志接口
+type AuditLogger interface {
+	LogTool(toolName string, input map[string]any, output string, err error)
+}
+
+// DangerousCommandConfirmer 危险命令确认器
+type DangerousCommandConfirmer func(command string) bool
+
+// BuiltinOptions 内置工具选项
+type BuiltinOptions struct {
+	WorkingDir              string
+	PermissionLevel         string
+	ExecutionMode           string
+	DangerousPatterns       []string
+	ProtectedPaths          []string
+	Policy                  *PolicyEngine
+	CommandTimeoutSeconds   int
+	ConfirmDangerousCommand DangerousCommandConfirmer
+	AuditLogger             AuditLogger
+	Sandbox                 *SandboxManager
+}
+
+// ToolFunc 工具函数
+type ToolFunc func(ctx context.Context, input map[string]any) (string, error)
+
+// ToolCategory 工具类别
+type ToolCategory string
+
+const (
+	ToolCategoryFile    ToolCategory = "file"
+	ToolCategoryCommand ToolCategory = "command"
+	ToolCategoryWeb     ToolCategory = "web"
+	ToolCategoryChannel ToolCategory = "channel"
+	ToolCategoryMemory  ToolCategory = "memory"
+	ToolCategoryBrowser ToolCategory = "browser"
+	ToolCategoryDesktop ToolCategory = "desktop"
+	ToolCategoryCustom  ToolCategory = "custom"
+)
+
+// ToolAccessLevel 工具访问级别
+type ToolAccessLevel string
+
+const (
+	ToolAccessPublic  ToolAccessLevel = "public"
+	ToolAccessOwner   ToolAccessLevel = "owner"
+	ToolAccessAdmin   ToolAccessLevel = "admin"
+	ToolAccessPrivate ToolAccessLevel = "private"
+)
+
+// Tool 工具结构
+type Tool struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+	Handler     ToolFunc
+	Category    ToolCategory
+	AccessLevel ToolAccessLevel
+	Timeout     time.Duration
+	Retryable   bool
+	MaxRetries  int
+}
+
+// Registry 工具注册表
+type Registry struct {
+	mu         sync.RWMutex
+	tools      map[string]*Tool
+	categories map[ToolCategory][]string
+	cache      map[string]interface{}
+	cacheTTL   time.Duration
+	cacheMu    sync.RWMutex
+}
+
+// NewRegistry 创建新的注册表
+func NewRegistry() *Registry {
+	return &Registry{
+		tools:      make(map[string]*Tool),
+		categories: make(map[ToolCategory][]string),
+		cache:      make(map[string]interface{}),
+		cacheTTL:   5 * time.Minute,
+	}
+}
+
+// RegisterTool 注册工具
+func (r *Registry) RegisterTool(name string, desc string, schema map[string]any, handler ToolFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.tools[name] = &Tool{
+		Name:        name,
+		Description: desc,
+		InputSchema: schema,
+		Handler:     handler,
+		Category:    ToolCategoryCustom,
+		AccessLevel: ToolAccessPublic,
+	}
+}
+
+// Register 注册工具
+func (r *Registry) Register(t *Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.tools[t.Name] = t
+	if t.Category != "" {
+		r.categories[t.Category] = append(r.categories[t.Category], t.Name)
+	}
+}
+
+// Get 获取工具
+func (r *Registry) Get(name string) (*Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	t, ok := r.tools[name]
+	return t, ok
+}
+
+// ListTools 列出所有工具
+func (r *Registry) ListTools() []*Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var list []*Tool
+	for _, t := range r.tools {
+		list = append(list, t)
+	}
+	return list
+}
+
+// Call 调用工具
+func (r *Registry) Call(ctx context.Context, name string, input map[string]any) (string, error) {
+	r.mu.RLock()
+	t, ok := r.tools[name]
+	r.mu.RUnlock()
+
+	if !ok {
+		return "", fmt.Errorf("tool not found: %s", name)
+	}
+
+	if t.Handler == nil {
+		return "", fmt.Errorf("tool handler not implemented: %s", name)
+	}
+
+	// 检查缓存
+	cacheKey := r.generateCacheKey(name, input)
+	if cached, found := r.getFromCache(cacheKey); found {
+		if str, ok := cached.(string); ok {
+			return str, nil
+		}
+	}
+
+	// 执行工具
+	startTime := time.Now()
+	result, err := t.Handler(ctx, input)
+	duration := time.Since(startTime)
+
+	if err != nil {
+		return "", err
+	}
+
+	// 保存到缓存
+	r.saveToCache(cacheKey, result)
+
+	_ = duration // 可以用于监控
+
+	return result, nil
+}
+
+// CallWithRetry 带重试调用工具
+func (r *Registry) CallWithRetry(ctx context.Context, name string, input map[string]any, maxRetries int) (string, error) {
+	r.mu.RLock()
+	t, ok := r.tools[name]
+	r.mu.RUnlock()
+
+	if !ok {
+		return "", fmt.Errorf("tool not found: %s", name)
+	}
+
+	if !t.Retryable {
+		return r.Call(ctx, name, input)
+	}
+
+	if maxRetries <= 0 {
+		maxRetries = t.MaxRetries
+	}
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		result, err := r.Call(ctx, name, input)
+		if err == nil {
+			return result, nil
+		}
+
+		lastErr = err
+
+		// 指数退避
+		if attempt < maxRetries {
+			backoff := time.Duration(1<<uint(attempt)) * 100 * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(backoff):
+				continue
+			}
+		}
+	}
+
+	return "", fmt.Errorf("tool %s failed after %d retries: %w", name, maxRetries, lastErr)
+}
+
+// GetToolsByCategory 按类别获取工具
+func (r *Registry) GetToolsByCategory(category ToolCategory) []*Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	names, exists := r.categories[category]
+	if !exists {
+		return nil
+	}
+
+	tools := make([]*Tool, 0, len(names))
+	for _, name := range names {
+		if tool, exists := r.tools[name]; exists {
+			tools = append(tools, tool)
+		}
+	}
+
+	return tools
+}
+
+// Unregister 注销工具
+func (r *Registry) Unregister(name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	tool, exists := r.tools[name]
+	if !exists {
+		return fmt.Errorf("tool %s not found", name)
+	}
+
+	// 从类别中移除
+	if tool.Category != "" {
+		if names, exists := r.categories[tool.Category]; exists {
+			for i, n := range names {
+				if n == name {
+					r.categories[tool.Category] = append(names[:i], names[i+1:]...)
+					break
+				}
+			}
+		}
+	}
+
+	delete(r.tools, name)
+	return nil
+}
+
+// ClearCache 清除缓存
+func (r *Registry) ClearCache() {
+	r.cacheMu.Lock()
+	defer r.cacheMu.Unlock()
+
+	r.cache = make(map[string]interface{})
+}
+
+// GetToolDefinitions 获取工具定义
+func (r *Registry) GetToolDefinitions() []map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	defs := make([]map[string]any, 0, len(r.tools))
+	for _, tool := range r.tools {
+		defs = append(defs, map[string]any{
+			"name":         tool.Name,
+			"description":  tool.Description,
+			"category":     string(tool.Category),
+			"access_level": string(tool.AccessLevel),
+			"input_schema": tool.InputSchema,
+		})
+	}
+
+	return defs
+}
+
+// GetToolDefinitionsJSON 获取工具定义的 JSON
+func (r *Registry) GetToolDefinitionsJSON() (string, error) {
+	defs := r.GetToolDefinitions()
+
+	data, err := json.MarshalIndent(defs, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal tool definitions: %w", err)
+	}
+
+	return string(data), nil
+}
+
+// ToolInfo 工具信息
+type ToolInfo struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+}
+
+// List 列出工具信息
+func (r *Registry) List() []ToolInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var list []ToolInfo
+	for _, t := range r.tools {
+		list = append(list, ToolInfo{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.InputSchema,
+		})
+	}
+	return list
+}
+
+// generateCacheKey 生成缓存键
+func (r *Registry) generateCacheKey(toolName string, input map[string]any) string {
+	data, _ := json.Marshal(input)
+	return fmt.Sprintf("%s:%x", toolName, data)
+}
+
+// getFromCache 从缓存获取
+func (r *Registry) getFromCache(key string) (interface{}, bool) {
+	r.cacheMu.RLock()
+	defer r.cacheMu.RUnlock()
+
+	item, exists := r.cache[key]
+	return item, exists
+}
+
+// saveToCache 保存到缓存
+func (r *Registry) saveToCache(key string, value interface{}) {
+	r.cacheMu.Lock()
+	defer r.cacheMu.Unlock()
+
+	r.cache[key] = value
+
+	// 定期清理缓存
+	go func() {
+		time.Sleep(r.cacheTTL)
+		r.cacheMu.Lock()
+		delete(r.cache, key)
+		r.cacheMu.Unlock()
+	}()
+}

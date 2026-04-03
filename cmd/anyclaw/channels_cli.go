@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/config"
@@ -96,13 +94,13 @@ Usage:
 }
 
 func collectChannelStatuses(configPath string, requireGateway bool) (*config.Config, []channel.Status, bool, error) {
-	cfg, err := config.Load(configPath)
+	cfg, err := loadGatewayConfig(configPath)
 	if err != nil {
 		return nil, nil, false, err
 	}
 
 	local := configuredChannelStatuses(cfg)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := newGatewayRequestContext()
 	defer cancel()
 
 	var remote []channel.Status
@@ -182,22 +180,10 @@ func mergeChannelStatuses(local []channel.Status, remote []channel.Status) []cha
 }
 
 func printChannelStatuses(items []channel.Status) {
-	for _, item := range items {
-		state := "disabled"
-		switch {
-		case item.Enabled && item.Running && item.Healthy:
-			state = "healthy"
-		case item.Enabled && item.Running:
-			state = "running"
-		case item.Enabled:
-			state = "enabled"
-		}
-		fmt.Printf("  - %s: %s\n", item.Name, state)
-		if !item.LastActivity.IsZero() {
-			fmt.Printf("    last_activity=%s\n", item.LastActivity.Format(time.RFC3339))
-		}
-		if strings.TrimSpace(item.LastError) != "" {
-			fmt.Printf("    error=%s\n", item.LastError)
-		}
-	}
+	printChannelStatusLines(items, channelStatusPrintOptions{
+		DisabledLabel:       "disabled",
+		IncludeLastActivity: true,
+		LastActivityLabel:   "last_activity=",
+		ErrorLabel:          "error=",
+	})
 }

@@ -1,0 +1,13 @@
+{
+  "name": "anyclaw-web-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ui:install": "node scripts/ui.mjs install",
+    "ui:dev": "node scripts/ui.mjs dev",
+    "ui:build": "node scripts/ui.mjs build",
+    "ui:preview": "node scripts/ui.mjs preview",
+    "ui:test": "node scripts/ui.mjs test"
+  },
+  "packageManager": "pnpm@10.23.0"
+}

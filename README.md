@@ -19,6 +19,39 @@ go build -o anyclaw ./cmd/anyclaw
 ./anyclaw -i
 ```
 
+## Web UI workspace
+
+AnyClaw now includes a pnpm-based UI workspace similar to OpenClaw:
+
+```bash
+pnpm ui:install
+pnpm ui:dev
+pnpm ui:test
+pnpm ui:build
+```
+
+- Source: `ui/`
+- Build output: `dist/control-ui/`
+- Runtime route: gateway `/dashboard` prefers `dist/control-ui/` and falls back to embedded dashboard when missing
+- Route compatibility:
+  - Default: `/dashboard`
+  - Legacy alias: `/control`
+  - Custom: set `gateway.control_ui.base_path` (for example `/console`) and keep `/dashboard` + `/control` as compatible aliases
+- Optional root override: `ANYCLAW_CONTROL_UI_ROOT=/abs/path/to/dist/control-ui`
+- Optional build base path: `ANYCLAW_CONTROL_UI_BASE_PATH=/anyclaw/ pnpm ui:build`
+- Configurable gateway route/root in `anyclaw.json`:
+
+```json
+{
+  "gateway": {
+    "control_ui": {
+      "base_path": "/console",
+      "root": "dist/control-ui"
+    }
+  }
+}
+```
+
 ## Common commands
 
 ```bash
@@ -83,7 +116,7 @@ workflows/       workspace bootstrap files
 
 - `anyclaw.json` stores runtime configuration.
 - `./.anyclaw/` stores local state, memory, and runtime files.
-- The web control page lives under `/control/`.
+- The web control page supports `/dashboard`, `/control`, and configured `gateway.control_ui.base_path`.
 - The canvas page lives under `/canvas/`.
 
 ## 中文显示说明
@@ -93,24 +126,6 @@ workflows/       workspace bootstrap files
 ```bash
 chcp 65001
 ```
-
-或者在 PowerShell 中运行：
-
-```powershell
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-```
-
-## 快速修复脚本
-
-创建一个 `run-anyclaw.bat` 文件，内容如下：
-
-```batch
-@echo off
-chcp 65001 >nul
-anyclaw.exe %*
-```
-
-然后使用 `run-anyclaw.bat` 启动 AnyClaw，即可正确显示中文。
 
 ## Version
 

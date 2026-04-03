@@ -62,6 +62,8 @@ func run(ctx context.Context, args []string) error {
 		case "clawhub":
 			runClawhubCommand()
 			return nil
+		case "clihub":
+			return runCLIHubCommand(args[1:])
 		case "shell":
 			return runShellCommand(args[1:])
 		case "gateway":
@@ -76,6 +78,8 @@ func run(ctx context.Context, args []string) error {
 			return runChannelsCommand(args[1:])
 		case "doctor":
 			return runDoctorCommand(args[1:])
+		case "claw":
+			return runClawCommand(args[1:])
 		case "app":
 			return runAppCommand(args[1:])
 		case "cron":
