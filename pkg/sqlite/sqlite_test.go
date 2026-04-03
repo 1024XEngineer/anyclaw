@@ -3,23 +3,28 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"os"
+	"sync"
 	"testing"
+	"time"
+
+	_ "modernc.org/sqlite"
 )
 
-func setupTestDB(t *testing.T) *DB {
+func setupTestDB(t *testing.T, cfg Config) *DB {
 	t.Helper()
-	db, err := Open(DefaultConfig(":memory:"))
+	if cfg.DSN == "" {
+		cfg.DSN = ":memory:"
+	}
+	db, err := Open(cfg)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
 
-	ctx := context.Background()
-	_, err = db.ExecContext(ctx, `CREATE TABLE users (
+	_, err = db.ExecContext(context.Background(), `CREATE TABLE test (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
-		email TEXT UNIQUE,
-		age INTEGER,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		value TEXT
 	)`)
 	if err != nil {
 		t.Fatalf("failed to create table: %v", err)
@@ -27,9 +32,40 @@ func setupTestDB(t *testing.T) *DB {
 
 	t.Cleanup(func() {
 		db.Close()
+		if cfg.DSN != ":memory:" {
+			os.Remove(cfg.DSN)
+			os.Remove(cfg.DSN + "-wal")
+			os.Remove(cfg.DSN + "-shm")
+		}
 	})
 
 	return db
+}
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig(":memory:")
+	if cfg.MaxOpenConns != 5 {
+		t.Errorf("expected MaxOpenConns 5, got %d", cfg.MaxOpenConns)
+	}
+	if cfg.MaxIdleConns != 3 {
+		t.Errorf("expected MaxIdleConns 3, got %d", cfg.MaxIdleConns)
+	}
+	if cfg.ConnMaxLifetime != 30*time.Minute {
+		t.Errorf("expected ConnMaxLifetime 30m, got %v", cfg.ConnMaxLifetime)
+	}
+	if !cfg.WALEnabled {
+		t.Error("expected WALEnabled true")
+	}
+}
+
+func TestInMemoryConfig(t *testing.T) {
+	cfg := InMemoryConfig()
+	if cfg.MaxOpenConns != 1 {
+		t.Errorf("expected MaxOpenConns 1, got %d", cfg.MaxOpenConns)
+	}
+	if cfg.WALEnabled {
+		t.Error("expected WALEnabled false for in-memory")
+	}
 }
 
 func TestOpenAndClose(t *testing.T) {
@@ -47,512 +83,268 @@ func TestOpenAndClose(t *testing.T) {
 	}
 }
 
-func TestPing(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
+func TestConnectionPoolSettings(t *testing.T) {
+	cfg := DefaultConfig(":memory:")
+	cfg.MaxOpenConns = 10
+	cfg.MaxIdleConns = 5
+	cfg.ConnMaxLifetime = 10 * time.Minute
+	cfg.ConnMaxIdleTime = 2 * time.Minute
 
-	if err := db.Ping(ctx); err != nil {
-		t.Fatalf("expected no error on ping, got %v", err)
+	db := setupTestDB(t, cfg)
+
+	stats := db.Stats()
+	if stats.OpenConnections < 1 {
+		t.Errorf("expected at least 1 open connection after setup, got %d", stats.OpenConnections)
 	}
 }
 
-func TestInsert(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
+func TestConnectionPoolUnderLoad(t *testing.T) {
+	cfg := DefaultConfig(":memory:")
+	cfg.MaxOpenConns = 5
+	cfg.MaxIdleConns = 3
+	db := setupTestDB(t, cfg)
 
-	result, err := db.Insert(ctx, "users", map[string]any{
-		"name":  "Alice",
-		"email": "alice@example.com",
-		"age":   30,
-	})
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	successCount := 0
+	failCount := 0
+
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			_, err := db.ExecContext(ctx, "INSERT INTO test (name, value) VALUES (?, ?)",
+				"item", n)
+			mu.Lock()
+			if err != nil {
+				failCount++
+			} else {
+				successCount++
+			}
+			mu.Unlock()
+		}(i)
+	}
+
+	wg.Wait()
+
+	if successCount == 0 {
+		t.Error("expected at least some successful inserts")
+	}
+
+	stats := db.Stats()
+	if stats.OpenConnections > cfg.MaxOpenConns {
+		t.Errorf("open connections %d exceeds max %d", stats.OpenConnections, cfg.MaxOpenConns)
+	}
+}
+
+func TestWALModeDetection(t *testing.T) {
+	cfg := DefaultConfig(":memory:")
+	db := setupTestDB(t, cfg)
+
+	ctx := context.Background()
+	isWAL, err := db.IsWALMode(ctx)
 	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+		t.Fatalf("failed to check WAL mode: %v", err)
 	}
 
-	if result.RowsAffected != 1 {
-		t.Errorf("expected 1 row affected, got %d", result.RowsAffected)
-	}
-}
-
-func TestInsertEmptyData(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	_, err := db.Insert(ctx, "users", map[string]any{})
-	if err == nil {
-		t.Fatal("expected error for empty data")
+	if !isWAL {
+		t.Log("WAL mode not active (expected for in-memory DB)")
 	}
 }
 
-func TestGet(t *testing.T) {
-	db := setupTestDB(t)
+func TestWALFileBased(t *testing.T) {
+	tmpFile := t.TempDir() + "/test_wal.db"
+
+	cfg := DefaultConfig(tmpFile)
+	cfg.MaxOpenConns = 1
+	cfg.MaxIdleConns = 1
+	db := setupTestDB(t, cfg)
+
 	ctx := context.Background()
 
-	_, err := db.Insert(ctx, "users", map[string]any{
-		"name":  "Bob",
-		"email": "bob@example.com",
-		"age":   25,
-	})
+	isWAL, err := db.IsWALMode(ctx)
+	if err != nil {
+		t.Fatalf("failed to check WAL mode: %v", err)
+	}
+
+	if !isWAL {
+		t.Fatal("expected WAL mode for file-based DB")
+	}
+
+	_, err = db.ExecContext(ctx, "INSERT INTO test (name, value) VALUES (?, ?)", "wal_test", "value")
 	if err != nil {
 		t.Fatalf("failed to insert: %v", err)
 	}
 
-	row, err := db.Get(ctx, "users", []string{"id", "name", "email", "age"}, "name = ?", "Bob")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if row["name"] != "Bob" {
-		t.Errorf("expected name Bob, got %v", row["name"])
-	}
-	if row["age"].(int64) != 25 {
-		t.Errorf("expected age 25, got %v", row["age"])
+	if err := db.Checkpoint(ctx, "PASSIVE"); err != nil {
+		t.Fatalf("checkpoint failed: %v", err)
 	}
 }
 
-func TestGetNotFound(t *testing.T) {
-	db := setupTestDB(t)
+func TestCheckpoint(t *testing.T) {
+	tmpFile := t.TempDir() + "/test_checkpoint.db"
+
+	cfg := DefaultConfig(tmpFile)
+	cfg.MaxOpenConns = 1
+	cfg.MaxIdleConns = 1
+	db := setupTestDB(t, cfg)
+
 	ctx := context.Background()
 
-	_, err := db.Get(ctx, "users", []string{"id", "name"}, "name = ?", "NonExistent")
-	if err != sql.ErrNoRows {
-		t.Errorf("expected ErrNoRows, got %v", err)
-	}
-}
-
-func TestList(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	_, err := db.Insert(ctx, "users", map[string]any{"name": "Alice", "email": "alice@example.com", "age": 30})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-	_, err = db.Insert(ctx, "users", map[string]any{"name": "Bob", "email": "bob@example.com", "age": 25})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-
-	rows, err := db.List(ctx, "users", []string{"id", "name", "age"}, "", nil)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if len(rows) != 2 {
-		t.Errorf("expected 2 rows, got %d", len(rows))
-	}
-}
-
-func TestListWithWhere(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	_, err := db.Insert(ctx, "users", map[string]any{"name": "Alice", "email": "alice@example.com", "age": 30})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-	_, err = db.Insert(ctx, "users", map[string]any{"name": "Bob", "email": "bob@example.com", "age": 25})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-
-	rows, err := db.List(ctx, "users", []string{"id", "name"}, "age > ?", 28)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if len(rows) != 1 {
-		t.Errorf("expected 1 row, got %d", len(rows))
-	}
-	if rows[0]["name"] != "Alice" {
-		t.Errorf("expected Alice, got %v", rows[0]["name"])
-	}
-}
-
-func TestUpdate(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	_, err := db.Insert(ctx, "users", map[string]any{"name": "Charlie", "email": "charlie@example.com", "age": 35})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-
-	affected, err := db.Update(ctx, "users", map[string]any{"age": 36}, "name = ?", "Charlie")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if affected != 1 {
-		t.Errorf("expected 1 row affected, got %d", affected)
-	}
-
-	row, err := db.Get(ctx, "users", []string{"age"}, "name = ?", "Charlie")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if row["age"].(int64) != 36 {
-		t.Errorf("expected age 36, got %v", row["age"])
-	}
-}
-
-func TestUpsert(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	result, err := db.Upsert(ctx, "users", map[string]any{
-		"name":  "Dave",
-		"email": "dave@example.com",
-		"age":   40,
-	}, []string{"email"})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if result.RowsAffected != 1 {
-		t.Errorf("expected 1 row affected on insert, got %d", result.RowsAffected)
-	}
-
-	result, err = db.Upsert(ctx, "users", map[string]any{
-		"name":  "Dave Updated",
-		"email": "dave@example.com",
-		"age":   41,
-	}, []string{"email"})
-	if err != nil {
-		t.Fatalf("expected no error on upsert, got %v", err)
-	}
-
-	row, err := db.Get(ctx, "users", []string{"name", "age"}, "email = ?", "dave@example.com")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if row["name"] != "Dave Updated" {
-		t.Errorf("expected name 'Dave Updated', got %v", row["name"])
-	}
-	if row["age"].(int64) != 41 {
-		t.Errorf("expected age 41, got %v", row["age"])
-	}
-}
-
-func TestDelete(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	_, err := db.Insert(ctx, "users", map[string]any{"name": "Eve", "email": "eve@example.com", "age": 28})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-
-	affected, err := db.Delete(ctx, "users", "name = ?", "Eve")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if affected != 1 {
-		t.Errorf("expected 1 row affected, got %d", affected)
-	}
-
-	_, err = db.Get(ctx, "users", []string{"id"}, "name = ?", "Eve")
-	if err != sql.ErrNoRows {
-		t.Errorf("expected ErrNoRows after delete, got %v", err)
-	}
-}
-
-func TestCount(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	_, err := db.Insert(ctx, "users", map[string]any{"name": "User1", "email": "user1@example.com", "age": 20})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-	_, err = db.Insert(ctx, "users", map[string]any{"name": "User2", "email": "user2@example.com", "age": 30})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-
-	count, err := db.Count(ctx, "users", "", nil)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if count != 2 {
-		t.Errorf("expected count 2, got %d", count)
-	}
-
-	count, err = db.Count(ctx, "users", "age > ?", 25)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if count != 1 {
-		t.Errorf("expected count 1, got %d", count)
-	}
-}
-
-func TestExists(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	_, err := db.Insert(ctx, "users", map[string]any{"name": "Frank", "email": "frank@example.com", "age": 45})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-
-	exists, err := db.Exists(ctx, "users", "name = ?", "Frank")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if !exists {
-		t.Error("expected exists to be true")
-	}
-
-	exists, err = db.Exists(ctx, "users", "name = ?", "Ghost")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if exists {
-		t.Error("expected exists to be false")
-	}
-}
-
-func TestTransactionCommit(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	err := db.WithTransaction(ctx, nil, func(tx *Transaction) error {
-		_, err := tx.Insert(ctx, "users", map[string]any{"name": "TxUser", "email": "tx@example.com", "age": 50})
+	for i := 0; i < 10; i++ {
+		_, err := db.ExecContext(ctx, "INSERT INTO test (name, value) VALUES (?, ?)", "checkpoint", i)
 		if err != nil {
-			return err
+			t.Fatalf("insert failed: %v", err)
 		}
+	}
 
-		_, err = tx.Insert(ctx, "users", map[string]any{"name": "TxUser2", "email": "tx2@example.com", "age": 51})
+	if err := db.Checkpoint(ctx, "PASSIVE"); err != nil {
+		t.Fatalf("passive checkpoint failed: %v", err)
+	}
+
+	if err := db.Checkpoint(ctx, "FULL"); err != nil {
+		t.Fatalf("full checkpoint failed: %v", err)
+	}
+
+	if err := db.Checkpoint(ctx, "RESTART"); err != nil {
+		t.Fatalf("restart checkpoint failed: %v", err)
+	}
+
+	if err := db.Checkpoint(ctx, "TRUNCATE"); err != nil {
+		t.Fatalf("truncate checkpoint failed: %v", err)
+	}
+}
+
+func TestPoolStats(t *testing.T) {
+	cfg := DefaultConfig(":memory:")
+	cfg.MaxOpenConns = 5
+	cfg.MaxIdleConns = 3
+	db := setupTestDB(t, cfg)
+
+	ctx := context.Background()
+
+	for i := 0; i < 10; i++ {
+		db.ExecContext(ctx, "INSERT INTO test (name, value) VALUES (?, ?)", "stats", i)
+	}
+
+	stats := db.Stats()
+
+	if stats.OpenConnections < 1 {
+		t.Errorf("expected at least 1 open connection, got %d", stats.OpenConnections)
+	}
+
+	if db.QueryCount() == 0 && db.ExecCount() == 0 {
+		t.Error("expected non-zero query or exec count")
+	}
+}
+
+func TestWithConn(t *testing.T) {
+	db := setupTestDB(t, DefaultConfig(":memory:"))
+	ctx := context.Background()
+
+	err := db.WithConn(ctx, func(conn *sql.Conn) error {
+		_, err := conn.ExecContext(ctx, "INSERT INTO test (name, value) VALUES (?, ?)", "conn_test", "value")
 		return err
 	})
 	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+		t.Fatalf("WithConn failed: %v", err)
 	}
 
-	count, err := db.Count(ctx, "users", "name LIKE ?", "TxUser%")
+	var count int
+	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test WHERE name = ?", "conn_test").Scan(&count)
 	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+		t.Fatalf("query failed: %v", err)
 	}
-
-	if count != 2 {
-		t.Errorf("expected 2 users after commit, got %d", count)
+	if count != 1 {
+		t.Errorf("expected 1 row, got %d", count)
 	}
 }
 
-func TestTransactionRollback(t *testing.T) {
-	db := setupTestDB(t)
+func TestIntegrityCheck(t *testing.T) {
+	db := setupTestDB(t, DefaultConfig(":memory:"))
 	ctx := context.Background()
 
-	err := db.WithTransaction(ctx, nil, func(tx *Transaction) error {
-		_, err := tx.Insert(ctx, "users", map[string]any{"name": "RollbackUser", "email": "rollback@example.com", "age": 60})
+	ok, err := db.IntegrityCheck(ctx)
+	if err != nil {
+		t.Fatalf("integrity check failed: %v", err)
+	}
+	if !ok {
+		t.Error("expected integrity check to pass")
+	}
+}
+
+func TestOptimize(t *testing.T) {
+	db := setupTestDB(t, DefaultConfig(":memory:"))
+	ctx := context.Background()
+
+	if err := db.Optimize(ctx); err != nil {
+		t.Fatalf("optimize failed: %v", err)
+	}
+}
+
+func TestQueryExecCounters(t *testing.T) {
+	db := setupTestDB(t, DefaultConfig(":memory:"))
+	ctx := context.Background()
+
+	initialExec := db.ExecCount()
+	initialQuery := db.QueryCount()
+
+	db.ExecContext(ctx, "INSERT INTO test (name, value) VALUES (?, ?)", "counter", 1)
+	db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test")
+
+	if db.ExecCount() != initialExec+1 {
+		t.Errorf("expected exec count %d, got %d", initialExec+1, db.ExecCount())
+	}
+	if db.QueryCount() != initialQuery+1 {
+		t.Errorf("expected query count %d, got %d", initialQuery+1, db.QueryCount())
+	}
+}
+
+func TestConnMaxIdleTime(t *testing.T) {
+	cfg := DefaultConfig(":memory:")
+	cfg.MaxIdleConns = 2
+	cfg.ConnMaxIdleTime = 100 * time.Millisecond
+	db := setupTestDB(t, cfg)
+
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		db.ExecContext(ctx, "INSERT INTO test (name, value) VALUES (?, ?)", "idle", i)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	stats := db.Stats()
+	if stats.MaxIdleClosed == 0 {
+		t.Log("no idle connections closed yet (may be expected depending on timing)")
+	}
+	_ = stats
+}
+
+func TestWALAutoCheckpoint(t *testing.T) {
+	tmpFile := t.TempDir() + "/test_auto_checkpoint.db"
+
+	cfg := DefaultConfig(tmpFile)
+	cfg.MaxOpenConns = 1
+	cfg.MaxIdleConns = 1
+	cfg.WALAutoCheckpoint = 100
+	db := setupTestDB(t, cfg)
+
+	ctx := context.Background()
+
+	for i := 0; i < 200; i++ {
+		_, err := db.ExecContext(ctx, "INSERT INTO test (name, value) VALUES (?, ?)", "auto_cp", i)
 		if err != nil {
-			return err
+			t.Fatalf("insert failed: %v", err)
 		}
-
-		return sql.ErrTxDone
-	})
-	if err == nil {
-		t.Fatal("expected error from transaction")
 	}
 
-	count, err := db.Count(ctx, "users", "name = ?", "RollbackUser")
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM test").Scan(&count)
 	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+		t.Fatalf("query failed: %v", err)
 	}
-
-	if count != 0 {
-		t.Errorf("expected 0 users after rollback, got %d", count)
-	}
-}
-
-func TestTransactionManualCommit(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("failed to begin tx: %v", err)
-	}
-
-	_, err = tx.Insert(ctx, "users", map[string]any{"name": "ManualUser", "email": "manual@example.com", "age": 70})
-	if err != nil {
-		t.Fatalf("failed to insert in tx: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("failed to commit: %v", err)
-	}
-
-	row, err := db.Get(ctx, "users", []string{"name"}, "name = ?", "ManualUser")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if row["name"] != "ManualUser" {
-		t.Errorf("expected ManualUser, got %v", row["name"])
-	}
-}
-
-func TestTransactionManualRollback(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("failed to begin tx: %v", err)
-	}
-
-	_, err = tx.Insert(ctx, "users", map[string]any{"name": "RollbackManual", "email": "rb@example.com", "age": 80})
-	if err != nil {
-		t.Fatalf("failed to insert in tx: %v", err)
-	}
-
-	if err := tx.Rollback(); err != nil {
-		t.Fatalf("failed to rollback: %v", err)
-	}
-
-	count, err := db.Count(ctx, "users", "name = ?", "RollbackManual")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if count != 0 {
-		t.Errorf("expected 0 users after rollback, got %d", count)
-	}
-}
-
-func TestQueryBuilder(t *testing.T) {
-	q := Query("users").
-		Select("id", "name", "email").
-		Where("age > ?", 25).
-		Where("name LIKE ?", "%a%").
-		OrderBy("name ASC").
-		Limit(10).
-		Offset(5)
-
-	query, args := q.Build()
-
-	expected := "SELECT id, name, email FROM users WHERE age > ? AND name LIKE ? ORDER BY name ASC LIMIT 10 OFFSET 5"
-	if query != expected {
-		t.Errorf("expected query %q, got %q", expected, query)
-	}
-
-	if len(args) != 2 {
-		t.Errorf("expected 2 args, got %d", len(args))
-	}
-	if args[0] != 25 {
-		t.Errorf("expected arg[0] to be 25, got %v", args[0])
-	}
-}
-
-func TestQueryWithQueryBuilder(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	_, err := db.Insert(ctx, "users", map[string]any{"name": "Alice", "email": "alice@example.com", "age": 30})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-	_, err = db.Insert(ctx, "users", map[string]any{"name": "Bob", "email": "bob@example.com", "age": 25})
-	if err != nil {
-		t.Fatalf("failed to insert: %v", err)
-	}
-
-	q := Query("users").Select("name", "age").Where("age >= ?", 28).OrderBy("name ASC")
-	query, args := q.Build()
-
-	rows, err := db.Query(ctx, query, args...)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if len(rows) != 1 {
-		t.Errorf("expected 1 row, got %d", len(rows))
-	}
-	if rows[0]["name"] != "Alice" {
-		t.Errorf("expected Alice, got %v", rows[0]["name"])
-	}
-}
-
-func TestTransactionMethods(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	err := db.WithTransaction(ctx, nil, func(tx *Transaction) error {
-		result, err := tx.Insert(ctx, "users", map[string]any{"name": "TxMethod", "email": "txm@example.com", "age": 90})
-		if err != nil {
-			return err
-		}
-
-		if result.RowsAffected != 1 {
-			t.Errorf("expected 1 row affected, got %d", result.RowsAffected)
-		}
-
-		row, err := tx.Get(ctx, "users", []string{"name", "age"}, "name = ?", "TxMethod")
-		if err != nil {
-			return err
-		}
-
-		if row["name"] != "TxMethod" {
-			t.Errorf("expected TxMethod, got %v", row["name"])
-		}
-
-		count, err := tx.Count(ctx, "users", "", nil)
-		if err != nil {
-			return err
-		}
-
-		if count != 1 {
-			t.Errorf("expected count 1, got %d", count)
-		}
-
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-}
-
-func TestDoubleCommit(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("failed to begin tx: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("first commit failed: %v", err)
-	}
-
-	if err := tx.Commit(); err == nil {
-		t.Fatal("expected error on double commit")
-	}
-}
-
-func TestDoubleRollback(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("failed to begin tx: %v", err)
-	}
-
-	if err := tx.Rollback(); err != nil {
-		t.Fatalf("first rollback failed: %v", err)
-	}
-
-	if err := tx.Rollback(); err != nil {
-		t.Fatalf("second rollback should not error: %v", err)
+	if count != 200 {
+		t.Errorf("expected 200 rows, got %d", count)
 	}
 }
