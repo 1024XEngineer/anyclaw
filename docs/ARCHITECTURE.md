@@ -1,310 +1,389 @@
-# AnyClaw 架构优化文档
+# AnyClaw Architecture
 
-## 概述
+## Overview
 
-本文档描述了基于 OpenClaw 架构模式对 AnyClaw 进行的优化。这些优化使 AnyClaw 更加模块化、可扩展和易于维护。
+AnyClaw is a local-first AI agent workspace written in Go, inspired by OpenClaw's architecture. It provides a complete personal AI assistant that runs on your own devices with support for 20+ messaging channels, a plugin/extension system, skills, and file-first memory.
 
-## 优化架构图
+## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    AnyClaw 优化后架构                     │
-├─────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
-│  │    CLI      │  │   Gateway   │  │   Canvas    │     │
-│  │   入口层    │  │   控制面    │  │    UI层     │     │
-│  └─────────────┘  └─────────────┘  └─────────────┘     │
-│          │               │               │              │
-│          └───────────────┴───────────────┘              │
-│                          │                              │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │              Agent Runtime (核心)                  │  │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  │  │
-│  │  │   Tools    │  │  Channels  │  │  Sessions  │  │  │
-│  │  │  注册表    │  │   插件     │  │   管理     │  │  │
-│  │  └────────────┘  └────────────┘  └────────────┘  │  │
-│  └──────────────────────────────────────────────────┘  │
-│                          │                              │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │              基础设施层                            │  │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  │  │
-│  │  │   Event    │  │   Config   │  │   Memory   │  │  │
-│  │  │    Bus     │  │   Manager  │  │   Store    │  │  │
-│  │  └────────────┘  └────────────┘  └────────────┘  │  │
-│  └──────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        AnyClaw Architecture                      │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+│  │    CLI       │  │   Gateway    │  │  Control UI  │          │
+│  │  (cmd/)      │  │  (HTTP/WS)   │  │  (ui/)       │          │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
+│         │                 │                  │                   │
+│         └─────────────────┴──────────────────┘                   │
+│                           │                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                   Core Runtime (pkg/)                     │   │
+│  │                                                          │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │   │
+│  │  │  Agent   │  │  Tools   │  │ Channels │  │ Sessions │ │   │
+│  │  │ Runtime  │  │ Registry │  │ Manager  │  │ Manager  │ │   │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │   │
+│  │                                                          │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │   │
+│  │  │  Plugin  │  │  Skills  │  │  Memory  │  │  Event   │ │   │
+│  │  │ Registry │  │ Manager  │  │  Store   │  │   Bus    │ │   │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │   │
+│  │                                                          │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │   │
+│  │  │  Config  │  │  Hooks   │  │  Prompt  │  │  Routing │ │   │
+│  │  │ Manager  │  │ Manager  │  │ Builder  │  │  Engine  │ │   │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                           │                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │              Extensions (extensions/)                     │   │
+│  │                                                          │   │
+│  │  telegram  discord  slack  whatsapp  signal  irc  matrix  │   │
+│  │  wechat    feishu   line   msteams   googlechat           │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                           │                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │              Storage Layer                                │   │
+│  │                                                          │   │
+│  │  .anyclaw/     Memory JSON files + daily markdowns       │   │
+│  │  .anyclaw/gateway/  Gateway state (sessions, tasks)       │   │
+│  │  workflows/    Bootstrap files (AGENTS.md, SOUL.md...)    │   │
+│  │  plugins/      Runtime-loaded plugins                     │   │
+│  │  skills/       Bundled skill definitions                  │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 已实现的优化模块
+## Directory Structure
 
-### 1. 事件总线 (Event Bus)
-
-**文件**: `pkg/event/bus.go`
-
-**功能**:
-- 发布/订阅模式
-- 事件中间件支持
-- 事件历史记录
-- 异步事件处理
-
-**使用示例**:
-```go
-// 创建事件总线
-eventBus := event.NewEventBus()
-
-// 订阅事件
-eventBus.Subscribe(event.EventToolCall, func(ctx context.Context, event event.Event) error {
-    fmt.Printf("Tool called: %v\n", event.Data)
-    return nil
-})
-
-// 发布事件
-eventBus.Publish(ctx, event.Event{
-    Type:   event.EventToolCall,
-    Source: "tool_registry",
-    Data: map[string]interface{}{
-        "tool": "read_file",
-    },
-    Timestamp: time.Now().Unix(),
-})
+```
+anyclaw/
+├── cmd/anyclaw/              # CLI entrypoint (multi-command)
+│   ├── main.go               # Main entry, command dispatch
+│   ├── agent_cli.go          # Agent subcommands
+│   ├── channels_cli.go       # Channel management
+│   ├── config_cli.go         # Config management
+│   ├── gateway_cli.go        # Gateway start/stop/status
+│   ├── gateway_http.go       # Gateway HTTP handlers
+│   ├── plugin_cli.go         # Plugin management
+│   ├── skill_cli.go          # Skill management
+│   ├── setup_cli.go          # Setup/onboarding
+│   └── ...                   # Other CLI commands
+│
+├── pkg/                      # Core packages (Go standard layout)
+│   ├── agent/                # Agent runtime (run loop, tool calls)
+│   ├── agents/               # Agent definitions
+│   ├── agentstore/           # Agent store/installation
+│   ├── apps/                 # App runtime, bindings, pairings
+│   ├── audit/                # Audit logging
+│   ├── auto-reply/           # Auto-reply pipeline
+│   ├── cdp/                  # Chrome DevTools Protocol
+│   ├── channel/              # Channel compatibility shim
+│   ├── channels/             # Channel adapters (core)
+│   ├── chat/                 # Chat handling
+│   ├── clawbridge/           # Claw-code reference surface
+│   ├── cliadapter/           # CLI adapter system
+│   ├── clihub/               # CLI harness catalog
+│   ├── config/               # Configuration system
+│   ├── context/              # Context engine
+│   ├── context-engine/       # Context engine abstraction
+│   ├── cron/                 # Cron scheduler
+│   ├── enterprise/           # Enterprise features (SSO, vector)
+│   ├── event/                # Event bus
+│   ├── extension/            # Extension loading & management
+│   ├── gateway/              # HTTP/WebSocket gateway server
+│   ├── hooks/                # Hook system (message/tool/agent)
+│   ├── i18n/                 # Internationalization
+│   ├── llm/                  # LLM compatibility shim
+│   ├── media/                # Media handling
+│   ├── memory/               # File-first memory + hybrid search
+│   ├── nodes/                # Node system
+│   ├── orchestrator/         # Multi-agent orchestrator
+│   ├── pi/                   # Personal intelligence
+│   ├── plugin/               # Plugin system
+│   ├── prompt/               # System prompt builder
+│   ├── providers/            # LLM provider management
+│   ├── reply/                # Reply handling
+│   ├── routing/              # LLM routing logic
+│   ├── runtime/              # Bootstrap/runtime orchestration
+│   ├── sdk/                  # SDK
+│   ├── security/             # Security utilities
+│   ├── session/              # Session management
+│   ├── setup/                # Setup/onboarding
+│   ├── skills/               # Skill loading/execution
+│   ├── speech/               # Speech handling
+│   ├── task/                 # Task management
+│   ├── tools/                # Tool registry and builtins
+│   ├── ui/                   # Terminal UI utilities
+│   ├── verification/         # Verification/integration testing
+│   ├── workflow/             # Workflow graph engine
+│   └── workspace/            # Workspace bootstrap/rituals
+│
+├── extensions/               # Channel extensions (OpenClaw-style)
+│   ├── telegram/             # Telegram channel extension
+│   ├── discord/              # Discord channel extension
+│   ├── slack/                # Slack channel extension
+│   ├── whatsapp/             # WhatsApp channel extension
+│   ├── signal/               # Signal channel extension
+│   ├── irc/                  # IRC channel extension
+│   ├── matrix/               # Matrix channel extension
+│   ├── wechat/               # WeChat channel extension
+│   ├── feishu/               # Feishu/Lark channel extension
+│   ├── line/                 # LINE channel extension
+│   ├── msteams/              # Microsoft Teams extension
+│   └── googlechat/           # Google Chat extension
+│
+├── skills/                   # Bundled skills
+│   └── web-search/           # Web search skill
+│
+├── plugins/                  # Plugin directory (runtime-loaded)
+│
+├── workflows/personal/       # Workspace bootstrap files
+│   ├── AGENTS.md             # Agent definitions
+│   ├── SOUL.md               # Personality/soul
+│   ├── IDENTITY.md           # Identity definition
+│   ├── MEMORY.md             # Memory config
+│   ├── TOOLS.md              # Tool definitions
+│   ├── USER.md               # User profile
+│   ├── HEARTBEAT.md          # Heartbeat config
+│   └── memory/               # Daily memory files
+│
+├── ui/                       # Web Control UI
+├── docs/                     # Documentation
+├── scripts/                  # Build/dev scripts
+│
+├── anyclaw.json              # Runtime configuration
+├── go.mod / go.sum           # Go module definition
+├── package.json              # Node.js UI workspace
+├── Dockerfile                # Container definition
+└── docker-compose.yml        # Docker compose
 ```
 
-### 2. 模块化配置系统
+## Core Components
 
-**文件**: `pkg/config/modular.go`
+### 1. CLI Layer (`cmd/anyclaw/`)
 
-**功能**:
-- 分层配置管理
-- 环境变量覆盖
-- 运行时覆盖
-- 配置验证
-- 配置迁移
-- 模块化配置
+Multi-command CLI with 20+ subcommands:
+- **Interactive mode**: `anyclaw -i` for conversational interface
+- **Gateway**: `anyclaw gateway start` for daemon mode
+- **Management**: config, skills, plugins, channels, models, agents, cron, tasks
+- **Diagnostics**: `doctor`, `status`, `health`
 
-**使用示例**:
-```go
-// 创建配置管理器
-configManager := config.NewModularConfigManager("anyclaw.json")
+### 2. Agent Runtime (`pkg/agent/`)
 
-// 注册验证器
-configManager.RegisterValidator(&MyValidator{})
+The core reasoning engine with:
+- **Run loop**: User input → intent preprocessor → system prompt → LLM chat → tool execution → response
+- **Tool call parsing**: Native LLM tool calls + regex-based text fallback
+- **Evidence-based execution**: Inspect → plan → execute → verify → adapt
+- **Max tool calls**: 10 per turn to prevent infinite loops
 
-// 注册迁移器
-configManager.RegisterMigrator(&MyMigrator{})
+### 3. Gateway (`pkg/gateway/`)
 
-// 加载配置
-cfg, err := configManager.Load()
+HTTP + WebSocket server with:
+- **50+ WebSocket RPC methods**: chat, agents, sessions, tasks, tools, plugins, config, channels
+- **Challenge-handshake auth**: Nonce verification before method access
+- **Permission model**: RBAC with hierarchical access checks
+- **State persistence**: Sessions, tasks, events, approvals saved to `.anyclaw/gateway/state.json`
 
-// 设置环境变量覆盖
-configManager.SetEnvOverride("ANYCLAW_LLM_PROVIDER", "anthropic")
+### 4. Channels (`pkg/channels/` + `extensions/`)
 
-// 保存配置
-configManager.Save()
+Multi-platform messaging with **extension architecture** (OpenClaw-style):
+- **Core channels**: Telegram, Discord, Slack, WhatsApp, Signal, IRC (built-in adapters)
+- **Extension channels**: Matrix, WeChat, Feishu, LINE, MS Teams, Google Chat (plugin-based)
+- **Each extension**: `anyclaw.extension.json` manifest + standalone Go adapter
+- **Communication**: stdin/stdout JSON protocol for external process plugins
+- **Polling model**: Most channels use configurable polling intervals
+
+### 5. Plugin System (`pkg/plugin/`)
+
+Manifest-driven, process-isolated plugins:
+- **Plugin kinds**: tool, channel, app, node, surface, ingress
+- **Execution**: External processes with `ANYCLAW_PLUGIN_INPUT` env var
+- **Trust system**: SHA-256 signature verification with trusted signers
+- **Permission model**: `tool:exec`, `fs:read`, `fs:write`, `net:out`
+
+### 6. Extension System (`pkg/extension/`)
+
+OpenClaw-style extension architecture:
+- **Discovery**: Scan `extensions/` directory for `anyclaw.extension.json` manifests
+- **Manifest**: ID, name, version, kind, channels, entrypoint, permissions, config schema
+- **Registry**: Load, enable/disable, list by kind
+- **Runtime**: External process execution with stdin/stdout JSON protocol
+
+### 7. Skills (`pkg/skills/`)
+
+Reusable capability packages:
+- **Format**: `skill.json` (metadata) + `SKILL.md` (human-readable)
+- **Execution**: External processes (Python, Node.js, shell, PowerShell)
+- **Tool registration**: Each skill registers as `skill_<name>` in tool registry
+- **System prompts**: Skills contribute prompt fragments
+
+### 8. Memory (`pkg/memory/`)
+
+File-first memory with **hybrid search** (OpenClaw-style):
+- **FileMemory**: JSON files organized by type (conversation, reflection, fact)
+- **Daily markdown**: Conversations appended to `YYYY-MM-DD.md` files
+- **Hybrid search**: Keyword (TF-IDF) + vector (placeholder) + temporal decay
+- **MMR ranking**: Maximal Marginal Relevance for diverse results
+- **Temporal decay**: Exponential decay with configurable half-life (default 7 days)
+
+### 9. Hooks (`pkg/hooks/`)
+
+Event-driven interceptors (OpenClaw-style):
+- **Message hooks**: `message:inbound`, `message:outbound`, `message:sent`
+- **Tool hooks**: `tool:call`, `tool:result`, `tool:error`
+- **Agent hooks**: `agent:start`, `agent:stop`, `agent:think`, `agent:error`
+- **Session hooks**: `session:create`, `session:close`, `session:message`
+- **Lifecycle hooks**: `gateway:start`, `gateway:stop`, `compaction:before/after`
+- **Middleware**: Composable middleware chain with timeout support
+
+### 10. Config (`pkg/config/`)
+
+Comprehensive configuration system:
+- **14 top-level sections**: LLM, Agent, Providers, Skills, Memory, Gateway, Daemon, Channels, Plugins, Sandbox, Security, Orchestrator
+- **Provider profiles**: Multiple LLM providers with capabilities
+- **Agent profiles**: Named profiles with personality specs
+- **Environment overrides**: `ANYCLAW_LLM_PROVIDER`, `ANYCLAW_LLM_API_KEY`, etc.
+- **Validation**: Config validation with error reporting
+
+### 11. Tools (`pkg/tools/`)
+
+Agent action layer with 25+ files:
+- **Registry**: Thread-safe tool registration with categories and access levels
+- **Builtin tools**: `read_file`, `write_file`, `list_directory`, `search_files`, `run_command`, web fetch, browser control
+- **Browser tools**: Chrome DevTools Protocol via `chromedp`
+- **Desktop tools**: UI automation, OCR, image matching, window management
+- **Policy engine**: Path-based access control and permission levels
+- **Sandbox**: Execution sandbox with local and Docker backends
+
+### 12. Routing (`pkg/routing/`)
+
+LLM routing based on keyword matching:
+- **Reasoning route**: Complex/plan/code → reasoning provider
+- **Fast route**: Simple queries → fast provider
+- **Configuration**: Rules in `anyclaw.json` under `llm.routing`
+
+## Initialization Flow
+
+```
+main()
+  └── run()
+       └── switch command
+            ├── interactive: runRootCommand()
+            │    ├── ensureConfigOnboarded()
+            │    ├── config.Load()
+            │    ├── appRuntime.Bootstrap()
+            │    │    ├── Phase 1: Config
+            │    │    ├── Phase 2: Storage
+            │    │    ├── Phase 3: Security
+            │    │    ├── Phase 4: Skills
+            │    │    ├── Phase 5: Tools
+            │    │    ├── Phase 6: Plugins
+            │    │    ├── Phase 7: LLM
+            │    │    └── Phase 8: Agent
+            │    ├── rebindBuiltins()
+            │    └── runInteractive()
+            │
+            └── gateway: gatewayCLI.Start()
+                 ├── appRuntime.Bootstrap()
+                 ├── Gateway server init
+                 ├── Channel adapters start
+                 └── WebSocket + HTTP listeners
 ```
 
-### 3. 插件化渠道系统
+## Design Patterns
 
-**文件**: `pkg/channel/plugin.go`
+| Pattern | Where Used |
+|---------|-----------|
+| Phase-Based Bootstrap | `runtime.Bootstrap()` - 9 ordered phases |
+| Publish-Subscribe | `event.EventBus` - decoupled component communication |
+| Registry | `tools.Registry`, `plugin.Registry`, `extension.Registry` |
+| Plugin Architecture | Manifest-driven, process-isolated plugins |
+| Extension Architecture | OpenClaw-style `extensions/` with manifests |
+| Strategy | Config validators/migrators, LLM providers |
+| File-First Storage | Memory as JSON files + daily markdown |
+| Evidence-Based Execution | Agent inspect→execute→verify loops |
+| Hierarchical Resources | Org → Project → Workspace |
+| Hook System | Message/tool/agent lifecycle interceptors |
+| Middleware Chain | Hooks with composable middleware |
+| Hybrid Search | Keyword + vector + temporal decay + MMR |
 
-**功能**:
-- 统一渠道接口
-- 渠道插件注册
-- 渠道健康检查
-- 消息广播
-- 事件集成
+## Differences from OpenClaw
 
-**使用示例**:
-```go
-// 创建渠道管理器
-channelManager := channel.NewChannelManager(eventBus)
+| Aspect | AnyClaw (Go) | OpenClaw (TypeScript) |
+|--------|-------------|----------------------|
+| Language | Go (compiled, single binary) | TypeScript (Node.js runtime) |
+| Module System | Go packages (`pkg/`) | pnpm workspaces (packages, extensions) |
+| Plugin Loading | External process (stdin/stdout JSON) | jiti runtime transpilation |
+| Distribution | Single static binary | npm package |
+| Concurrency | Goroutines + channels | Async/await + event emitters |
+| Memory | File-first JSON + markdown | SQLite + sqlite-vec + LanceDB |
+| Build | `go build` | `tsdown` bundler + Vite |
+| Channels | Built-in + extension processes | Extension packages (44+) |
+| UI | Embedded dashboard + Lit SPA | Lit SPA served by gateway |
+| Native Apps | Not yet | Android, iOS, macOS apps |
 
-// 注册渠道插件
-channelManager.RegisterPlugin(&TelegramPlugin{})
+## Supported Channels
 
-// 连接所有渠道
-channelManager.ConnectAll(ctx)
+| Channel | Status | Type |
+|---------|--------|------|
+| Telegram | ✅ Built-in | Polling |
+| Discord | ✅ Built-in | Polling + Webhook |
+| Slack | ✅ Built-in | Polling |
+| WhatsApp | ✅ Built-in | Webhook |
+| Signal | ✅ Built-in | Polling (signal-cli) |
+| IRC | ✅ Built-in | Persistent connection |
+| Matrix | 📦 Extension | Polling |
+| WeChat | 📦 Extension | Webhook |
+| Feishu/Lark | 📦 Extension | Webhook |
+| LINE | 📦 Extension | Webhook |
+| MS Teams | 📦 Extension | Webhook |
+| Google Chat | 📦 Extension | Webhook |
 
-// 发送消息
-channelManager.SendMessage(ctx, "telegram", &channel.Message{
-    Content: "Hello!",
-})
+## Getting Started
 
-// 广播消息
-channelManager.BroadcastMessage(ctx, &channel.Message{
-    Content: "Broadcast message",
-})
+```bash
+# Build
+go build -o anyclaw ./cmd/anyclaw
+
+# Setup
+./anyclaw --setup
+
+# Interactive mode
+./anyclaw -i
+
+# Gateway mode
+./anyclaw gateway start
 ```
 
-### 4. 改进的工具注册表
+## Configuration
 
-**文件**: `pkg/tools/registry.go`
+Runtime configuration is stored in `anyclaw.json`:
 
-**功能**:
-- 工具分类
-- 访问级别控制
-- 工具缓存
-- 带重试执行
-- 工具定义导出
-
-**使用示例**:
-```go
-// 创建注册表
-registry := tools.NewRegistry()
-
-// 注册工具
-registry.Register(&tools.Tool{
-    Name:        "read_file",
-    Description: "Read a file",
-    Category:    tools.ToolCategoryFile,
-    AccessLevel: tools.ToolAccessPublic,
-    Handler:     ReadFileHandler,
-})
-
-// 按类别获取工具
-fileTools := registry.GetToolsByCategory(tools.ToolCategoryFile)
-
-// 带重试执行
-result, err := registry.CallWithRetry(ctx, "read_file", input, 3)
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4",
+    "api_key": "sk-..."
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "bot_token": "...",
+      "poll_every": 3
+    }
+  },
+  "memory": {
+    "backend": "file"
+  },
+  "gateway": {
+    "port": 18789
+  }
+}
 ```
 
-### 5. Gateway 控制面
+## Version
 
-**文件**: `pkg/gateway/control.go`
-
-**功能**:
-- WebSocket 服务器
-- HTTP API
-- 客户端管理
-- 消息广播
-- 健康检查
-
-**使用示例**:
-```go
-// 创建 Gateway
-gateway := gateway.NewGateway(gateway.GatewayConfig{
-    Host: "localhost",
-    Port: 18789,
-})
-
-// 注册消息处理器
-gateway.RegisterHandler("agent.send", handleAgentSend)
-
-// 启动 Gateway
-go gateway.Start(ctx)
-
-// 广播消息
-gateway.Broadcast(&gateway.Message{
-    Type: "notification",
-    Result: map[string]interface{}{
-        "message": "Hello!",
-    },
-})
-```
-
-### 6. 会话管理系统
-
-**文件**: `pkg/session/manager.go`
-
-**功能**:
-- 会话创建/关闭
-- 会话历史管理
-- 会话持久化
-- 会话查询
-- 历史限制
-
-**使用示例**:
-```go
-// 创建会话管理器
-sessionManager := session.NewSessionManager("data/sessions", 100)
-
-// 创建会话
-session, err := sessionManager.CreateSession("agent1", "telegram", "user1")
-
-// 添加消息
-sessionManager.AddMessage(session.ID, session.Message{
-    Role:    "user",
-    Content: "Hello!",
-})
-
-// 获取历史
-history, err := sessionManager.GetHistory(session.ID, 10)
-```
-
-## 设计模式
-
-### 1. 发布/订阅模式
-
-事件总线使用发布/订阅模式实现组件间的松耦合通信。
-
-### 2. 工具注册表模式
-
-工具注册表使用注册表模式管理所有可用工具。
-
-### 3. 插件模式
-
-渠道系统使用插件模式支持动态加载渠道。
-
-### 4. 策略模式
-
-配置系统使用策略模式支持不同的验证和迁移策略。
-
-### 5. 单例模式
-
-会话管理器使用单例模式确保全局状态一致性。
-
-## 性能优化
-
-### 1. 缓存
-
-工具注册表和配置管理器都实现了缓存机制，减少重复计算。
-
-### 2. 异步处理
-
-事件总线支持异步事件处理，不阻塞主流程。
-
-### 3. 连接池
-
-Gateway 使用连接池管理 WebSocket 连接。
-
-### 4. 历史限制
-
-会话管理器和事件总线都实现了历史限制，防止内存溢出。
-
-## 安全性
-
-### 1. 访问控制
-
-工具注册表支持访问级别控制（public, owner, admin, private）。
-
-### 2. 输入验证
-
-所有工具都实现了输入验证。
-
-### 3. 配置验证
-
-配置管理器在加载时验证配置。
-
-### 4. 安全的 WebSocket
-
-Gateway 支持 TLS 和跨域检查。
-
-## 测试
-
-每个模块都应该有对应的测试文件。测试应该包括：
-
-1. 单元测试
-2. 集成测试
-3. 性能测试
-4. 安全测试
-
-## 后续优化
-
-1. **添加更多渠道插件**: 实现更多渠道的插件
-2. **实现 Canvas UI**: 添加可视化界面
-3. **添加监控**: 集成监控系统
-4. **实现分布式**: 支持分布式部署
-5. **添加机器学习**: 集成 ML 模型
-
-## 结论
-
-通过这些优化，AnyClaw 变得更加模块化、可扩展和易于维护。新的架构借鉴了 OpenClaw 的设计模式，同时保持了 Go 语言的简洁性和性能优势。
+`2026.3.13`

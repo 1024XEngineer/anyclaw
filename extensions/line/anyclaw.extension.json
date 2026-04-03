@@ -1,0 +1,26 @@
+{
+  "id": "line",
+  "name": "LINE Channel",
+  "version": "1.0.0",
+  "description": "LINE messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["line"],
+  "entrypoint": "line_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "channel_access_token": {
+        "type": "string",
+        "description": "LINE Channel Access Token",
+        "sensitive": true
+      },
+      "channel_secret": {
+        "type": "string",
+        "description": "LINE Channel Secret",
+        "sensitive": true
+      }
+    },
+    "required": ["channel_access_token", "channel_secret"]
+  }
+}
