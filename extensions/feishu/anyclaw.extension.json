@@ -1,0 +1,35 @@
+{
+  "id": "feishu",
+  "name": "Feishu/Lark Channel",
+  "version": "1.0.0",
+  "description": "Feishu/Lark messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["feishu"],
+  "entrypoint": "feishu_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "app_id": {
+        "type": "string",
+        "description": "Feishu App ID"
+      },
+      "app_secret": {
+        "type": "string",
+        "description": "Feishu App Secret",
+        "sensitive": true
+      },
+      "verification_token": {
+        "type": "string",
+        "description": "Feishu event verification token",
+        "sensitive": true
+      },
+      "encrypt_key": {
+        "type": "string",
+        "description": "Feishu event encrypt key",
+        "sensitive": true
+      }
+    },
+    "required": ["app_id", "app_secret"]
+  }
+}

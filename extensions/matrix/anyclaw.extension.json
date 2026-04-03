@@ -1,0 +1,35 @@
+{
+  "id": "matrix",
+  "name": "Matrix Channel",
+  "version": "1.0.0",
+  "description": "Matrix messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["matrix"],
+  "entrypoint": "matrix_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "homeserver": {
+        "type": "string",
+        "description": "Matrix homeserver URL",
+        "default": "https://matrix.org"
+      },
+      "access_token": {
+        "type": "string",
+        "description": "Matrix access token",
+        "sensitive": true
+      },
+      "user_id": {
+        "type": "string",
+        "description": "Matrix user ID (e.g. @user:matrix.org)"
+      },
+      "rooms": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Room IDs to monitor"
+      }
+    },
+    "required": ["homeserver", "access_token"]
+  }
+}

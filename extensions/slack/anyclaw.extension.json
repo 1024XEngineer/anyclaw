@@ -1,0 +1,31 @@
+{
+  "id": "slack",
+  "name": "Slack Channel",
+  "version": "1.0.0",
+  "description": "Slack messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["slack"],
+  "entrypoint": "slack_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "bot_token": {
+        "type": "string",
+        "description": "Slack Bot OAuth token",
+        "sensitive": true
+      },
+      "app_token": {
+        "type": "string",
+        "description": "Slack App-level token for Socket Mode",
+        "sensitive": true
+      },
+      "signing_secret": {
+        "type": "string",
+        "description": "Slack signing secret for webhook verification",
+        "sensitive": true
+      }
+    },
+    "required": ["bot_token"]
+  }
+}
