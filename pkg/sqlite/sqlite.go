@@ -73,6 +73,10 @@ type DB struct {
 	execCount  atomic.Int64
 }
 
+func (db *DB) DSN() string {
+	return db.cfg.DSN
+}
+
 func Open(cfg Config) (*DB, error) {
 	if cfg.DSN == "" {
 		cfg.DSN = ":memory:"
