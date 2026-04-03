@@ -31,7 +31,7 @@ func ProviderOptions() []ProviderOption {
 }
 
 func CanonicalProvider(provider string) string {
-	return providers.NormalizeProviderName(provider)
+	return llm.NormalizeProviderName(provider)
 }
 
 func DefaultModelForProvider(provider string) string {

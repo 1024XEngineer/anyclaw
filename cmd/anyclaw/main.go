@@ -477,7 +477,7 @@ func runInteractiveStable(ctx context.Context, state *RuntimeState) {
 	fmt.Println()
 
 	for {
-		fmt.Printf("%s", ui.Prompt())
+		fmt.Printf("%s", ui.Prompt("> "))
 		line, err := state.reader.ReadString('\n')
 		if err != nil {
 			break

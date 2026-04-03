@@ -19,3 +19,18 @@ type Router = ch.Router
 var NewBaseAdapter = ch.NewBaseAdapter
 var NewManager = ch.NewManager
 var NewRouter = ch.NewRouter
+
+var NewTelegramAdapter = ch.NewTelegramAdapter
+var NewSlackAdapter = ch.NewSlackAdapter
+var NewDiscordAdapter = ch.NewDiscordAdapter
+var NewWhatsAppAdapter = ch.NewWhatsAppAdapter
+var NewSignalAdapter = ch.NewSignalAdapter
+
+type TelegramAdapter = ch.TelegramAdapter
+type SlackAdapter = ch.SlackAdapter
+type DiscordAdapter = ch.DiscordAdapter
+type WhatsAppAdapter = ch.WhatsAppAdapter
+type SignalAdapter = ch.SignalAdapter
+
+var ReadBody = ch.ReadBody
+var AnalyzeRouting = ch.AnalyzeRouting
