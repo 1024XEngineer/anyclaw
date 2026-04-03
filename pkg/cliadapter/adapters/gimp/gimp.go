@@ -3,10 +3,7 @@ package gimp
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"strings"
 )
 
 type Adapter struct {
@@ -57,9 +54,6 @@ func (a *Adapter) convert(args []string) (string, error) {
 	}
 	input := args[0]
 	output := args[1]
-
-	ext := strings.ToLower(filepath.Ext(output))
-	format := strings.TrimPrefix(ext, ".")
 
 	script := fmt.Sprintf("(gimp-file-load RUN-NONINTERACTIVE \"%s\" \"%s\") (gimp-file-save RUN-NONINTERACTIVE (car (gimp-image-get-active-layer 1)) (car (gimp-image-get-active-drawable 1)) \"%s\" \"%s\") (gimp-quit 1)", input, input, output, output)
 

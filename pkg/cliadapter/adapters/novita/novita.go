@@ -43,7 +43,7 @@ func (c *Client) Execute(ctx context.Context, args []string) (string, error) {
 
 	switch cmd {
 	case "chat":
-		return c.chat(subArgs)
+		return c.chat(ctx, subArgs)
 	case "models":
 		return c.models(ctx)
 	case "help":
@@ -83,7 +83,7 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-func (c *Client) chat(args []string) (string, error) {
+func (c *Client) chat(ctx context.Context, args []string) (string, error) {
 	if len(args) < 2 {
 		return "", fmt.Errorf("chat requires <model> <prompt>")
 	}

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -44,11 +43,11 @@ func (c *Client) Execute(ctx context.Context, args []string) (string, error) {
 
 	switch cmd {
 	case "docs":
-		return c.docs(subArgs)
+		return c.docs(ctx, subArgs)
 	case "slides":
-		return c.slides(subArgs)
+		return c.slides(ctx, subArgs)
 	case "website":
-		return c.website(subArgs)
+		return c.website(ctx, subArgs)
 	case "help":
 		return c.help()
 	default:
@@ -56,7 +55,7 @@ func (c *Client) Execute(ctx context.Context, args []string) (string, error) {
 	}
 }
 
-func (c *Client) docs(args []string) (string, error) {
+func (c *Client) docs(ctx context.Context, args []string) (string, error) {
 	if len(args) < 2 {
 		return "", fmt.Errorf("docs requires <topic> <output.md>")
 	}
@@ -85,7 +84,7 @@ func (c *Client) docs(args []string) (string, error) {
 	return fmt.Sprintf("Generated docs: %s", output), nil
 }
 
-func (c *Client) slides(args []string) (string, error) {
+func (c *Client) slides(ctx context.Context, args []string) (string, error) {
 	if len(args) < 2 {
 		return "", fmt.Errorf("slides requires <topic> <output.pptx>")
 	}
@@ -113,7 +112,7 @@ func (c *Client) slides(args []string) (string, error) {
 	return fmt.Sprintf("Generated slides: %s", output), nil
 }
 
-func (c *Client) website(args []string) (string, error) {
+func (c *Client) website(ctx context.Context, args []string) (string, error) {
 	if len(args) < 2 {
 		return "", fmt.Errorf("website requires <topic> <output-dir>")
 	}

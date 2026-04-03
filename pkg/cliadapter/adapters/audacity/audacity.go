@@ -6,81 +6,91 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/anyclaw/anyclaw/v2/pkg/cliadapter/exec"
 )
 
-type Adapter struct {
-	exec *exec.Executor
+type Client struct {
+	soxPath string
 }
 
-func New(executor *exec.Executor) *Adapter {
-	return &Adapter{exec: executor}
+type Config struct {
+	SoxPath string
 }
 
-func (a *Adapter) Name() string {
-	return "audacity"
+func NewClient(cfg Config) *Client {
+	soxPath := cfg.SoxPath
+	if soxPath == "" {
+		soxPath = "sox"
+	}
+
+	return &Client{
+		soxPath: soxPath,
+	}
 }
 
-func (a *Adapter) Execute(ctx context.Context, args []string) (string, error) {
+func (c *Client) Run(ctx context.Context, args []string) (string, error) {
 	if len(args) == 0 {
-		return "", fmt.Errorf("no command specified")
+		return c.info(ctx)
 	}
 
-	cmd := args[0]
-	subArgs := args[1:]
-
-	switch cmd {
-	case "info":
-		return a.info()
+	switch args[0] {
+	case "info", "version":
+		return c.info(ctx)
 	case "convert":
-		return a.convert(subArgs)
+		return c.convert(ctx, args[1:])
 	case "trim":
-		return a.trim(subArgs)
+		return c.trim(ctx, args[1:])
 	default:
-		return "", fmt.Errorf("unknown command: %s", cmd)
+		return c.run(ctx, args)
 	}
 }
 
-func (a *Adapter) info() (string, error) {
-	cmd := exec.Command("sox", "--version")
-	output, err := a.exec.Run(ctx, cmd)
-	if err != nil {
-		return "", fmt.Errorf("sox not installed: %w", err)
-	}
-	return output, nil
+func (c *Client) info(ctx context.Context) (string, error) {
+	return c.run(ctx, []string{"--version"})
 }
 
-func (a *Adapter) convert(args []string) (string, error) {
+func (c *Client) convert(ctx context.Context, args []string) (string, error) {
 	if len(args) < 2 {
-		return "", fmt.Errorf("convert requires <input> <output>")
+		return "", fmt.Errorf("usage: audacity convert <input> <output>")
 	}
+
 	input := args[0]
 	output := args[1]
+	format := strings.TrimPrefix(strings.ToLower(filepath.Ext(output)), ".")
+	if format == "" {
+		return "", fmt.Errorf("output file must include an extension")
+	}
 
-	ext := strings.ToLower(filepath.Ext(output))
-	format := strings.TrimPrefix(ext, ".")
-
-	cmd := exec.Command("sox", input, "-t", format, output)
-	_, err := a.exec.Run(ctx, cmd)
+	_, err := c.run(ctx, []string{input, "-t", format, output})
 	if err != nil {
 		return "", fmt.Errorf("conversion failed: %w", err)
 	}
+
 	return fmt.Sprintf("Converted %s to %s", input, output), nil
 }
 
-func (a *Adapter) trim(args []string) (string, error) {
+func (c *Client) trim(ctx context.Context, args []string) (string, error) {
 	if len(args) < 3 {
-		return "", fmt.Errorf("trim requires <input> <output> <duration>")
+		return "", fmt.Errorf("usage: audacity trim <input> <output> <duration>")
 	}
+
 	input := args[0]
 	output := args[1]
 	duration := args[2]
 
-	cmd := exec.Command("sox", input, output, "trim", "0", duration)
-	_, err := a.exec.Run(ctx, cmd)
+	_, err := c.run(ctx, []string{input, output, "trim", "0", duration})
 	if err != nil {
 		return "", fmt.Errorf("trim failed: %w", err)
 	}
+
 	return fmt.Sprintf("Trimmed %s to %s seconds", output, duration), nil
+}
+
+func (c *Client) run(ctx context.Context, args []string) (string, error) {
+	cmd := exec.CommandContext(ctx, c.soxPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), err
+	}
+
+	return strings.TrimSpace(string(output)), nil
 }

@@ -77,7 +77,7 @@ func (c *Client) queue(ctx context.Context) (string, error) {
 }
 
 func (c *Client) history(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+="/history", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/history", nil)
 	if err != nil {
 		return "", err
 	}
@@ -119,7 +119,7 @@ func (c *Client) prompt(ctx context.Context, args []string) (string, error) {
 }
 
 func (c *Client) interrupt(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+="/interrupt", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/interrupt", nil)
 	if err != nil {
 		return "", err
 	}
@@ -159,7 +159,7 @@ func (c *Client) seed(ctx context.Context, args []string) (string, error) {
 }
 
 func (c *Client) IsRunning(ctx context.Context) bool {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+="/system_stats", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/system_stats", nil)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return false

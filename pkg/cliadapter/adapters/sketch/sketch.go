@@ -3,9 +3,7 @@ package sketch
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 )
 
 type Adapter struct {

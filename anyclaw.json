@@ -338,6 +338,10 @@
     "host": "127.0.0.1",
     "port": 18789,
     "bind": "loopback",
+    "control_ui": {
+      "base_path": "/dashboard",
+      "root": ""
+    },
     "worker_count": 0,
     "runtime_max_instances": 16,
     "runtime_idle_seconds": 900,

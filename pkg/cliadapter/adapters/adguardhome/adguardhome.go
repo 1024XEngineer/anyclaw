@@ -2,12 +2,10 @@ package adguardhome
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strings"
 )
 
 type Client struct {

@@ -3,7 +3,6 @@ package renderdoc
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 )
 

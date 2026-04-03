@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"path/filepath"
-	"strings"
 )
 
 type Adapter struct {

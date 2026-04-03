@@ -58,9 +58,6 @@ func (a *Adapter) convert(args []string) (string, error) {
 	input := args[0]
 	output := args[1]
 
-	ext := strings.ToLower(filepath.Ext(output))
-	format := strings.TrimPrefix(ext, ".")
-
 	cmd := exec.Command(a.mscorePath, "-o", output, input)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

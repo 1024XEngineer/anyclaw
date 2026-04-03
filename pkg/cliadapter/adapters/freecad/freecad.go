@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 )
 
 type Adapter struct {
@@ -65,7 +64,7 @@ func (a *Adapter) open(args []string) (string, error) {
 	}
 
 	for _, f := range args {
-		if _, err := os.Stat(f); os.IsNotExist(f) {
+		if _, err := os.Stat(f); os.IsNotExist(err) {
 			return "", fmt.Errorf("file not found: %s", f)
 		}
 	}

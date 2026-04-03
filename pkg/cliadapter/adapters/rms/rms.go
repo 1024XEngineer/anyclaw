@@ -2,7 +2,6 @@ package rms
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
