@@ -489,6 +489,7 @@ func runInteractiveStable(ctx context.Context, state *RuntimeState) {
 		if err != nil {
 			break
 		}
+		line = strings.TrimPrefix(line, "\ufeff")
 		if line == "" {
 			continue
 		}
