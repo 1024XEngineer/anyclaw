@@ -1,10 +1,10 @@
 {
   "llm": {
-    "provider": "openai",
-    "model": "stepfun/step-3.5-flash",
-    "api_key": "sk-6a785c3e20fba40e9fd3dbbbe4f86dc44760ce9b4a288bef8d2fec50c9086448",
-    "base_url": "https://api.qnaigc.com/v1",
-    "default_provider_ref": "openai-compatible",
+    "provider": "qwen",
+    "model": "qwen-max",
+    "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "default_provider_ref": "primary-qwen",
     "max_tokens": 4096,
     "temperature": 0.7,
     "proxy": "",
@@ -30,16 +30,25 @@
     }
   },
   "agent": {
-    "name": "个人助手",
+    "name": "艾莉",
     "description": "通用AI助手",
     "work_dir": ".anyclaw",
     "working_dir": "workflows/personal",
     "permission_level": "full",
     "require_confirmation_for_dangerous": false,
     "skills": [
-      {"name": "vision-agent", "enabled": true},
-      {"name": "app-controller", "enabled": true},
-      {"name": "voice-assistant", "enabled": true}
+      {
+        "name": "vision-agent",
+        "enabled": true
+      },
+      {
+        "name": "app-controller",
+        "enabled": true
+      },
+      {
+        "name": "voice-assistant",
+        "enabled": true
+      }
     ],
     "profiles": [
       {
@@ -301,10 +310,20 @@
         "custom-endpoint"
       ],
       "enabled": true
+    },
+    {
+      "id": "primary-qwen",
+      "name": "Primary Qwen",
+      "type": "qwen",
+      "provider": "qwen",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
+      "default_model": "qwen-max",
+      "enabled": true
     }
   ],
   "skills": {
-    "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\anyclaw\\skills",
+    "dir": "D:/anyclaw/anyclaw/anyclaw/anyclaw3/anyclaw/skills",
     "auto_load": true,
     "include": null,
     "exclude": null
@@ -319,6 +338,7 @@
     "host": "127.0.0.1",
     "port": 18789,
     "bind": "loopback",
+    "worker_count": 0,
     "runtime_max_instances": 16,
     "runtime_idle_seconds": 900,
     "job_worker_count": 2,

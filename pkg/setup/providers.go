@@ -31,7 +31,7 @@ func ProviderOptions() []ProviderOption {
 }
 
 func CanonicalProvider(provider string) string {
-	return llm.NormalizeProviderName(provider)
+	return providers.NormalizeProviderName(provider)
 }
 
 func DefaultModelForProvider(provider string) string {
@@ -69,6 +69,22 @@ func ProviderHint(provider string) string {
 
 func ProviderNeedsAPIKey(provider string) bool {
 	return llm.ProviderRequiresAPIKey(provider)
+}
+
+func DefaultBaseURLForProvider(provider string) string {
+	provider = CanonicalProvider(provider)
+	switch provider {
+	case "openai":
+		return "https://api.openai.com/v1"
+	case "anthropic":
+		return "https://api.anthropic.com/v1"
+	case "ollama":
+		return "http://localhost:11434/v1"
+	case "qwen":
+		return "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	default:
+		return ""
+	}
 }
 
 func ResolveProviderChoice(input string, fallback string) string {

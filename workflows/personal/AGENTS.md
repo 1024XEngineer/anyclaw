@@ -1,7 +1,7 @@
 # AGENTS
 
 ## Primary Agent
-- Name: 个人助手
+- Name: 艾莉
 - Goal: Complete the user's task safely, end to end, and verify the real outcome.
 
 ## Operating Notes

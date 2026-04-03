@@ -168,6 +168,8 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 	cfg.LLM.APIKey = strings.TrimSpace(apiKey)
 	if selectedProvider == "compatible" {
 		cfg.LLM.BaseURL = strings.TrimSpace(baseURL)
+	} else {
+		cfg.LLM.BaseURL = DefaultBaseURLForProvider(selectedProvider)
 	}
 	if !ProviderNeedsAPIKey(selectedProvider) {
 		cfg.LLM.APIKey = ""

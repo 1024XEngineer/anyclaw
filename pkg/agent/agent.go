@@ -40,6 +40,7 @@ type Agent struct {
 	observerMu         sync.RWMutex
 	lastToolActivities []ToolActivity
 	intentPreprocessor *IntentPreprocessor
+	preferenceLearner  *PreferenceLearner
 }
 
 type Config struct {
@@ -79,6 +80,10 @@ func New(cfg Config) *Agent {
 
 	if cfg.CLIHubRoot != "" {
 		agent.intentPreprocessor, _ = NewIntentPreprocessor(cfg.CLIHubRoot, nil)
+	}
+
+	if cfg.WorkingDir != "" {
+		agent.preferenceLearner = NewPreferenceLearner(cfg.WorkingDir)
 	}
 
 	return agent
@@ -132,6 +137,12 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 
 	a.memory.Add(memory.MemoryEntry{Type: "conversation", Role: "user", Content: userInput})
 	a.memory.Add(memory.MemoryEntry{Type: "conversation", Role: "assistant", Content: response})
+
+	if a.preferenceLearner != nil {
+		if prefResponse, learned := a.preferenceLearner.Learn(userInput, response); learned {
+			response = prefResponse + "\n\n" + response
+		}
+	}
 
 	return response, nil
 }
