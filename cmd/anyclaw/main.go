@@ -477,12 +477,10 @@ func runInteractiveStable(ctx context.Context, state *RuntimeState) {
 	fmt.Println()
 
 	for {
-		fmt.Printf("%s", ui.Prompt("> "))
-		line, err := state.reader.ReadString('\n')
+		line, err := readInteractiveLineStable(state)
 		if err != nil {
 			break
 		}
-		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -506,6 +504,15 @@ func runInteractiveStable(ctx context.Context, state *RuntimeState) {
 		}
 		fmt.Printf("%s\n\n", ui.Bold.Sprint(answer))
 	}
+}
+
+func readInteractiveLineStable(state *RuntimeState) (string, error) {
+	fmt.Print("> ")
+	line, err := state.reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }
 
 func rebindBuiltinsStable(state *RuntimeState) {

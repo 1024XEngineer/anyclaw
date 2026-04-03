@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/clawbridge"
 	"github.com/anyclaw/anyclaw/pkg/llm"
@@ -109,6 +110,80 @@ func TestBuildSystemPromptHandlesNilDependencies(t *testing.T) {
 	}
 	if strings.Contains(systemPrompt, "## AnyClaw Core") {
 		t.Fatalf("did not expect AnyClaw core section without execution tools, got %q", systemPrompt)
+	}
+}
+
+func TestBuildSystemPromptLimitsInjectedMemory(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+
+	for i := 0; i < 12; i++ {
+		if err := mem.Add(memory.MemoryEntry{
+			Type:      memory.TypeConversation,
+			Timestamp: time.Unix(int64(i+1), 0),
+			Content:   fmt.Sprintf("conversation-%02d %s", i, strings.Repeat("x", 900)),
+		}); err != nil {
+			t.Fatalf("add conversation memory %d: %v", i, err)
+		}
+	}
+	if err := mem.Add(memory.MemoryEntry{
+		Type:      memory.TypeFact,
+		Timestamp: time.Unix(100, 0),
+		Content:   "stable-fact " + strings.Repeat("y", 900),
+	}); err != nil {
+		t.Fatalf("add fact memory: %v", err)
+	}
+
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		Memory:      mem,
+		Skills:      skills.NewSkillsManager(""),
+		Tools:       tools.NewRegistry(),
+	})
+
+	systemPrompt, err := ag.buildSystemPrompt()
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if len(systemPrompt) > 12000 {
+		t.Fatalf("expected bounded prompt length, got %d characters", len(systemPrompt))
+	}
+	if !strings.Contains(systemPrompt, "stable-fact") {
+		t.Fatalf("expected stable memory to be retained, got %q", systemPrompt)
+	}
+	if strings.Contains(systemPrompt, "conversation-11") || strings.Contains(systemPrompt, "conversation-00") {
+		t.Fatalf("expected conversation memories to stay out of prompt injection, got %q", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "Prompt memory limited.") {
+		t.Fatalf("expected truncated memory notice, got %q", systemPrompt)
+	}
+}
+
+func TestSelectToolInfosSkipsBulkToolsForCasualQuestion(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("read_file", "Read a file", map[string]any{}, nil)
+	registry.RegisterTool("desktop_open", "Open a desktop app", map[string]any{}, nil)
+	registry.RegisterTool("browser_navigate", "Open a page", map[string]any{}, nil)
+	registry.RegisterTool("blender_open", "Open Blender", map[string]any{}, nil)
+
+	ag := New(Config{Tools: registry})
+
+	casual := ag.selectToolInfos("你是谁")
+	if len(casual) != 0 {
+		t.Fatalf("expected no tools for casual question, got %#v", casual)
+	}
+
+	actionable := ag.selectToolInfos("请打开 blender 并读取文件")
+	names := make([]string, 0, len(actionable))
+	for _, tool := range actionable {
+		names = append(names, tool.Name)
+	}
+	got := strings.Join(names, ",")
+	if !strings.Contains(got, "read_file") || !strings.Contains(got, "desktop_open") || !strings.Contains(got, "blender_open") {
+		t.Fatalf("expected core and matched app tools, got %q", got)
 	}
 }
 

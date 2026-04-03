@@ -65,6 +65,12 @@ var (
 	runCmdRegex    = regexp.MustCompile("run_command\\s+command\\s*=\\s*\"([^\"]+)\"")
 )
 
+const (
+	promptMemoryMaxChars      = 4000
+	promptMemoryMaxEntries    = 8
+	promptMemoryEntryMaxChars = 600
+)
+
 func New(cfg Config) *Agent {
 	agent := &Agent{
 		config:       cfg,
@@ -119,14 +125,15 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	if bootstrapResult, handled, err := a.handleBootstrapRitual(userInput); handled {
 		return bootstrapResult, err
 	}
-	systemPrompt, err := a.buildSystemPrompt()
+	selectedTools := a.selectToolInfos(userInput)
+	systemPrompt, err := a.buildSystemPromptForToolInfos(selectedTools)
 	if err != nil {
 		return "", fmt.Errorf("failed to build system prompt: %w", err)
 	}
 
 	a.history = append(a.history, prompt.Message{Role: "user", Content: userInput})
 	messages := a.buildMessages(systemPrompt)
-	toolDefs := a.buildToolDefinitions()
+	toolDefs := buildToolDefinitionsFromInfos(selectedTools)
 
 	response, err := a.chatWithTools(ctx, messages, toolDefs)
 	if err != nil {
@@ -429,10 +436,15 @@ func (a *Agent) toolContinuationPrompt(results []string) string {
 }
 
 func (a *Agent) buildSystemPrompt() (string, error) {
-	memoryContent := ""
-	if a.memory != nil {
-		memoryContent, _ = a.memory.FormatAsMarkdown()
+	var toolList []tools.ToolInfo
+	if a.tools != nil {
+		toolList = a.tools.List()
 	}
+	return a.buildSystemPromptForToolInfos(toolList)
+}
+
+func (a *Agent) buildSystemPromptForToolInfos(toolList []tools.ToolInfo) (string, error) {
+	memoryContent := a.buildPromptMemory()
 
 	workspaceFiles := []prompt.WorkspaceFile{}
 	if strings.TrimSpace(a.workingDir) != "" {
@@ -451,16 +463,12 @@ func (a *Agent) buildSystemPrompt() (string, error) {
 		}
 	}
 
-	var toolInfos []prompt.ToolInfo
-	if a.tools != nil {
-		toolList := a.tools.List()
-		toolInfos = make([]prompt.ToolInfo, len(toolList))
-		for i, t := range toolList {
-			toolInfos[i] = prompt.ToolInfo{
-				Name:        t.Name,
-				Description: t.Description,
-				InputSchema: t.InputSchema,
-			}
+	toolInfos := make([]prompt.ToolInfo, len(toolList))
+	for i, t := range toolList {
+		toolInfos[i] = prompt.ToolInfo{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.InputSchema,
 		}
 	}
 
@@ -523,6 +531,228 @@ func (a *Agent) buildSystemPrompt() (string, error) {
 	return prompt.BuildSystemPrompt(a.config.Name, description, data)
 }
 
+func (a *Agent) buildPromptMemory() string {
+	if a.memory == nil {
+		return ""
+	}
+
+	entries, err := a.memory.List()
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+
+	selected := selectPromptMemoryEntries(entries)
+	if len(selected) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Memory\n\n")
+
+	added := 0
+	for _, entry := range selected {
+		if added >= promptMemoryMaxEntries {
+			break
+		}
+		content := strings.TrimSpace(entry.Content)
+		if content == "" {
+			continue
+		}
+		content = truncatePromptMemoryString(content, promptMemoryEntryMaxChars)
+		block := fmt.Sprintf("## [%s] %s\n\n%s\n\n", entry.Type, entry.Timestamp.Format("2006-01-02 15:04"), content)
+		if sb.Len()+len(block) > promptMemoryMaxChars {
+			break
+		}
+		sb.WriteString(block)
+		added++
+	}
+
+	if added == 0 {
+		return ""
+	}
+
+	if len(entries) > added {
+		notice := "_Prompt memory limited. Use memory_search or memory_get when older context is needed._"
+		if sb.Len()+len(notice)+2 <= promptMemoryMaxChars {
+			sb.WriteString(notice)
+		}
+	}
+
+	return strings.TrimSpace(sb.String())
+}
+
+func selectPromptMemoryEntries(entries []memory.MemoryEntry) []memory.MemoryEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	selected := make([]memory.MemoryEntry, 0, promptMemoryMaxEntries)
+	for _, entry := range entries {
+		if entry.Type == memory.TypeConversation {
+			continue
+		}
+		selected = append(selected, entry)
+		if len(selected) >= promptMemoryMaxEntries {
+			break
+		}
+	}
+	return selected
+}
+
+func truncatePromptMemoryString(input string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(strings.TrimSpace(input))
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	return strings.TrimSpace(string(runes[:limit])) + "..."
+}
+
+func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
+	if a.tools == nil {
+		return nil
+	}
+
+	allTools := a.tools.List()
+	if len(allTools) == 0 {
+		return nil
+	}
+
+	query := normalizeToolSelectionText(userInput)
+	if !shouldExposeToolsForInput(query, allTools) {
+		return nil
+	}
+
+	coreExact := map[string]struct{}{
+		"read_file":                {},
+		"write_file":               {},
+		"list_directory":           {},
+		"search_files":             {},
+		"run_command":              {},
+		"memory_search":            {},
+		"memory_get":               {},
+		"web_search":               {},
+		"fetch_url":                {},
+		"clihub_catalog":           {},
+		"clihub_exec":              {},
+		"intent_route":             {},
+		"intent_list_capabilities": {},
+		"claw_bridge_context":      {},
+	}
+	corePrefixes := []string{"browser_", "desktop_", "skill_"}
+	appPrefixes := matchedToolPrefixes(query, allTools)
+
+	selected := make([]tools.ToolInfo, 0, len(allTools))
+	seen := make(map[string]struct{})
+	for _, tool := range allTools {
+		if _, ok := coreExact[tool.Name]; ok {
+			selected = append(selected, tool)
+			seen[tool.Name] = struct{}{}
+			continue
+		}
+		if hasAnyToolPrefix(tool.Name, corePrefixes) || hasAnyToolPrefix(tool.Name, appPrefixes) {
+			if _, ok := seen[tool.Name]; ok {
+				continue
+			}
+			selected = append(selected, tool)
+			seen[tool.Name] = struct{}{}
+		}
+	}
+
+	return selected
+}
+
+func shouldExposeToolsForInput(query string, toolList []tools.ToolInfo) bool {
+	if strings.TrimSpace(query) == "" {
+		return false
+	}
+	if matched := matchedToolPrefixes(query, toolList); len(matched) > 0 {
+		return true
+	}
+	if strings.Contains(query, "http://") || strings.Contains(query, "https://") {
+		return true
+	}
+	if strings.Contains(query, `\`) || strings.Contains(query, "/") || strings.Contains(query, ".md") || strings.Contains(query, ".go") || strings.Contains(query, ".json") {
+		return true
+	}
+
+	keywords := []string{
+		"open", "read", "write", "edit", "update", "change", "create", "delete", "remove", "search", "find",
+		"run", "execute", "list", "browse", "click", "type", "send", "install", "fix", "implement", "code",
+		"file", "folder", "directory", "command", "terminal", "shell", "browser", "app", "website", "url",
+		"打开", "读取", "写入", "编辑", "修改", "更新", "创建", "删除", "搜索", "查找", "运行", "执行", "列出",
+		"浏览", "点击", "输入", "发送", "安装", "修复", "实现", "代码", "文件", "目录", "文件夹", "命令", "终端",
+		"浏览器", "应用", "网站", "链接", "截图", "ocr", "记忆", "memory",
+	}
+	for _, keyword := range keywords {
+		if keyword != "" && strings.Contains(query, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchedToolPrefixes(query string, toolList []tools.ToolInfo) []string {
+	if strings.TrimSpace(query) == "" {
+		return nil
+	}
+
+	prefixes := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, tool := range toolList {
+		prefix := toolPrefix(tool.Name)
+		if prefix == "" || isCoreToolPrefix(prefix) {
+			continue
+		}
+		normalizedPrefix := normalizeToolSelectionText(prefix)
+		if normalizedPrefix != "" && strings.Contains(query, normalizedPrefix) {
+			if _, ok := seen[prefix]; ok {
+				continue
+			}
+			seen[prefix] = struct{}{}
+			prefixes = append(prefixes, prefix+"_")
+		}
+	}
+	return prefixes
+}
+
+func toolPrefix(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	idx := strings.Index(name, "_")
+	if idx <= 0 {
+		return ""
+	}
+	return strings.TrimSpace(name[:idx])
+}
+
+func isCoreToolPrefix(prefix string) bool {
+	switch prefix {
+	case "browser", "desktop", "skill", "memory", "intent", "clihub", "claw", "read", "write", "list", "search", "run", "web", "fetch":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasAnyToolPrefix(name string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if prefix != "" && strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeToolSelectionText(input string) string {
+	replacer := strings.NewReplacer("_", " ", "-", " ", "/", " ", `\`, " ", ".", " ", ":", " ")
+	return strings.ToLower(strings.TrimSpace(replacer.Replace(input)))
+}
+
 func (a *Agent) buildMessages(systemPrompt string) []llm.Message {
 	messages := make([]llm.Message, 0, 2+len(a.history))
 	if systemPrompt != "" {
@@ -535,7 +765,13 @@ func (a *Agent) buildMessages(systemPrompt string) []llm.Message {
 }
 
 func (a *Agent) buildToolDefinitions() []llm.ToolDefinition {
-	toolList := a.tools.List()
+	if a.tools == nil {
+		return nil
+	}
+	return buildToolDefinitionsFromInfos(a.tools.List())
+}
+
+func buildToolDefinitionsFromInfos(toolList []tools.ToolInfo) []llm.ToolDefinition {
 	defs := make([]llm.ToolDefinition, 0, len(toolList))
 	for _, t := range toolList {
 		defs = append(defs, llm.ToolDefinition{

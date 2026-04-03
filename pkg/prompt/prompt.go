@@ -82,15 +82,29 @@ func (b *SystemPromptBuilder) buildIdentity() string {
 
 func (b *SystemPromptBuilder) buildCapabilities(data PromptData) string {
 	parts := []string{
-		"You have access to the following tools:",
-	}
-
-	for _, tool := range data.Tools {
-		parts = append(parts, fmt.Sprintf("- %s: %s", tool.Name, tool.Description))
+		"You can use structured tools when the task requires inspecting files, running commands, browsing the web, or interacting with local apps.",
 	}
 
 	if len(data.Tools) == 0 {
-		parts = append(parts, "(No tools available)")
+		parts = append(parts, "(No tools selected for this turn)")
+		return strings.Join(parts, "\n")
+	}
+
+	if len(data.Tools) <= 12 {
+		parts = append(parts, "Tools available right now:")
+		for _, tool := range data.Tools {
+			parts = append(parts, fmt.Sprintf("- %s: %s", tool.Name, tool.Description))
+		}
+		return strings.Join(parts, "\n")
+	}
+
+	parts = append(parts, fmt.Sprintf("There are %d tools selected for this turn.", len(data.Tools)))
+	if families := summarizeToolFamilies(data.Tools, 8); len(families) > 0 {
+		parts = append(parts, "Relevant tool families: "+strings.Join(families, ", ")+".")
+	}
+	parts = append(parts, "Representative tools:")
+	for _, tool := range data.Tools[:minInt(len(data.Tools), 12)] {
+		parts = append(parts, fmt.Sprintf("- %s: %s", tool.Name, tool.Description))
 	}
 
 	return strings.Join(parts, "\n")
@@ -313,6 +327,47 @@ func (b *SystemPromptBuilder) buildInstructions() string {
 - If tools are available, prefer native structured tool calls; only fall back to textual tool_call JSON if the model cannot emit native tool calls
 - After completing a task, summarize what was done, what was verified, and any remaining blocked or unverified part
 - Do not say a task is complete unless the requested outcome has been checked against observable evidence or you explicitly state what could not be verified`
+}
+
+func summarizeToolFamilies(tools []ToolInfo, limit int) []string {
+	if len(tools) == 0 || limit <= 0 {
+		return nil
+	}
+	families := make([]string, 0, limit)
+	seen := make(map[string]struct{})
+	for _, tool := range tools {
+		family := toolFamilyName(tool.Name)
+		if family == "" {
+			continue
+		}
+		if _, ok := seen[family]; ok {
+			continue
+		}
+		seen[family] = struct{}{}
+		families = append(families, family)
+		if len(families) >= limit {
+			break
+		}
+	}
+	return families
+}
+
+func toolFamilyName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if idx := strings.Index(name, "_"); idx > 0 {
+		return name[:idx]
+	}
+	return name
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 type PromptData struct {
