@@ -13,6 +13,7 @@ type Config struct {
 	Sandbox      SandboxConfig      `json:"sandbox"`
 	Security     SecurityConfig     `json:"security"`
 	Orchestrator OrchestratorConfig `json:"orchestrator"`
+	Speech       SpeechConfig       `json:"speech"`
 }
 
 type LLMConfig struct {
@@ -114,16 +115,16 @@ type MemoryConfig struct {
 }
 
 type GatewayConfig struct {
-	Host                 string `json:"host"`
-	Port                 int    `json:"port"`
-	Bind                 string `json:"bind"`
+	Host                 string                 `json:"host"`
+	Port                 int                    `json:"port"`
+	Bind                 string                 `json:"bind"`
 	ControlUI            GatewayControlUIConfig `json:"control_ui"`
-	WorkerCount          int    `json:"worker_count"`
-	RuntimeMaxInstances  int    `json:"runtime_max_instances"`
-	RuntimeIdleSeconds   int    `json:"runtime_idle_seconds"`
-	JobWorkerCount       int    `json:"job_worker_count"`
-	JobMaxAttempts       int    `json:"job_max_attempts"`
-	JobRetryDelaySeconds int    `json:"job_retry_delay_seconds"`
+	WorkerCount          int                    `json:"worker_count"`
+	RuntimeMaxInstances  int                    `json:"runtime_max_instances"`
+	RuntimeIdleSeconds   int                    `json:"runtime_idle_seconds"`
+	JobWorkerCount       int                    `json:"job_worker_count"`
+	JobMaxAttempts       int                    `json:"job_max_attempts"`
+	JobRetryDelaySeconds int                    `json:"job_retry_delay_seconds"`
 }
 
 type GatewayControlUIConfig struct {
@@ -291,4 +292,43 @@ type ChannelRoutingRule struct {
 	Org          string `json:"org"`
 	Project      string `json:"project"`
 	WorkspaceRef string `json:"workspace_ref"`
+}
+
+type SpeechConfig struct {
+	STT STTConfigSection `json:"stt"`
+	TTS TTSConfigSection `json:"tts"`
+}
+
+type STTConfigSection struct {
+	Enabled          bool            `json:"enabled"`
+	AutoSTT          bool            `json:"auto_stt"`
+	Provider         string          `json:"provider"`
+	Model            string          `json:"model"`
+	APIKey           string          `json:"api_key"`
+	BaseURL          string          `json:"base_url"`
+	DefaultLang      string          `json:"default_lang"`
+	MaxDurationSec   int             `json:"max_duration_seconds"`
+	MinConfidence    float64         `json:"min_confidence"`
+	TimeoutSec       int             `json:"timeout_seconds"`
+	Channels         map[string]bool `json:"channels"`
+	ExcludeChannels  map[string]bool `json:"exclude_channels"`
+	FallbackToVoice  bool            `json:"fallback_to_voice"`
+	AppendTranscript bool            `json:"append_transcript"`
+	TriggerPrefix    string          `json:"trigger_prefix"`
+}
+
+type TTSConfigSection struct {
+	Enabled         bool            `json:"enabled"`
+	AutoTTS         bool            `json:"auto_tts"`
+	Provider        string          `json:"provider"`
+	APIKey          string          `json:"api_key"`
+	BaseURL         string          `json:"base_url"`
+	Voice           string          `json:"voice"`
+	Speed           float64         `json:"speed"`
+	Format          string          `json:"format"`
+	TimeoutSec      int             `json:"timeout_seconds"`
+	Channels        map[string]bool `json:"channels"`
+	ExcludeChannels map[string]bool `json:"exclude_channels"`
+	FallbackToText  bool            `json:"fallback_to_text"`
+	TriggerPrefix   string          `json:"trigger_prefix"`
 }

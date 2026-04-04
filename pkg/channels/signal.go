@@ -110,25 +110,79 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle InboundHandler) err
 		return err
 	}
 	for _, item := range payload {
-		msg := strings.TrimSpace(item.Envelope.DataMessage.Message)
 		messageID := fmt.Sprintf("%s:%d", item.Envelope.Source, item.Envelope.Timestamp)
-		if msg == "" || item.Envelope.Timestamp <= a.latestTS || a.seen(messageID) {
+		if item.Envelope.Timestamp <= a.latestTS || a.seen(messageID) {
 			continue
 		}
 		a.latestTS = item.Envelope.Timestamp
-		decision := a.router.Decide(RouteRequest{Channel: "signal", Source: item.Envelope.Source, Text: msg})
-		sessionID := a.sessions[decision.Key]
-		if decision.SessionID != "" {
-			sessionID = decision.SessionID
-		}
+
+		msg := strings.TrimSpace(item.Envelope.DataMessage.Message)
 		replyTarget := item.Envelope.Source
 		threadID := strings.TrimSpace(item.Envelope.GroupInfo.GroupID)
 		if threadID != "" {
 			replyTarget = threadID
 		}
-		meta := map[string]string{"channel": "signal", "user_id": item.Envelope.Source, "username": item.Envelope.SourceName, "reply_target": replyTarget, "thread_id": threadID, "message_id": messageID}
+
+		meta := map[string]string{
+			"channel":      "signal",
+			"user_id":      item.Envelope.Source,
+			"username":     item.Envelope.SourceName,
+			"reply_target": replyTarget,
+			"thread_id":    threadID,
+			"message_id":   messageID,
+			"sender":       item.Envelope.SourceName,
+		}
+
+		audioURL, audioMIME := a.findAudioAttachment(item.Envelope.DataMessage.Attachments)
+		if audioURL != "" {
+			meta["message_type"] = "voice_note"
+			meta["audio_url"] = audioURL
+			meta["audio_mime"] = audioMIME
+			if msg != "" {
+				meta["caption"] = msg
+			}
+
+			decision := a.router.Decide(RouteRequest{Channel: "signal", Source: item.Envelope.Source, Text: "[voice message]"})
+			sessionID := a.sessions[decision.Key]
+			if decision.SessionID != "" {
+				sessionID = decision.SessionID
+			}
+			sessionID, response, err := handle(ctx, sessionID, audioURL, meta)
+			if err != nil {
+				return err
+			}
+			if sessionID != "" {
+				a.sessions[decision.Key] = sessionID
+			}
+			if err := a.sendMessage(ctx, replyTarget, response); err != nil {
+				return err
+			}
+			a.base.markActivity()
+			a.append("channel.signal.voice", sessionID, map[string]any{
+				"source":       item.Envelope.Source,
+				"source_name":  item.Envelope.SourceName,
+				"group_id":     threadID,
+				"message_type": "voice_note",
+				"audio_url":    audioURL,
+				"audio_mime":   audioMIME,
+				"route":        decision.Key,
+				"agent":        decision.Agent,
+				"workspace":    decision.Workspace,
+			})
+			continue
+		}
+
+		if msg == "" {
+			continue
+		}
+
 		if len(item.Envelope.DataMessage.Attachments) > 0 {
 			meta["attachment_count"] = fmt.Sprintf("%d", len(item.Envelope.DataMessage.Attachments))
+		}
+		decision := a.router.Decide(RouteRequest{Channel: "signal", Source: item.Envelope.Source, Text: msg})
+		sessionID := a.sessions[decision.Key]
+		if decision.SessionID != "" {
+			sessionID = decision.SessionID
 		}
 		sessionID, response, err := handle(ctx, sessionID, msg, meta)
 		if err != nil {
@@ -205,4 +259,36 @@ func (a *SignalAdapter) seen(id string) bool {
 	}
 	a.processed[id] = time.Now().UTC()
 	return false
+}
+
+func (a *SignalAdapter) findAudioAttachment(attachments []struct {
+	ContentType string `json:"contentType"`
+	Filename    string `json:"filename"`
+}) (string, string) {
+	for _, att := range attachments {
+		mime := strings.ToLower(att.ContentType)
+		fn := strings.ToLower(att.Filename)
+		if strings.HasPrefix(mime, "audio/") {
+			return "", att.ContentType
+		}
+		if strings.HasSuffix(fn, ".ogg") || strings.HasSuffix(fn, ".mp3") || strings.HasSuffix(fn, ".wav") || strings.HasSuffix(fn, ".flac") || strings.HasSuffix(fn, ".m4a") || strings.HasSuffix(fn, ".webm") {
+			mimeType := "audio/unknown"
+			switch {
+			case strings.HasSuffix(fn, ".ogg"):
+				mimeType = "audio/ogg"
+			case strings.HasSuffix(fn, ".mp3"):
+				mimeType = "audio/mpeg"
+			case strings.HasSuffix(fn, ".wav"):
+				mimeType = "audio/wav"
+			case strings.HasSuffix(fn, ".flac"):
+				mimeType = "audio/flac"
+			case strings.HasSuffix(fn, ".m4a"):
+				mimeType = "audio/mp4"
+			case strings.HasSuffix(fn, ".webm"):
+				mimeType = "audio/webm"
+			}
+			return "", mimeType
+		}
+	}
+	return "", ""
 }

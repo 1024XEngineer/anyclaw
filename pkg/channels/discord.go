@@ -224,16 +224,61 @@ func (a *DiscordAdapter) handleGatewayEvent(ctx context.Context, eventType strin
 				Username string `json:"username"`
 				Bot      bool   `json:"bot"`
 			} `json:"author"`
+			Attachments []struct {
+				ID          string `json:"id"`
+				URL         string `json:"url"`
+				ProxyURL    string `json:"proxy_url"`
+				Filename    string `json:"filename"`
+				ContentType string `json:"content_type"`
+				Size        int    `json:"size"`
+			} `json:"attachments"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			return err
 		}
-		if msg.Author.Bot || strings.TrimSpace(msg.Content) == "" || a.seen(msg.ID) {
+		if msg.Author.Bot || a.seen(msg.ID) {
 			return nil
 		}
+
+		meta := map[string]string{
+			"channel":      "discord",
+			"channel_id":   msg.ChannelID,
+			"guild_id":     msg.GuildID,
+			"user_id":      msg.Author.ID,
+			"username":     msg.Author.Username,
+			"reply_target": msg.ChannelID,
+			"message_id":   msg.ID,
+			"sender":       msg.Author.Username,
+		}
+
+		audioURL, audioMIME := a.findAudioAttachment(msg.Attachments)
+		if audioURL != "" {
+			meta["message_type"] = "voice_note"
+			meta["audio_url"] = audioURL
+			meta["audio_mime"] = audioMIME
+			if strings.TrimSpace(msg.Content) != "" {
+				meta["caption"] = strings.TrimSpace(msg.Content)
+			}
+
+			decision := a.router.Decide(RouteRequest{Channel: "discord", Source: msg.ChannelID + ":" + msg.Author.ID, Text: "[voice message]"})
+			sessionID := a.sessions[decision.Key]
+			respSession, response, err := handle(ctx, sessionID, audioURL, meta)
+			if err != nil {
+				return err
+			}
+			if respSession != "" {
+				a.sessions[decision.Key] = respSession
+			}
+			return a.sendMessage(ctx, msg.ChannelID, "", response)
+		}
+
+		if strings.TrimSpace(msg.Content) == "" {
+			return nil
+		}
+
 		decision := a.router.Decide(RouteRequest{Channel: "discord", Source: msg.ChannelID + ":" + msg.Author.ID, Text: msg.Content})
 		sessionID := a.sessions[decision.Key]
-		respSession, response, err := handle(ctx, sessionID, msg.Content, map[string]string{"channel": "discord", "channel_id": msg.ChannelID, "guild_id": msg.GuildID, "user_id": msg.Author.ID, "username": msg.Author.Username, "reply_target": msg.ChannelID, "message_id": msg.ID})
+		respSession, response, err := handle(ctx, sessionID, msg.Content, meta)
 		if err != nil {
 			return err
 		}
@@ -243,6 +288,50 @@ func (a *DiscordAdapter) handleGatewayEvent(ctx context.Context, eventType strin
 		return a.sendMessage(ctx, msg.ChannelID, "", response)
 	}
 	return nil
+}
+
+func (a *DiscordAdapter) findAudioAttachment(attachments []struct {
+	ID          string `json:"id"`
+	URL         string `json:"url"`
+	ProxyURL    string `json:"proxy_url"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int    `json:"size"`
+}) (string, string) {
+	for _, att := range attachments {
+		ct := strings.ToLower(att.ContentType)
+		fn := strings.ToLower(att.Filename)
+		if strings.HasPrefix(ct, "audio/") {
+			url := att.URL
+			if url == "" {
+				url = att.ProxyURL
+			}
+			return url, att.ContentType
+		}
+		if strings.HasSuffix(fn, ".ogg") || strings.HasSuffix(fn, ".mp3") || strings.HasSuffix(fn, ".wav") || strings.HasSuffix(fn, ".flac") || strings.HasSuffix(fn, ".m4a") || strings.HasSuffix(fn, ".webm") {
+			url := att.URL
+			if url == "" {
+				url = att.ProxyURL
+			}
+			mime := "audio/unknown"
+			switch {
+			case strings.HasSuffix(fn, ".ogg"):
+				mime = "audio/ogg"
+			case strings.HasSuffix(fn, ".mp3"):
+				mime = "audio/mpeg"
+			case strings.HasSuffix(fn, ".wav"):
+				mime = "audio/wav"
+			case strings.HasSuffix(fn, ".flac"):
+				mime = "audio/flac"
+			case strings.HasSuffix(fn, ".m4a"):
+				mime = "audio/mp4"
+			case strings.HasSuffix(fn, ".webm"):
+				mime = "audio/webm"
+			}
+			return url, mime
+		}
+	}
+	return "", ""
 }
 
 func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) error {
@@ -271,6 +360,14 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 			Username string `json:"username"`
 			Bot      bool   `json:"bot"`
 		} `json:"author"`
+		Attachments []struct {
+			ID          string `json:"id"`
+			URL         string `json:"url"`
+			ProxyURL    string `json:"proxy_url"`
+			Filename    string `json:"filename"`
+			ContentType string `json:"content_type"`
+			Size        int    `json:"size"`
+		} `json:"attachments"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
 		return err
@@ -278,11 +375,72 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
-		if msg.ID == "" || msg.ID == a.latestID || strings.TrimSpace(msg.Content) == "" || msg.Author.Bot || a.seen(msg.ID) {
+		if msg.ID == "" || msg.ID == a.latestID || msg.Author.Bot || a.seen(msg.ID) {
 			continue
 		}
 		a.latestID = msg.ID
 		source := a.config.DefaultChannel + ":" + msg.Author.ID
+
+		meta := map[string]string{
+			"channel":      "discord",
+			"channel_id":   a.config.DefaultChannel,
+			"guild_id":     msg.GuildID,
+			"user_id":      msg.Author.ID,
+			"username":     msg.Author.Username,
+			"reply_target": a.config.DefaultChannel,
+			"message_id":   msg.ID,
+			"sender":       msg.Author.Username,
+		}
+
+		audioURL, audioMIME := a.findAudioAttachment(msg.Attachments)
+		if audioURL != "" {
+			meta["message_type"] = "voice_note"
+			meta["audio_url"] = audioURL
+			meta["audio_mime"] = audioMIME
+			if strings.TrimSpace(msg.Content) != "" {
+				meta["caption"] = strings.TrimSpace(msg.Content)
+			}
+
+			threadID := strings.TrimSpace(msg.ParentID)
+			replyTarget := a.config.DefaultChannel
+			if threadID != "" {
+				replyTarget = threadID
+			}
+
+			decision := a.router.Decide(RouteRequest{Channel: "discord", Source: source, Text: "[voice message]"})
+			sessionID := a.sessions[decision.Key]
+			if decision.SessionID != "" {
+				sessionID = decision.SessionID
+			}
+			sessionID, response, err := handle(ctx, sessionID, audioURL, meta)
+			if err != nil {
+				return err
+			}
+			if sessionID != "" {
+				a.sessions[decision.Key] = sessionID
+			}
+			if err := a.sendMessage(ctx, replyTarget, threadID, response); err != nil {
+				return err
+			}
+			a.base.markActivity()
+			a.append("channel.discord.voice", sessionID, map[string]any{
+				"channel":      a.config.DefaultChannel,
+				"user":         msg.Author.Username,
+				"user_id":      msg.Author.ID,
+				"message_type": "voice_note",
+				"audio_url":    audioURL,
+				"audio_mime":   audioMIME,
+				"route":        decision.Key,
+				"agent":        decision.Agent,
+				"workspace":    decision.Workspace,
+			})
+			continue
+		}
+
+		if strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+
 		decision := a.router.Decide(RouteRequest{Channel: "discord", Source: source, Text: msg.Content})
 		sessionID := a.sessions[decision.Key]
 		if decision.SessionID != "" {
@@ -293,7 +451,7 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 		if threadID != "" {
 			replyTarget = threadID
 		}
-		sessionID, response, err := handle(ctx, sessionID, msg.Content, map[string]string{"channel": "discord", "channel_id": a.config.DefaultChannel, "guild_id": msg.GuildID, "user_id": msg.Author.ID, "username": msg.Author.Username, "reply_target": replyTarget, "thread_id": threadID, "message_id": msg.ID})
+		sessionID, response, err := handle(ctx, sessionID, msg.Content, meta)
 		if err != nil {
 			return err
 		}

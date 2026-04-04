@@ -93,13 +93,34 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage InboundHandle
 		Result []struct {
 			UpdateID int64 `json:"update_id"`
 			Message  struct {
-				Text string `json:"text"`
-				Chat struct {
+				Text    string `json:"text"`
+				Caption string `json:"caption"`
+				Chat    struct {
 					ID int64 `json:"id"`
 				} `json:"chat"`
 				From struct {
 					Username string `json:"username"`
+					ID       int64  `json:"id"`
 				} `json:"from"`
+				Voice *struct {
+					FileID   string `json:"file_id"`
+					Duration int    `json:"duration"`
+					MimeType string `json:"mime_type"`
+					FileSize int    `json:"file_size"`
+				} `json:"voice"`
+				Audio *struct {
+					FileID   string `json:"file_id"`
+					Duration int    `json:"duration"`
+					MimeType string `json:"mime_type"`
+					FileSize int    `json:"file_size"`
+					FileName string `json:"file_name"`
+				} `json:"audio"`
+				Document *struct {
+					FileID   string `json:"file_id"`
+					MimeType string `json:"mime_type"`
+					FileSize int    `json:"file_size"`
+					FileName string `json:"file_name"`
+				} `json:"document"`
 			} `json:"message"`
 		} `json:"result"`
 	}
@@ -113,17 +134,105 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage InboundHandle
 		if strings.TrimSpace(a.config.ChatID) != "" && chatID != strings.TrimSpace(a.config.ChatID) {
 			continue
 		}
+
 		text := strings.TrimSpace(update.Message.Text)
+		caption := strings.TrimSpace(update.Message.Caption)
+		username := update.Message.From.Username
+		messageID := strconv.FormatInt(update.UpdateID, 10)
+
+		meta := map[string]string{
+			"channel":      "telegram",
+			"chat_id":      chatID,
+			"username":     username,
+			"reply_target": chatID,
+			"message_id":   messageID,
+			"sender":       username,
+		}
+
+		var messageType string
+		var audioURL string
+		var audioMIME string
+
+		if update.Message.Voice != nil {
+			messageType = "voice_note"
+			audioMIME = update.Message.Voice.MimeType
+			if audioMIME == "" {
+				audioMIME = "audio/ogg"
+			}
+			fileURL, err := a.getFileURL(ctx, update.Message.Voice.FileID)
+			if err != nil {
+				a.append("channel.telegram.error", "", map[string]any{"error": err.Error(), "type": "voice_download_failed"})
+				continue
+			}
+			audioURL = fileURL
+		} else if update.Message.Audio != nil {
+			messageType = "audio_file"
+			audioMIME = update.Message.Audio.MimeType
+			fileURL, err := a.getFileURL(ctx, update.Message.Audio.FileID)
+			if err != nil {
+				a.append("channel.telegram.error", "", map[string]any{"error": err.Error(), "type": "audio_download_failed"})
+				continue
+			}
+			audioURL = fileURL
+		} else if update.Message.Document != nil && strings.HasPrefix(update.Message.Document.MimeType, "audio/") {
+			messageType = "audio_file"
+			audioMIME = update.Message.Document.MimeType
+			fileURL, err := a.getFileURL(ctx, update.Message.Document.FileID)
+			if err != nil {
+				a.append("channel.telegram.error", "", map[string]any{"error": err.Error(), "type": "document_audio_download_failed"})
+				continue
+			}
+			audioURL = fileURL
+		}
+
+		if messageType != "" {
+			meta["message_type"] = messageType
+			meta["audio_url"] = audioURL
+			meta["audio_mime"] = audioMIME
+			if caption != "" {
+				meta["caption"] = caption
+			}
+
+			decision := a.router.Decide(RouteRequest{Channel: "telegram", Source: chatID, Text: "[voice message]"})
+			sessionID := a.sessions[decision.Key]
+			if decision.SessionID != "" {
+				sessionID = decision.SessionID
+			}
+
+			sessionID, response, err := runMessage(ctx, sessionID, audioURL, meta)
+			if err != nil {
+				return err
+			}
+			if sessionID != "" {
+				a.sessions[decision.Key] = sessionID
+			}
+			if err := a.sendMessage(ctx, chatID, response); err != nil {
+				return err
+			}
+			a.base.markActivity()
+			a.append("channel.telegram.voice", sessionID, map[string]any{
+				"chat_id":      chatID,
+				"message_type": messageType,
+				"audio_url":    audioURL,
+				"audio_mime":   audioMIME,
+				"route":        decision.Key,
+				"agent":        decision.Agent,
+				"workspace":    decision.Workspace,
+			})
+			continue
+		}
+
 		if text == "" {
 			continue
 		}
+
 		decision := a.router.Decide(RouteRequest{Channel: "telegram", Source: chatID, Text: text})
 		sessionID := a.sessions[decision.Key]
 		if decision.SessionID != "" {
 			sessionID = decision.SessionID
 		}
 
-		sessionID, response, err := runMessage(ctx, sessionID, text, map[string]string{"channel": "telegram", "chat_id": chatID, "username": update.Message.From.Username, "reply_target": chatID, "message_id": strconv.FormatInt(update.UpdateID, 10)})
+		sessionID, response, err := runMessage(ctx, sessionID, text, meta)
 		if err != nil {
 			return err
 		}
@@ -143,6 +252,36 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage InboundHandle
 		})
 	}
 	return nil
+}
+
+func (a *TelegramAdapter) getFileURL(ctx context.Context, fileID string) (string, error) {
+	u := fmt.Sprintf("%s/getFile?file_id=%s", a.baseURL, url.QueryEscape(fileID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			FileID   string `json:"file_id"`
+			FileSize int    `json:"file_size"`
+			FilePath string `json:"file_path"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if !result.OK || result.Result.FilePath == "" {
+		return "", fmt.Errorf("telegram: failed to get file URL for %s", fileID)
+	}
+
+	return fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", a.config.BotToken, result.Result.FilePath), nil
 }
 
 func (a *TelegramAdapter) append(eventType string, sessionID string, payload map[string]any) {

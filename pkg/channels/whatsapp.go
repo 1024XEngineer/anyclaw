@@ -60,6 +60,10 @@ func (a *WhatsAppAdapter) Run(ctx context.Context, handle InboundHandler) error 
 }
 
 func (a *WhatsAppAdapter) HandleInbound(ctx context.Context, source string, text string, messageID string, profileName string, handle InboundHandler) (string, string, error) {
+	return a.HandleInboundWithMeta(ctx, source, text, messageID, profileName, nil, handle)
+}
+
+func (a *WhatsAppAdapter) HandleInboundWithMeta(ctx context.Context, source string, text string, messageID string, profileName string, meta map[string]string, handle InboundHandler) (string, string, error) {
 	if a.seen(messageID) {
 		return "", "", nil
 	}
@@ -69,7 +73,18 @@ func (a *WhatsAppAdapter) HandleInbound(ctx context.Context, source string, text
 		sessionID = decision.SessionID
 	}
 	a.replyTargets[decision.Key] = source
-	sessionID, response, err := handle(ctx, sessionID, text, map[string]string{"channel": "whatsapp", "user_id": source, "username": profileName, "reply_target": source, "message_id": messageID})
+
+	if meta == nil {
+		meta = map[string]string{}
+	}
+	meta["channel"] = "whatsapp"
+	meta["user_id"] = source
+	meta["username"] = profileName
+	meta["reply_target"] = source
+	meta["message_id"] = messageID
+	meta["sender"] = profileName
+
+	sessionID, response, err := handle(ctx, sessionID, text, meta)
 	if err != nil {
 		return "", "", err
 	}

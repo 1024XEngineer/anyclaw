@@ -25,6 +25,7 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/plugin"
 	"github.com/anyclaw/anyclaw/pkg/routing"
 	"github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/anyclaw/anyclaw/pkg/speech"
 	taskModule "github.com/anyclaw/anyclaw/pkg/task"
 	"github.com/anyclaw/anyclaw/pkg/tools"
 	"golang.org/x/text/cases"
@@ -72,6 +73,9 @@ type Server struct {
 	jobMaxAttempts int
 	webhooks       *WebhookHandler
 	nodes          *NodeManager
+	sttPipeline    *speech.STTPipeline
+	sttIntegration *speech.STTIntegration
+	sttManager     *speech.STTManager
 }
 
 var titleCase = cases.Title(language.English)
@@ -151,6 +155,8 @@ func New(app *runtime.App) *Server {
 }
 
 func (s *Server) initChannels() {
+	s.initSTT()
+
 	s.router = channel.NewRouter(s.app.Config.Channels.Routing)
 	if s.plugins != nil {
 		s.ingressPlugins = s.plugins.IngressRunners(s.app.Config.Plugins.Dir)
@@ -198,6 +204,86 @@ func (s *Server) initChannels() {
 		}
 	}
 	s.channels = channel.NewManager(adapters...)
+}
+
+func (s *Server) initSTT() {
+	sttCfg := s.app.Config.Speech.STT
+	if !sttCfg.Enabled {
+		return
+	}
+
+	s.sttManager = speech.NewSTTManager()
+
+	if sttCfg.Provider != "" && sttCfg.APIKey != "" {
+		providerType := speech.STTProviderType(sttCfg.Provider)
+		sttProviderCfg := speech.STTConfig{
+			Type:     providerType,
+			APIKey:   sttCfg.APIKey,
+			BaseURL:  sttCfg.BaseURL,
+			Model:    sttCfg.Model,
+			Language: sttCfg.DefaultLang,
+			Timeout:  time.Duration(sttCfg.TimeoutSec) * time.Second,
+		}
+		if sttCfg.TimeoutSec <= 0 {
+			sttProviderCfg.Timeout = 120 * time.Second
+		}
+
+		provider, err := speech.NewSTTProvider(sttProviderCfg)
+		if err != nil {
+			s.appendEvent("stt.init.error", "", map[string]any{"error": err.Error(), "provider": sttCfg.Provider})
+			return
+		}
+
+		if err := s.sttManager.Register(sttCfg.Provider, provider); err != nil {
+			s.appendEvent("stt.init.error", "", map[string]any{"error": err.Error(), "provider": sttCfg.Provider})
+			return
+		}
+	}
+
+	pipelineCfg := speech.STTPipelineConfig{
+		Provider:      sttCfg.Provider,
+		DefaultLang:   sttCfg.DefaultLang,
+		AutoDetect:    sttCfg.DefaultLang == "auto",
+		MaxDuration:   time.Duration(sttCfg.MaxDurationSec) * time.Second,
+		MinConfidence: sttCfg.MinConfidence,
+		Timeout:       time.Duration(sttCfg.TimeoutSec) * time.Second,
+	}
+	if sttCfg.MaxDurationSec <= 0 {
+		pipelineCfg.MaxDuration = 10 * time.Minute
+	}
+	if sttCfg.TimeoutSec <= 0 {
+		pipelineCfg.Timeout = 120 * time.Second
+	}
+
+	s.sttPipeline = speech.NewSTTPipeline(s.sttManager, pipelineCfg)
+
+	integrationCfg := speech.STTIntegrationConfig{
+		Enabled:          sttCfg.Enabled,
+		AutoSTT:          sttCfg.AutoSTT,
+		TriggerPrefix:    sttCfg.TriggerPrefix,
+		Provider:         sttCfg.Provider,
+		DefaultLang:      sttCfg.DefaultLang,
+		MaxDuration:      pipelineCfg.MaxDuration,
+		MinConfidence:    sttCfg.MinConfidence,
+		Timeout:          pipelineCfg.Timeout,
+		Channels:         sttCfg.Channels,
+		ExcludeChannels:  sttCfg.ExcludeChannels,
+		FallbackToVoice:  sttCfg.FallbackToVoice,
+		AppendTranscript: sttCfg.AppendTranscript,
+	}
+	if integrationCfg.TriggerPrefix == "" {
+		integrationCfg.TriggerPrefix = "/transcribe"
+	}
+
+	s.sttIntegration = speech.NewSTTIntegration(s.sttPipeline, integrationCfg)
+
+	s.appendEvent("stt.init.ok", "", map[string]any{
+		"provider": sttCfg.Provider,
+		"auto_stt": sttCfg.AutoSTT,
+		"language": sttCfg.DefaultLang,
+		"channels": len(sttCfg.Channels),
+		"excluded": len(sttCfg.ExcludeChannels),
+	})
 }
 
 func (s *Server) startWorkers(ctx context.Context) {
@@ -694,7 +780,11 @@ func (s *Server) runChannels(ctx context.Context) {
 	if s.channels == nil {
 		return
 	}
-	s.channels.Run(ctx, s.processChannelMessage)
+	handler := s.processChannelMessage
+	if s.sttIntegration != nil {
+		handler = s.sttIntegration.WrapInboundHandler(handler)
+	}
+	s.channels.Run(ctx, handler)
 }
 
 func (s *Server) processChannelMessage(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {

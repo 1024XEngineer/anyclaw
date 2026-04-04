@@ -91,6 +91,11 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 			Ts    string `json:"ts"`
 			User  string `json:"user"`
 			BotID string `json:"bot_id"`
+			Files []struct {
+				Mimetype string `json:"mimetype"`
+				URL      string `json:"url_private"`
+				Title    string `json:"title"`
+			} `json:"files"`
 		} `json:"messages"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -99,16 +104,68 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 
 	for i := len(payload.Messages) - 1; i >= 0; i-- {
 		msg := payload.Messages[i]
-		if msg.Ts == "" || msg.Ts == a.latestTS || strings.TrimSpace(msg.Text) == "" || msg.BotID != "" {
+		if msg.Ts == "" || msg.Ts == a.latestTS || msg.BotID != "" {
 			continue
 		}
 		a.latestTS = msg.Ts
+
+		meta := map[string]string{
+			"channel":      "slack",
+			"channel_id":   a.config.DefaultChannel,
+			"user_id":      msg.User,
+			"reply_target": a.config.DefaultChannel,
+			"message_id":   msg.Ts,
+			"sender":       msg.User,
+		}
+
+		audioURL, audioMIME := a.findAudioFile(msg.Files)
+		if audioURL != "" {
+			meta["message_type"] = "voice_note"
+			meta["audio_url"] = audioURL
+			meta["audio_mime"] = audioMIME
+			if strings.TrimSpace(msg.Text) != "" {
+				meta["caption"] = strings.TrimSpace(msg.Text)
+			}
+
+			decision := a.router.Decide(RouteRequest{Channel: "slack", Source: a.config.DefaultChannel + ":" + msg.User, Text: "[voice message]"})
+			sessionID := a.sessions[decision.Key]
+			if decision.SessionID != "" {
+				sessionID = decision.SessionID
+			}
+			sessionID, response, err := handle(ctx, sessionID, audioURL, meta)
+			if err != nil {
+				return err
+			}
+			if sessionID != "" {
+				a.sessions[decision.Key] = sessionID
+			}
+			if err := a.sendMessage(ctx, response); err != nil {
+				return err
+			}
+			a.base.markActivity()
+			a.append("channel.slack.voice", sessionID, map[string]any{
+				"channel":      a.config.DefaultChannel,
+				"user":         msg.User,
+				"message_type": "voice_note",
+				"audio_url":    audioURL,
+				"audio_mime":   audioMIME,
+				"route":        decision.Key,
+				"agent":        decision.Agent,
+				"workspace":    decision.Workspace,
+			})
+			continue
+		}
+
+		if strings.TrimSpace(msg.Text) == "" {
+			continue
+		}
+
 		decision := a.router.Decide(RouteRequest{Channel: "slack", Source: a.config.DefaultChannel + ":" + msg.User, Text: msg.Text})
 		sessionID := a.sessions[decision.Key]
 		if decision.SessionID != "" {
 			sessionID = decision.SessionID
 		}
-		sessionID, response, err := handle(ctx, sessionID, msg.Text, map[string]string{"channel": "slack", "channel_id": a.config.DefaultChannel, "user_id": msg.User, "reply_target": a.config.DefaultChannel, "message_id": msg.Ts})
+		sessionID, response, err := handle(ctx, sessionID, msg.Text, meta)
 		if err != nil {
 			return err
 		}
@@ -154,4 +211,18 @@ func (a *SlackAdapter) append(eventType string, sessionID string, payload map[st
 	if a.appendEvent != nil {
 		a.appendEvent(eventType, sessionID, payload)
 	}
+}
+
+func (a *SlackAdapter) findAudioFile(files []struct {
+	Mimetype string `json:"mimetype"`
+	URL      string `json:"url_private"`
+	Title    string `json:"title"`
+}) (string, string) {
+	for _, f := range files {
+		mime := strings.ToLower(f.Mimetype)
+		if strings.HasPrefix(mime, "audio/") {
+			return f.URL, f.Mimetype
+		}
+	}
+	return "", ""
 }
