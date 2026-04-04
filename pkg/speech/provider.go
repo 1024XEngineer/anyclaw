@@ -15,6 +15,8 @@ const (
 	ProviderAzure      ProviderType = "azure"
 	ProviderGoogle     ProviderType = "google"
 	ProviderAliyun     ProviderType = "aliyun"
+	ProviderPiper      ProviderType = "piper"
+	ProviderCoqui      ProviderType = "coqui"
 	ProviderCustom     ProviderType = "custom"
 )
 
@@ -95,6 +97,24 @@ func NewProvider(cfg Config) (Provider, error) {
 			opts = append(opts, WithEdgeTimeout(cfg.Timeout))
 		}
 		return NewEdgeProvider(opts...)
+	case ProviderPiper:
+		opts := []PiperOption{}
+		if cfg.Voice != "" {
+			opts = append(opts, WithPiperDefaultVoice(cfg.Voice))
+		}
+		if cfg.Language != "" {
+			opts = append(opts, WithPiperDefaultLanguage(cfg.Language))
+		}
+		return NewPiperProvider(opts...)
+	case ProviderCoqui:
+		opts := []CoquiOption{}
+		if cfg.Voice != "" {
+			opts = append(opts, WithCoquiSpeaker(cfg.Voice))
+		}
+		if cfg.Language != "" {
+			opts = append(opts, WithCoquiDefaultLanguage(cfg.Language))
+		}
+		return NewCoquiProvider(opts...)
 	default:
 		return nil, fmt.Errorf("unknown TTS provider: %s", cfg.Type)
 	}
