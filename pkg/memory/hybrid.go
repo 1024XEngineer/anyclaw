@@ -1,6 +1,3 @@
-// Package memory provides the enhanced memory system with hybrid search,
-// MMR ranking, temporal decay, and multiple storage backends.
-// This mirrors OpenClaw's memory architecture with SQLite + vector search.
 package memory
 
 import (
@@ -11,55 +8,75 @@ import (
 	"time"
 )
 
-// SearchResult represents a memory search result with scoring.
 type SearchResult struct {
 	Entry          MemoryEntry
 	Score          float64
-	MatchType      string // "vector", "keyword", "hybrid"
+	KeywordScore   float64
+	VectorScore    float64
+	MatchType      string
 	TemporalWeight float64
 }
 
-// SearchOptions configures memory search behavior.
 type SearchOptions struct {
 	Limit           int
-	Types           []string // Filter by entry types
+	Types           []string
 	MaxAge          time.Duration
 	MinScore        float64
 	UseVector       bool
 	UseKeyword      bool
-	VectorWeight    float64 // 0.0-1.0, weight for vector results in hybrid search
+	VectorWeight    float64
+	KeywordWeight   float64
 	ApplyMMR        bool
-	MMRLambda       float64 // MMR diversity parameter (0.0-1.0, default 0.7)
+	MMRLambda       float64
 	ApplyTemporal   bool
-	TemporalDecay   float64 // Half-life in hours for temporal decay
+	TemporalDecay   float64
 	Context         context.Context
 	Embedder        EmbeddingProvider
 	QueryEmbedding  []float64
 	EntryEmbeddings map[string][]float64
+	NormalizeScores bool
 }
 
-// DefaultSearchOptions returns sensible defaults matching OpenClaw's behavior.
 func DefaultSearchOptions() SearchOptions {
 	return SearchOptions{
-		Limit:         10,
-		UseVector:     false,
-		UseKeyword:    true,
-		VectorWeight:  0.6,
-		ApplyMMR:      false,
-		MMRLambda:     0.7,
-		ApplyTemporal: true,
-		TemporalDecay: 168.0, // 7 days half-life
-		Context:       context.Background(),
+		Limit:           10,
+		UseVector:       false,
+		UseKeyword:      true,
+		VectorWeight:    0.6,
+		KeywordWeight:   0.4,
+		ApplyMMR:        false,
+		MMRLambda:       0.7,
+		ApplyTemporal:   true,
+		TemporalDecay:   168.0,
+		Context:         context.Background(),
+		NormalizeScores: true,
 	}
 }
 
-// HybridSearch performs combined keyword + vector search with MMR and temporal decay.
+func (opts *SearchOptions) effectiveWeights() (kwW, vecW float64) {
+	if opts.UseVector && opts.UseKeyword {
+		if opts.KeywordWeight > 0 && opts.VectorWeight > 0 {
+			total := opts.KeywordWeight + opts.VectorWeight
+			return opts.KeywordWeight / total, opts.VectorWeight / total
+		}
+		vecW = opts.VectorWeight
+		kwW = 1.0 - vecW
+		if kwW < 0 {
+			kwW = 0
+		}
+		return kwW, vecW
+	}
+	if opts.UseVector {
+		return 0, 1.0
+	}
+	return 1.0, 0
+}
+
 func HybridSearch(entries []MemoryEntry, query string, opts SearchOptions) []SearchResult {
 	if opts.Limit <= 0 {
 		opts.Limit = 10
 	}
 
-	// Filter by type
 	if len(opts.Types) > 0 {
 		typeSet := make(map[string]bool, len(opts.Types))
 		for _, t := range opts.Types {
@@ -74,7 +91,6 @@ func HybridSearch(entries []MemoryEntry, query string, opts SearchOptions) []Sea
 		entries = filtered
 	}
 
-	// Filter by age
 	if opts.MaxAge > 0 {
 		cutoff := time.Now().Add(-opts.MaxAge)
 		filtered := make([]MemoryEntry, 0, len(entries))
@@ -86,38 +102,61 @@ func HybridSearch(entries []MemoryEntry, query string, opts SearchOptions) []Sea
 		entries = filtered
 	}
 
-	// Keyword search
 	keywordScores := map[string]float64{}
 	if opts.UseKeyword || !opts.UseVector {
-		keywordScores = keywordSearch(entries, query)
+		keywordScores = bm25Search(entries, query)
 	}
 
-	// Vector search uses configured embeddings when available and degrades
-	// to keyword scoring when the caller has not wired a vector provider yet.
 	var vectorScores map[string]float64
 	if opts.UseVector {
 		vectorScores = vectorSearch(entries, query, opts)
 	}
 
-	// Combine scores
+	kwWeight, vecWeight := opts.effectiveWeights()
+
+	if opts.NormalizeScores && opts.UseVector && opts.UseKeyword {
+		keywordScores = normalizeScoresMinmax(keywordScores)
+		vectorScores = normalizeScoresMinmax(vectorScores)
+	}
+
 	results := make([]SearchResult, 0, len(entries))
 	for _, entry := range entries {
 		kwScore := keywordScores[entry.ID]
 		vecScore := vectorScores[entry.ID]
 
 		var combinedScore float64
-		matchType := "keyword"
+		var matchType string
+
+		hasVec := opts.UseVector && vectorScores != nil
+		hasKw := (opts.UseKeyword || !opts.UseVector) && keywordScores != nil
 
 		switch {
-		case opts.UseVector && vecScore > 0 && opts.UseKeyword && kwScore > 0:
-			combinedScore = opts.VectorWeight*vecScore + (1-opts.VectorWeight)*kwScore
+		case hasVec && hasKw && vecScore > 0 && kwScore > 0:
+			combinedScore = vecWeight*vecScore + kwWeight*kwScore
 			matchType = "hybrid"
-		case opts.UseVector && vecScore > 0:
+		case hasVec && vecScore > 0:
 			combinedScore = vecScore
 			matchType = "vector"
-		case opts.UseKeyword || !opts.UseVector:
+		case hasKw && kwScore > 0:
 			combinedScore = kwScore
 			matchType = "keyword"
+		case hasVec && vecScore == 0 && hasKw:
+			combinedScore = kwWeight * kwScore
+			matchType = "keyword"
+		case hasKw && kwScore == 0 && hasVec:
+			combinedScore = vecWeight * vecScore
+			matchType = "vector"
+		case hasVec && hasKw:
+			combinedScore = vecWeight*vecScore + kwWeight*kwScore
+			matchType = "hybrid"
+		case hasVec:
+			combinedScore = vecScore
+			matchType = "vector"
+		case hasKw:
+			combinedScore = kwScore
+			matchType = "keyword"
+		default:
+			continue
 		}
 
 		if combinedScore < opts.MinScore && opts.MinScore > 0 {
@@ -125,12 +164,13 @@ func HybridSearch(entries []MemoryEntry, query string, opts SearchOptions) []Sea
 		}
 
 		result := SearchResult{
-			Entry:     entry,
-			Score:     combinedScore,
-			MatchType: matchType,
+			Entry:        entry,
+			Score:        combinedScore,
+			KeywordScore: kwScore,
+			VectorScore:  vecScore,
+			MatchType:    matchType,
 		}
 
-		// Apply temporal decay
 		if opts.ApplyTemporal {
 			decay := temporalDecay(entry.Timestamp, opts.TemporalDecay)
 			result.TemporalWeight = decay
@@ -140,17 +180,14 @@ func HybridSearch(entries []MemoryEntry, query string, opts SearchOptions) []Sea
 		results = append(results, result)
 	}
 
-	// Sort by score
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
 	})
 
-	// Apply MMR for diversity
 	if opts.ApplyMMR && len(results) > opts.Limit {
 		results = mmrSelect(results, opts.Limit, opts.MMRLambda)
 	}
 
-	// Limit results
 	if len(results) > opts.Limit {
 		results = results[:opts.Limit]
 	}
@@ -158,8 +195,39 @@ func HybridSearch(entries []MemoryEntry, query string, opts SearchOptions) []Sea
 	return results
 }
 
-// keywordSearch performs TF-IDF-like keyword matching.
-func keywordSearch(entries []MemoryEntry, query string) map[string]float64 {
+func normalizeScoresMinmax(scores map[string]float64) map[string]float64 {
+	if len(scores) == 0 {
+		return scores
+	}
+
+	minVal := math.MaxFloat64
+	maxVal := -math.MaxFloat64
+	for _, s := range scores {
+		if s < minVal {
+			minVal = s
+		}
+		if s > maxVal {
+			maxVal = s
+		}
+	}
+
+	if maxVal == minVal {
+		normalized := make(map[string]float64, len(scores))
+		for k := range scores {
+			normalized[k] = 0.5
+		}
+		return normalized
+	}
+
+	rangeVal := maxVal - minVal
+	normalized := make(map[string]float64, len(scores))
+	for k, s := range scores {
+		normalized[k] = (s - minVal) / rangeVal
+	}
+	return normalized
+}
+
+func bm25Search(entries []MemoryEntry, query string) map[string]float64 {
 	scores := make(map[string]float64)
 	queryTerms := tokenize(query)
 
@@ -167,12 +235,33 @@ func keywordSearch(entries []MemoryEntry, query string) map[string]float64 {
 		return scores
 	}
 
-	// Build document frequency
-	docFreq := make(map[string]int)
-	for _, entry := range entries {
+	k1 := 1.5
+	b := 0.75
+
+	docTerms := make([]map[string]int, len(entries))
+	docLengths := make([]int, len(entries))
+	totalLength := 0
+
+	for i, entry := range entries {
 		terms := tokenize(entry.Content)
-		seen := make(map[string]bool)
+		termFreq := make(map[string]int)
 		for _, term := range terms {
+			termFreq[term]++
+		}
+		docTerms[i] = termFreq
+		docLengths[i] = len(terms)
+		totalLength += len(terms)
+	}
+
+	avgDocLength := float64(totalLength) / float64(len(entries))
+	if avgDocLength == 0 {
+		avgDocLength = 1
+	}
+
+	docFreq := make(map[string]int)
+	for _, termFreq := range docTerms {
+		seen := make(map[string]bool)
+		for term := range termFreq {
 			if !seen[term] {
 				docFreq[term]++
 				seen[term] = true
@@ -181,33 +270,35 @@ func keywordSearch(entries []MemoryEntry, query string) map[string]float64 {
 	}
 
 	n := float64(len(entries))
-	if n == 0 {
-		return scores
-	}
 
-	for _, entry := range entries {
-		terms := tokenize(entry.Content)
-		termFreq := make(map[string]int)
-		for _, term := range terms {
-			termFreq[term]++
-		}
-
+	for i, entry := range entries {
 		var score float64
+		docLen := float64(docLengths[i])
+
 		for _, qt := range queryTerms {
-			tf := float64(termFreq[qt]) / float64(len(terms))
-			idf := math.Log(n / float64(docFreq[qt]+1))
-			score += tf * idf
+			df := float64(docFreq[qt])
+			if df == 0 {
+				continue
+			}
+
+			idf := math.Log((n-df+0.5)/(df+0.5) + 1.0)
+			tf := float64(docTerms[i][qt])
+
+			numerator := tf * (k1 + 1.0)
+			denominator := tf + k1*(1.0-b+b*(docLen/avgDocLength))
+
+			score += idf * (numerator / denominator)
 		}
 
-		// Bonus for exact phrase match
-		if strings.Contains(strings.ToLower(entry.Content), strings.ToLower(query)) {
+		lowerContent := strings.ToLower(entry.Content)
+		lowerQuery := strings.ToLower(query)
+		if strings.Contains(lowerContent, lowerQuery) {
 			score *= 1.5
 		}
 
-		// Bonus for metadata match
 		for _, val := range entry.Metadata {
-			if strings.Contains(strings.ToLower(val), strings.ToLower(query)) {
-				score += 0.5
+			if strings.Contains(strings.ToLower(val), lowerQuery) {
+				score += 0.3
 			}
 		}
 
@@ -217,17 +308,19 @@ func keywordSearch(entries []MemoryEntry, query string) map[string]float64 {
 	return scores
 }
 
-// vectorSearch performs provider-backed cosine similarity search and falls back
-// to keyword scoring when callers have not configured embeddings yet.
+func keywordSearch(entries []MemoryEntry, query string) map[string]float64 {
+	return bm25Search(entries, query)
+}
+
 func vectorSearch(entries []MemoryEntry, query string, opts SearchOptions) map[string]float64 {
 	queryEmbedding, ok := resolveQueryEmbedding(query, opts)
 	if !ok {
-		return keywordFallback(entries, query, opts)
+		return nil
 	}
 
 	entryEmbeddings, ok := resolveEntryEmbeddings(entries, opts)
 	if !ok {
-		return keywordFallback(entries, query, opts)
+		return nil
 	}
 
 	scores := make(map[string]float64, len(entries))
@@ -247,13 +340,11 @@ func vectorSearch(entries []MemoryEntry, query string, opts SearchOptions) map[s
 	return scores
 }
 
-// temporalDecay applies exponential decay based on entry age.
 func temporalDecay(timestamp time.Time, halfLifeHours float64) float64 {
 	age := time.Since(timestamp).Hours()
 	return math.Exp(-math.Ln2 * age / halfLifeHours)
 }
 
-// mmrSelect implements Maximal Marginal Relevance for diverse results.
 func mmrSelect(results []SearchResult, k int, lambda float64) []SearchResult {
 	if len(results) <= k {
 		return results
@@ -272,7 +363,6 @@ func mmrSelect(results []SearchResult, k int, lambda float64) []SearchResult {
 		for i, r := range remaining {
 			similarity := results[r.index].Score
 
-			// Calculate max similarity to already selected items
 			maxSim := 0.0
 			for _, s := range selected {
 				sim := contentSimilarity(results[r.index].Entry, s.Entry)
@@ -297,7 +387,6 @@ func mmrSelect(results []SearchResult, k int, lambda float64) []SearchResult {
 	return selected
 }
 
-// contentSimilarity calculates Jaccard similarity between two entries.
 func contentSimilarity(a, b MemoryEntry) float64 {
 	termsA := tokenize(a.Content)
 	termsB := tokenize(b.Content)
@@ -325,7 +414,6 @@ func contentSimilarity(a, b MemoryEntry) float64 {
 	return float64(intersection) / float64(union)
 }
 
-// tokenize splits text into lowercase tokens.
 func tokenize(text string) []string {
 	text = strings.ToLower(text)
 	var tokens []string
