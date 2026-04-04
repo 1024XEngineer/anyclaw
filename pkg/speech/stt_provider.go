@@ -69,6 +69,18 @@ func NewSTTProvider(cfg STTConfig) (STTProvider, error) {
 			opts = append(opts, WithWhisperTimeout(cfg.Timeout))
 		}
 		return NewWhisperProvider(cfg.APIKey, opts...)
+	case STTProviderGoogle:
+		opts := []GoogleOption{}
+		if cfg.BaseURL != "" {
+			opts = append(opts, WithGoogleBaseURL(cfg.BaseURL))
+		}
+		if cfg.Language != "" {
+			opts = append(opts, WithGoogleLanguageCode(cfg.Language))
+		}
+		if cfg.Timeout > 0 {
+			opts = append(opts, WithGoogleTimeout(cfg.Timeout))
+		}
+		return NewGoogleProvider(cfg.APIKey, opts...)
 	default:
 		return nil, NewSTTError(ErrProviderNotSupported, "unknown STT provider: "+string(cfg.Type))
 	}
