@@ -385,8 +385,8 @@ func TestMediaPipeline_Download(t *testing.T) {
 	if media.Type != TypeDoc {
 		t.Errorf("expected doc type, got %s", media.Type)
 	}
-	if media.MimeType != "application/octet-stream" {
-		t.Errorf("expected application/octet-stream, got %s", media.MimeType)
+	if media.MimeType != "text/plain" {
+		t.Errorf("expected text/plain, got %s", media.MimeType)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -451,10 +452,12 @@ func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int6
 		return nil, fmt.Errorf("empty response body")
 	}
 
+	detected := DetectMediaType(data, filenameFromURL(url), mediaType)
+
 	media := &Media{
 		ID:       generateID(),
-		Type:     p.processor.guessType(mediaType),
-		MimeType: mediaType,
+		Type:     detected.Type,
+		MimeType: detected.MimeType,
 		Size:     int64(len(data)),
 		Data:     data,
 		URL:      url,
@@ -462,12 +465,21 @@ func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int6
 			"status_code":    resp.StatusCode,
 			"content_length": contentLength,
 			"downloaded_at":  time.Now().Unix(),
+			"format":         string(detected.Format),
 		},
 	}
 
 	_, _ = p.processor.Process(ctx, media)
 
 	return media, nil
+}
+
+func filenameFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(u.Path)
 }
 
 func isAllowedScheme(url string, blocked []string) bool {

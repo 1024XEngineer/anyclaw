@@ -47,6 +47,7 @@ type Processor struct {
 	maxFileSize  int64
 	allowedTypes []Type
 	httpClient   *http.Client
+	detector     *Detector
 }
 
 func NewProcessor(storagePath string) *Processor {
@@ -55,10 +56,39 @@ func NewProcessor(storagePath string) *Processor {
 		maxFileSize:  10 * 1024 * 1024,
 		allowedTypes: []Type{TypeImage, TypeAudio, TypeVideo, TypeDoc},
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		detector:     NewDetector(),
 	}
 }
 
+func (p *Processor) SetDetector(d *Detector) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.detector = d
+}
+
+func (p *Processor) Detector() *Detector {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.detector
+}
+
 func (p *Processor) Process(ctx context.Context, input *Media) (*Media, error) {
+	p.mu.RLock()
+	detector := p.detector
+	p.mu.RUnlock()
+
+	if detector != nil && len(input.Data) > 0 {
+		mediaType := detector.Detect(input.Data, input.Name, input.MimeType)
+		if mediaType.Format != FormatUnknown {
+			input.Type = mediaType.Type
+			input.MimeType = mediaType.MimeType
+			if input.Metadata == nil {
+				input.Metadata = make(map[string]any)
+			}
+			input.Metadata["format"] = string(mediaType.Format)
+		}
+	}
+
 	switch input.Type {
 	case TypeImage:
 		return p.processImage(ctx, input)
@@ -81,14 +111,14 @@ func (p *Processor) processImage(ctx context.Context, input *Media) (*Media, err
 	}
 
 	if len(input.Data) > 0 {
-		img, _, err := image.Decode(bytes.NewReader(input.Data))
-		if err != nil {
-			return nil, fmt.Errorf("decode image: %w", err)
+		if input.Metadata == nil {
+			input.Metadata = make(map[string]any)
 		}
 
-		input.Metadata = map[string]any{
-			"width":  img.Bounds().Dx(),
-			"height": img.Bounds().Dy(),
+		if meta, err := ExtractImageMetadata(input.Data); err == nil {
+			for k, v := range meta {
+				input.Metadata[k] = v
+			}
 		}
 	}
 
@@ -96,17 +126,25 @@ func (p *Processor) processImage(ctx context.Context, input *Media) (*Media, err
 }
 
 func (p *Processor) processAudio(ctx context.Context, input *Media) (*Media, error) {
-	input.Metadata = map[string]any{
-		"duration": 0,
-		"format":   input.MimeType,
+	if len(input.Data) > 0 {
+		if input.Metadata == nil {
+			input.Metadata = make(map[string]any)
+		}
+		for k, v := range ExtractAudioMetadata(input.Data) {
+			input.Metadata[k] = v
+		}
 	}
 	return input, nil
 }
 
 func (p *Processor) processVideo(ctx context.Context, input *Media) (*Media, error) {
-	input.Metadata = map[string]any{
-		"duration": 0,
-		"format":   input.MimeType,
+	if len(input.Data) > 0 {
+		if input.Metadata == nil {
+			input.Metadata = make(map[string]any)
+		}
+		for k, v := range ExtractVideoMetadata(input.Data) {
+			input.Metadata[k] = v
+		}
 	}
 	return input, nil
 }
