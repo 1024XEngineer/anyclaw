@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/clawbridge"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/memory"
+	"github.com/anyclaw/anyclaw/pkg/prompt"
 	"github.com/anyclaw/anyclaw/pkg/skills"
 	"github.com/anyclaw/anyclaw/pkg/tools"
 	"github.com/anyclaw/anyclaw/pkg/workspace"
@@ -47,6 +49,92 @@ func (s *stubAgentLLM) StreamChat(ctx context.Context, messages []llm.Message, t
 
 func (s *stubAgentLLM) Name() string {
 	return "stub"
+}
+
+type compactionAwareLLM struct {
+	mu       sync.Mutex
+	messages [][]llm.Message
+}
+
+func (s *compactionAwareLLM) Chat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error) {
+	s.mu.Lock()
+	s.messages = append(s.messages, append([]llm.Message(nil), messages...))
+	s.mu.Unlock()
+
+	if len(messages) > 0 && messages[0].Role == "system" && strings.Contains(messages[0].Content, "conversation summarizer") {
+		return &llm.Response{Content: "condensed prior work"}, nil
+	}
+	return &llm.Response{Content: "final response"}, nil
+}
+
+func (s *compactionAwareLLM) StreamChat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition, onChunk func(string)) error {
+	resp, err := s.Chat(ctx, messages, toolDefs)
+	if err != nil {
+		return err
+	}
+	if onChunk != nil {
+		onChunk(resp.Content)
+	}
+	return nil
+}
+
+func (s *compactionAwareLLM) Name() string { return "compaction-aware" }
+
+type blockingAgentLLM struct {
+	mu      sync.Mutex
+	entered chan int
+	gates   []chan struct{}
+}
+
+func newBlockingAgentLLM() *blockingAgentLLM {
+	return &blockingAgentLLM{
+		entered: make(chan int, 4),
+		gates:   make([]chan struct{}, 0, 4),
+	}
+}
+
+func (s *blockingAgentLLM) Chat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error) {
+	s.mu.Lock()
+	idx := len(s.gates)
+	gate := make(chan struct{})
+	s.gates = append(s.gates, gate)
+	s.mu.Unlock()
+
+	s.entered <- idx
+
+	select {
+	case <-gate:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	return &llm.Response{Content: fmt.Sprintf("response-%d", idx)}, nil
+}
+
+func (s *blockingAgentLLM) StreamChat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition, onChunk func(string)) error {
+	resp, err := s.Chat(ctx, messages, toolDefs)
+	if err != nil {
+		return err
+	}
+	if onChunk != nil {
+		onChunk(resp.Content)
+	}
+	return nil
+}
+
+func (s *blockingAgentLLM) Name() string { return "blocking" }
+
+func (s *blockingAgentLLM) Release(idx int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < 0 || idx >= len(s.gates) {
+		return
+	}
+	select {
+	case <-s.gates[idx]:
+	default:
+		close(s.gates[idx])
+	}
 }
 
 func TestBuildSystemPromptIncludesPersonalityAndAnyClawCore(t *testing.T) {
@@ -568,5 +656,181 @@ func TestAgentRunCompletesBootstrapRitualBeforeCallingLLM(t *testing.T) {
 	}
 	if len(llmStub.messages) != 1 {
 		t.Fatalf("expected one llm call after bootstrap, got %d", len(llmStub.messages))
+	}
+}
+
+func TestAgentRunCompactsHistoryAndEnforcesWindowLimit(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+
+	llmStub := &compactionAwareLLM{}
+	ag := New(Config{
+		Name:             "assistant",
+		Description:      "General helper",
+		LLM:              llmStub,
+		Memory:           mem,
+		Skills:           skills.NewSkillsManager(""),
+		Tools:            tools.NewRegistry(),
+		MaxContextTokens: 700,
+	})
+
+	history := make([]prompt.Message, 0, 16)
+	for i := 0; i < 8; i++ {
+		history = append(history,
+			prompt.Message{Role: "user", Content: fmt.Sprintf("old-user-%d %s", i, strings.Repeat("x", 120))},
+			prompt.Message{Role: "assistant", Content: fmt.Sprintf("old-assistant-%d %s", i, strings.Repeat("y", 120))},
+		)
+	}
+	ag.SetHistory(history)
+
+	result, err := ag.Run(context.Background(), "latest request")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result != "final response" {
+		t.Fatalf("unexpected response: %q", result)
+	}
+
+	if len(llmStub.messages) < 2 {
+		t.Fatalf("expected summarizer call and main call, got %d batches", len(llmStub.messages))
+	}
+
+	mainBatch := llmStub.messages[len(llmStub.messages)-1]
+	foundSummary := false
+	foundOldest := false
+	for _, msg := range mainBatch {
+		if msg.Role == "system" && strings.Contains(msg.Content, "[Summary of previous conversation]") {
+			foundSummary = true
+		}
+		if strings.Contains(msg.Content, "old-user-0") {
+			foundOldest = true
+		}
+	}
+	if !foundSummary {
+		t.Fatalf("expected compacted history summary in main batch, got %#v", mainBatch)
+	}
+	if foundOldest {
+		t.Fatalf("expected oldest history to be compacted away, got %#v", mainBatch)
+	}
+}
+
+func TestBuildSystemPromptHotReloadsBootstrapFiles(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+
+	workingDir := t.TempDir()
+	if err := workspace.EnsureBootstrap(workingDir, workspace.BootstrapOptions{
+		AgentName:        "assistant",
+		AgentDescription: "Local execution helper",
+	}); err != nil {
+		t.Fatalf("EnsureBootstrap: %v", err)
+	}
+
+	ag := New(Config{
+		Name:                   "assistant",
+		Description:            "General helper",
+		Memory:                 mem,
+		Skills:                 skills.NewSkillsManager(""),
+		Tools:                  tools.NewRegistry(),
+		WorkingDir:             workingDir,
+		BootstrapWatchInterval: 20 * time.Millisecond,
+	})
+
+	initialPrompt, err := ag.buildSystemPrompt()
+	if err != nil {
+		t.Fatalf("buildSystemPrompt(initial): %v", err)
+	}
+	if !strings.Contains(initialPrompt, "Complete the user's task safely") {
+		t.Fatalf("expected initial bootstrap content, got %q", initialPrompt)
+	}
+
+	newAgents := "# AGENTS\n\n## Primary Agent\n- Goal: Prefer verifiable Go refactors.\n"
+	if err := os.WriteFile(filepath.Join(workingDir, "AGENTS.md"), []byte(newAgents), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md): %v", err)
+	}
+
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		reloadedPrompt, err := ag.buildSystemPrompt()
+		if err != nil {
+			t.Fatalf("buildSystemPrompt(reloaded): %v", err)
+		}
+		if strings.Contains(reloadedPrompt, "Prefer verifiable Go refactors.") {
+			return
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	t.Fatal("expected bootstrap watcher to refresh AGENTS.md content")
+}
+
+func TestAgentRunUsesExclusiveSlotToSerializeConcurrentExecutions(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+
+	llmStub := newBlockingAgentLLM()
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		LLM:         llmStub,
+		Memory:      mem,
+		Skills:      skills.NewSkillsManager(""),
+		Tools:       tools.NewRegistry(),
+	})
+
+	results := make(chan string, 2)
+	errs := make(chan error, 2)
+
+	go func() {
+		result, err := ag.Run(context.Background(), "first request")
+		results <- result
+		errs <- err
+	}()
+
+	select {
+	case idx := <-llmStub.entered:
+		if idx != 0 {
+			t.Fatalf("expected first llm call index 0, got %d", idx)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first run to enter llm")
+	}
+
+	go func() {
+		result, err := ag.Run(context.Background(), "second request")
+		results <- result
+		errs <- err
+	}()
+
+	select {
+	case idx := <-llmStub.entered:
+		t.Fatalf("second run entered llm before first released (idx=%d)", idx)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	llmStub.Release(0)
+
+	select {
+	case idx := <-llmStub.entered:
+		if idx != 1 {
+			t.Fatalf("expected second llm call index 1 after release, got %d", idx)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for second run to enter llm")
+	}
+
+	llmStub.Release(1)
+
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("Run error: %v", err)
+		}
+		<-results
 	}
 }

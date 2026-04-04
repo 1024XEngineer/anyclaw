@@ -11,6 +11,7 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/clawbridge"
 	"github.com/anyclaw/anyclaw/pkg/clihub"
+	ctxpkg "github.com/anyclaw/anyclaw/pkg/context"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/memory"
 	"github.com/anyclaw/anyclaw/pkg/plugin"
@@ -41,6 +42,7 @@ type Agent struct {
 	lastToolActivities []ToolActivity
 	intentPreprocessor *IntentPreprocessor
 	preferenceLearner  *PreferenceLearner
+	contextRuntime     *contextRuntime
 }
 
 type Config struct {
@@ -54,6 +56,11 @@ type Config struct {
 	WorkDir     string
 	WorkingDir  string
 	CLIHubRoot  string
+
+	MaxContextTokens       int
+	ContextSafetyMargin    int
+	BootstrapWatchInterval time.Duration
+	ContextEngine          ctxpkg.ContextEngine
 }
 
 var (
@@ -83,6 +90,7 @@ func New(cfg Config) *Agent {
 		history:      []prompt.Message{},
 		maxToolCalls: 10,
 	}
+	agent.contextRuntime = newContextRuntime(cfg)
 
 	if cfg.CLIHubRoot != "" {
 		agent.intentPreprocessor, _ = NewIntentPreprocessor(cfg.CLIHubRoot, nil)
@@ -106,41 +114,46 @@ func (a *Agent) EnableIntentPreprocessing(root string, execFunc func([]string, s
 
 func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	a.resetToolActivities()
+	exec, err := a.acquireContextExecution(ctx, userInput)
+	if err != nil {
+		return "", err
+	}
+	defer a.releaseContextExecution(exec)
 
 	if a.intentPreprocessor != nil {
 		result := a.intentPreprocessor.Preprocess(userInput, nil)
 		if result != nil && result.Handled && result.Confidence >= 0.15 {
 			execResult, err := a.intentPreprocessor.Execute(result, nil)
 			if err != nil {
-				a.history = append(a.history, prompt.Message{Role: "user", Content: userInput})
-				a.history = append(a.history, prompt.Message{Role: "assistant", Content: fmt.Sprintf("[Auto-Intent Failed] %v", err)})
+				a.appendHistoryMessage(ctx, "user", userInput)
+				a.appendHistoryMessage(ctx, "assistant", fmt.Sprintf("[Auto-Intent Failed] %v", err))
 			} else {
-				a.history = append(a.history, prompt.Message{Role: "user", Content: userInput})
-				a.history = append(a.history, prompt.Message{Role: "assistant", Content: execResult})
+				a.appendHistoryMessage(ctx, "user", userInput)
+				a.appendHistoryMessage(ctx, "assistant", execResult)
 			}
 			return execResult, err
 		}
 	}
 
-	if bootstrapResult, handled, err := a.handleBootstrapRitual(userInput); handled {
+	if bootstrapResult, handled, err := a.handleBootstrapRitual(ctx, userInput); handled {
 		return bootstrapResult, err
 	}
 	selectedTools := a.selectToolInfos(userInput)
-	systemPrompt, err := a.buildSystemPromptForToolInfos(selectedTools)
+	a.appendHistoryMessage(ctx, "user", userInput)
+	systemPrompt, err := a.prepareSystemPrompt(ctx, selectedTools)
 	if err != nil {
-		return "", fmt.Errorf("failed to build system prompt: %w", err)
+		return "", err
 	}
-
-	a.history = append(a.history, prompt.Message{Role: "user", Content: userInput})
 	messages := a.buildMessages(systemPrompt)
 	toolDefs := buildToolDefinitionsFromInfos(selectedTools)
 
+	a.heartbeatContextExecution(exec)
 	response, err := a.chatWithTools(ctx, messages, toolDefs)
 	if err != nil {
 		return "", err
 	}
 
-	a.history = append(a.history, prompt.Message{Role: "assistant", Content: response})
+	a.appendHistoryMessage(ctx, "assistant", response)
 
 	a.memory.Add(memory.MemoryEntry{Type: "conversation", Role: "user", Content: userInput})
 	a.memory.Add(memory.MemoryEntry{Type: "conversation", Role: "assistant", Content: response})
@@ -156,12 +169,23 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 
 func (a *Agent) RunStream(ctx context.Context, userInput string, onChunk func(string)) error {
 	a.resetToolActivities()
+	exec, err := a.acquireContextExecution(ctx, userInput)
+	if err != nil {
+		return err
+	}
+	defer a.releaseContextExecution(exec)
 
-	a.history = append(a.history, prompt.Message{Role: "user", Content: userInput})
-	messages := a.buildMessages("")
-	toolDefs := a.buildToolDefinitions()
+	selectedTools := a.selectToolInfos(userInput)
+	a.appendHistoryMessage(ctx, "user", userInput)
+	systemPrompt, err := a.prepareSystemPrompt(ctx, selectedTools)
+	if err != nil {
+		return err
+	}
+	messages := a.buildMessages(systemPrompt)
+	toolDefs := buildToolDefinitionsFromInfos(selectedTools)
 
-	err := a.llm.StreamChat(ctx, messages, toolDefs, func(chunk string) {
+	a.heartbeatContextExecution(exec)
+	err = a.llm.StreamChat(ctx, messages, toolDefs, func(chunk string) {
 		onChunk(chunk)
 	})
 	if err != nil {
@@ -171,7 +195,7 @@ func (a *Agent) RunStream(ctx context.Context, userInput string, onChunk func(st
 	return nil
 }
 
-func (a *Agent) handleBootstrapRitual(userInput string) (string, bool, error) {
+func (a *Agent) handleBootstrapRitual(ctx context.Context, userInput string) (string, bool, error) {
 	if strings.TrimSpace(a.workingDir) == "" {
 		return "", false, nil
 	}
@@ -185,8 +209,8 @@ func (a *Agent) handleBootstrapRitual(userInput string) (string, bool, error) {
 	if result == nil || !result.Active {
 		return "", false, nil
 	}
-	a.history = append(a.history, prompt.Message{Role: "user", Content: userInput})
-	a.history = append(a.history, prompt.Message{Role: "assistant", Content: result.Response})
+	a.appendHistoryMessage(ctx, "user", userInput)
+	a.appendHistoryMessage(ctx, "assistant", result.Response)
 	a.recordConversation(userInput, result.Response)
 	return result.Response, true, nil
 }
@@ -448,7 +472,7 @@ func (a *Agent) buildSystemPromptForToolInfos(toolList []tools.ToolInfo) (string
 
 	workspaceFiles := []prompt.WorkspaceFile{}
 	if strings.TrimSpace(a.workingDir) != "" {
-		files, err := workspace.LoadBootstrapFiles(a.workingDir, workspace.BootstrapOptions{})
+		files, err := a.loadBootstrapFiles()
 		if err == nil {
 			workspaceFiles = make([]prompt.WorkspaceFile, 0, len(files))
 			for _, file := range files {
@@ -947,4 +971,71 @@ func (a *Agent) SetHistory(history []prompt.Message) {
 
 func (a *Agent) SetTools(registry *tools.Registry) {
 	a.tools = registry
+}
+
+func (a *Agent) SetContextEngine(engine ctxpkg.ContextEngine) {
+	if a.contextRuntime == nil {
+		a.contextRuntime = newContextRuntime(a.config)
+	}
+	a.contextRuntime.setContextEngine(engine)
+}
+
+func (a *Agent) appendHistoryMessage(ctx context.Context, role string, content string) {
+	a.history = append(a.history, prompt.Message{Role: role, Content: content})
+	if a.contextRuntime != nil {
+		a.contextRuntime.storeConversation(ctx, a.config.Name, a.workingDir, role, content)
+	}
+}
+
+func (a *Agent) loadBootstrapFiles() ([]workspace.BootstrapFile, error) {
+	if a.contextRuntime != nil {
+		return a.contextRuntime.loadBootstrapFiles(a.workingDir)
+	}
+	return workspace.LoadBootstrapFiles(a.workingDir, workspace.BootstrapOptions{})
+}
+
+func (a *Agent) prepareSystemPrompt(ctx context.Context, selectedTools []tools.ToolInfo) (string, error) {
+	if a.contextRuntime != nil {
+		compacted, err := a.contextRuntime.compactHistory(ctx, a.history, a.llm)
+		if err != nil {
+			return "", fmt.Errorf("failed to compact history: %w", err)
+		}
+		a.history = compacted
+	}
+
+	systemPrompt, err := a.buildSystemPromptForToolInfos(selectedTools)
+	if err != nil {
+		return "", fmt.Errorf("failed to build system prompt: %w", err)
+	}
+
+	if a.contextRuntime != nil {
+		trimmed, err := a.contextRuntime.enforceTokenLimit(systemPrompt, a.history)
+		if err != nil {
+			return "", err
+		}
+		a.history = trimmed
+	}
+
+	return systemPrompt, nil
+}
+
+func (a *Agent) acquireContextExecution(ctx context.Context, userInput string) (*contextExecution, error) {
+	if a.contextRuntime == nil {
+		return &contextExecution{}, nil
+	}
+	return a.contextRuntime.acquire(ctx, firstNonEmpty(a.config.Name, userInput))
+}
+
+func (a *Agent) heartbeatContextExecution(exec *contextExecution) {
+	if a.contextRuntime == nil {
+		return
+	}
+	a.contextRuntime.heartbeat(exec)
+}
+
+func (a *Agent) releaseContextExecution(exec *contextExecution) {
+	if a.contextRuntime == nil {
+		return
+	}
+	a.contextRuntime.release(exec)
 }

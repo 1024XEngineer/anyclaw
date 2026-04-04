@@ -155,26 +155,9 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 	// Build the full personality prompt from agent definition
 	personality := buildAgentPersonality(def)
 
-	// Create the underlying agent
-	ag := agent.New(agent.Config{
-		Name:        def.Name,
-		Description: def.Description,
-		Personality: personality,
-		LLM:         effectiveLLM,
-		Memory:      agentMem,
-		Skills:      privateSkills,
-		Tools:       privateTools,
-		WorkDir:     def.WorkingDir,
-	})
-
-	subAgent := &SubAgent{
-		definition: def,
-		agent:      ag,
-		llmClient:  effectiveLLM,
-		skills:     privateSkills,
-		tools:      privateTools,
-		memory:     agentMem,
-	}
+	var isolatedEngine *isolation.IsolatedEngine
+	var boundary *isolation.ContextBoundary
+	scopeID := ""
 
 	if isoManager != nil {
 		mode := isolation.IsolationMode(def.ContextIsolationMode)
@@ -196,6 +179,7 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 		if maxSize <= 0 {
 			maxSize = 1000
 		}
+		_ = maxSize
 
 		scope := &isolation.ContextScope{
 			AgentID:   def.Name,
@@ -208,9 +192,7 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 			},
 		}
 
-		var boundary *isolation.ContextBoundary
 		var err error
-
 		if def.ContextInheritFromParent && parentScopeID != "" {
 			boundary, err = isoManager.CreateChildBoundary(parentScopeID, scope, mode, visibility)
 		} else if def.ContextParentScopeID != "" {
@@ -220,15 +202,48 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 		}
 
 		if err == nil {
-			subAgent.contextBoundary = boundary
-			subAgent.contextScopeID = scope.ID()
-			if engine, ok := isoManager.GetEngine(scope.ID()); ok {
-				subAgent.contextEngine = engine
+			scopeID = scope.ID()
+			if engine, ok := isoManager.GetEngine(scopeID); ok {
+				isolatedEngine = engine
 			}
 		}
 	}
 
+	// Create the underlying agent
+	ag := agent.New(agent.Config{
+		Name:             def.Name,
+		Description:      def.Description,
+		Personality:      personality,
+		LLM:              effectiveLLM,
+		Memory:           agentMem,
+		Skills:           privateSkills,
+		Tools:            privateTools,
+		WorkDir:          def.WorkingDir,
+		WorkingDir:       def.WorkingDir,
+		MaxContextTokens: maxTokensForAgent(def),
+		ContextEngine:    isolatedEngine,
+	})
+
+	subAgent := &SubAgent{
+		definition:      def,
+		agent:           ag,
+		llmClient:       effectiveLLM,
+		skills:          privateSkills,
+		tools:           privateTools,
+		memory:          agentMem,
+		contextEngine:   isolatedEngine,
+		contextBoundary: boundary,
+		contextScopeID:  scopeID,
+	}
+
 	return subAgent, nil
+}
+
+func maxTokensForAgent(def AgentDefinition) int {
+	if def.LLMMaxTokens != nil && *def.LLMMaxTokens > 0 {
+		return *def.LLMMaxTokens
+	}
+	return 4096
 }
 
 func buildAgentPersonality(def AgentDefinition) string {

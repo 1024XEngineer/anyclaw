@@ -364,15 +364,16 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	t = time.Now()
 
 	ag := agent.New(agent.Config{
-		Name:        app.Config.Agent.Name,
-		Description: app.Config.Agent.Description,
-		Personality: agent.BuildPersonalityPrompt(resolveMainAgentPersonality(app.Config)),
-		LLM:         llmWrapper,
-		Memory:      mem,
-		Skills:      sk,
-		Tools:       registry,
-		WorkDir:     workDir,
-		WorkingDir:  workingDir,
+		Name:             app.Config.Agent.Name,
+		Description:      app.Config.Agent.Description,
+		Personality:      agent.BuildPersonalityPrompt(resolveMainAgentPersonality(app.Config)),
+		LLM:              llmWrapper,
+		Memory:           mem,
+		Skills:           sk,
+		Tools:            registry,
+		WorkDir:          workDir,
+		WorkingDir:       workingDir,
+		MaxContextTokens: app.Config.LLM.MaxTokens,
 	})
 	app.Agent = ag
 	progress(BootEvent{Phase: PhaseAgent, Status: "ok", Message: fmt.Sprintf("permission=%s", app.Config.Agent.PermissionLevel), Dur: time.Since(t)})

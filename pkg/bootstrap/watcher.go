@@ -11,13 +11,18 @@ import (
 type FileType string
 
 const (
-	FileAgents   FileType = "AGENTS.md"
-	FileSoul     FileType = "SOUL.md"
-	FileRules    FileType = "RULES.md"
-	FileMemory   FileType = "MEMORY.md"
-	FileSkills   FileType = "SKILLS.md"
-	FileCommands FileType = "COMMANDS.md"
-	FileCustom   FileType = "custom"
+	FileAgents    FileType = "AGENTS.md"
+	FileSoul      FileType = "SOUL.md"
+	FileTools     FileType = "TOOLS.md"
+	FileIdentity  FileType = "IDENTITY.md"
+	FileUser      FileType = "USER.md"
+	FileHeartbeat FileType = "HEARTBEAT.md"
+	FileBootstrap FileType = "BOOTSTRAP.md"
+	FileRules     FileType = "RULES.md"
+	FileMemory    FileType = "MEMORY.md"
+	FileSkills    FileType = "SKILLS.md"
+	FileCommands  FileType = "COMMANDS.md"
+	FileCustom    FileType = "custom"
 )
 
 type FileEntry struct {
@@ -64,7 +69,9 @@ func DefaultWatcherConfig(baseDir string) WatcherConfig {
 		PollInterval: 2 * time.Second,
 		AutoLoad:     true,
 		Files: []FileType{
-			FileAgents, FileSoul, FileRules,
+			FileAgents, FileSoul, FileTools,
+			FileIdentity, FileUser, FileHeartbeat,
+			FileBootstrap, FileRules,
 			FileMemory, FileSkills, FileCommands,
 		},
 	}
@@ -214,39 +221,44 @@ func (w *Watcher) checkChanges() {
 			continue
 		}
 
-		if info.ModTime() != entry.LastMod || info.Size() != entry.Size {
-			oldSize := entry.Size
-			oldContent := entry.Content
+		content, err := os.ReadFile(entry.Path)
+		if err != nil {
+			continue
+		}
 
-			content, err := os.ReadFile(entry.Path)
-			if err != nil {
-				continue
-			}
-
-			newContent := string(content)
-			if newContent == oldContent {
-				continue
-			}
-
-			entry.Content = newContent
+		newContent := string(content)
+		newChecksum := simpleChecksum(newContent)
+		if newContent == entry.Content {
 			entry.LastMod = info.ModTime()
 			entry.Size = info.Size()
-			entry.Checksum = simpleChecksum(newContent)
-
-			w.notify(ChangeEvent{
-				Type:    ft,
-				Path:    entry.Path,
-				OldSize: oldSize,
-				NewSize: info.Size(),
-				Action:  "modified",
-				Time:    time.Now(),
-			})
+			entry.Checksum = newChecksum
+			continue
 		}
+		if info.ModTime() == entry.LastMod && info.Size() == entry.Size && newChecksum == entry.Checksum {
+			continue
+		}
+
+		oldSize := entry.Size
+		entry.Content = newContent
+		entry.LastMod = info.ModTime()
+		entry.Size = info.Size()
+		entry.Checksum = newChecksum
+
+		w.notify(ChangeEvent{
+			Type:    ft,
+			Path:    entry.Path,
+			OldSize: oldSize,
+			NewSize: info.Size(),
+			Action:  "modified",
+			Time:    time.Now(),
+		})
 	}
 
 	// Check for new files
 	for _, ft := range []FileType{
-		FileAgents, FileSoul, FileRules,
+		FileAgents, FileSoul, FileTools,
+		FileIdentity, FileUser, FileHeartbeat,
+		FileBootstrap, FileRules,
 		FileMemory, FileSkills, FileCommands,
 	} {
 		if _, exists := w.files[ft]; exists {
@@ -321,7 +333,7 @@ func (w *Watcher) loadFileLocked(ft FileType) error {
 
 func (w *Watcher) notify(event ChangeEvent) {
 	for _, handler := range w.handlers {
-		go handler(event)
+		handler(event)
 	}
 }
 
