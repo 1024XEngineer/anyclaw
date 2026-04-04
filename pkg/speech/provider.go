@@ -2,6 +2,7 @@ package speech
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"time"
 )
@@ -192,4 +193,12 @@ type Voice struct {
 	Gender      VoiceGender
 	Provider    string
 	Description string
+}
+
+func AudioToBase64(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+func Base64ToAudio(b64 string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(b64)
 }

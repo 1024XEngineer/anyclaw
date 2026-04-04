@@ -10,12 +10,45 @@ type Manager struct {
 	mu          sync.RWMutex
 	providers   map[string]Provider
 	defaultName string
+	cache       *AudioCache
+	cacheConfig CacheConfig
 }
 
-func NewManager() *Manager {
-	return &Manager{
-		providers: make(map[string]Provider),
+type ManagerOption func(*Manager)
+
+func WithManagerCache(cfg CacheConfig) ManagerOption {
+	return func(m *Manager) {
+		m.cacheConfig = cfg
+		m.cache = NewAudioCache(cfg)
 	}
+}
+
+func WithManagerProvider(name string, provider Provider) ManagerOption {
+	return func(m *Manager) {
+		m.providers[name] = provider
+		if m.defaultName == "" {
+			m.defaultName = name
+		}
+	}
+}
+
+func WithManagerDefault(name string) ManagerOption {
+	return func(m *Manager) {
+		m.defaultName = name
+	}
+}
+
+func NewManager(opts ...ManagerOption) *Manager {
+	m := &Manager{
+		providers:   make(map[string]Provider),
+		cacheConfig: DefaultCacheConfig(),
+	}
+
+	for _, opt := range opts {
+		opt(m)
+	}
+
+	return m
 }
 
 func (m *Manager) Register(name string, provider Provider) error {
@@ -96,6 +129,19 @@ func (m *Manager) Synthesize(ctx context.Context, text string, provider string, 
 		return nil, err
 	}
 
+	if m.cache != nil {
+		cacheKey := MakeCacheKey(text, provider, opts...)
+		if cached, ok := m.cache.Get(cacheKey); ok {
+			return cached, nil
+		}
+
+		result, err := p.Synthesize(ctx, text, opts...)
+		if err == nil && result != nil {
+			m.cache.Set(cacheKey, result)
+		}
+		return result, err
+	}
+
 	return p.Synthesize(ctx, text, opts...)
 }
 
@@ -149,4 +195,34 @@ func (m *Manager) Remove(name string) error {
 	}
 
 	return nil
+}
+
+func (m *Manager) Cache() *AudioCache {
+	return m.cache
+}
+
+func (m *Manager) EnableCache(cfg CacheConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cacheConfig = cfg
+	m.cache = NewAudioCache(cfg)
+}
+
+func (m *Manager) DisableCache() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cache = nil
+}
+
+func (m *Manager) ClearCache() {
+	if m.cache != nil {
+		m.cache.Clear()
+	}
+}
+
+func (m *Manager) CacheStats() (int, int64) {
+	if m.cache == nil {
+		return 0, 0
+	}
+	return m.cache.Len(), m.cache.SizeBytes()
 }
