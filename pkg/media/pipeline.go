@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +40,8 @@ type MediaPipelineConfig struct {
 	ImageOptions     ImageOptions
 	AudioOptions     AudioOptions
 	VideoOptions     VideoOptions
+	Storage          StorageBackend
+	AutoSave         bool
 }
 
 func DefaultMediaPipelineConfig() MediaPipelineConfig {
@@ -395,6 +398,75 @@ func (p *MediaPipeline) CleanupCache() int {
 	return cache.Cleanup()
 }
 
+func (p *MediaPipeline) SaveToStorage(ctx context.Context, media *Media) (string, error) {
+	storage := p.config.Storage
+	if storage == nil {
+		return "", fmt.Errorf("media-pipeline: no storage backend configured")
+	}
+
+	ext := extensionFromMime(media.MimeType)
+	key := fmt.Sprintf("%s%s", media.ID, ext)
+
+	opts := StoragePutOptions{
+		MimeType: media.MimeType,
+	}
+
+	obj, err := storage.Put(ctx, key, media.Data, opts)
+	if err != nil {
+		return "", fmt.Errorf("media-pipeline: save to storage: %w", err)
+	}
+
+	media.Path = obj.URL
+	media.URL = obj.URL
+
+	return obj.URL, nil
+}
+
+func (p *MediaPipeline) LoadFromStorage(ctx context.Context, key string) (*Media, error) {
+	storage := p.config.Storage
+	if storage == nil {
+		return nil, fmt.Errorf("media-pipeline: no storage backend configured")
+	}
+
+	obj, err := storage.Get(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("media-pipeline: load from storage: %w", err)
+	}
+
+	data, err := base64.StdEncoding.DecodeString(obj.Metadata["data"])
+	if err != nil {
+		return nil, fmt.Errorf("media-pipeline: decode stored data: %w", err)
+	}
+
+	return &Media{
+		ID:       generateID(),
+		Type:     p.processor.guessType(obj.MimeType),
+		Name:     filepath.Base(key),
+		Size:     obj.Size,
+		MimeType: obj.MimeType,
+		Data:     data,
+		Base64:   base64.StdEncoding.EncodeToString(data),
+		Path:     obj.URL,
+		URL:      obj.URL,
+	}, nil
+}
+
+func (p *MediaPipeline) DeleteFromStorage(ctx context.Context, key string) error {
+	storage := p.config.Storage
+	if storage == nil {
+		return fmt.Errorf("media-pipeline: no storage backend configured")
+	}
+	return storage.Delete(ctx, key)
+}
+
+func (p *MediaPipeline) StorageURL(ctx context.Context, key string, expires time.Duration) (string, error) {
+	storage := p.config.Storage
+	if storage == nil {
+		return "", fmt.Errorf("media-pipeline: no storage backend configured")
+	}
+	return storage.URL(ctx, key, expires)
+}
+
 func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int64, userAgent string, allowedTypes []string) (*Media, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -479,6 +551,30 @@ func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int6
 		if err := p.transcodeMedia(ctx, media); err != nil {
 			return nil, fmt.Errorf("media-pipeline: transcode failed: %w", err)
 		}
+	}
+
+	if p.config.AutoSave && p.config.Storage != nil {
+		storage := p.config.Storage
+		ext := extensionFromMime(media.MimeType)
+		key := fmt.Sprintf("%s%s", media.ID, ext)
+
+		opts := StoragePutOptions{
+			MimeType: media.MimeType,
+			Metadata: map[string]string{
+				"media-type": string(media.Type),
+				"source-url": url,
+			},
+		}
+
+		obj, err := storage.Put(ctx, key, media.Data, opts)
+		if err != nil {
+			return nil, fmt.Errorf("media-pipeline: auto-save failed: %w", err)
+		}
+
+		media.Path = obj.URL
+		media.URL = obj.URL
+		media.Metadata["storage-key"] = key
+		media.Metadata["storage-url"] = obj.URL
 	}
 
 	return media, nil

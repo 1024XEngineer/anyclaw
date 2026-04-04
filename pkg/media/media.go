@@ -49,10 +49,11 @@ type Processor struct {
 	httpClient   *http.Client
 	detector     *Detector
 	transcoder   *Transcoder
+	storage      StorageBackend
 }
 
 func NewProcessor(storagePath string) *Processor {
-	return &Processor{
+	p := &Processor{
 		storagePath:  storagePath,
 		maxFileSize:  10 * 1024 * 1024,
 		allowedTypes: []Type{TypeImage, TypeAudio, TypeVideo, TypeDoc},
@@ -60,6 +61,26 @@ func NewProcessor(storagePath string) *Processor {
 		detector:     NewDetector(),
 		transcoder:   NewTranscoder(),
 	}
+
+	if storagePath != "" {
+		p.storage = NewLocalStorage(LocalStorageConfig{
+			BasePath: storagePath,
+		})
+	}
+
+	return p
+}
+
+func (p *Processor) SetStorage(backend StorageBackend) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.storage = backend
+}
+
+func (p *Processor) Storage() StorageBackend {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.storage
 }
 
 func (p *Processor) SetTranscoder(t *Transcoder) {
@@ -203,69 +224,144 @@ func (p *Processor) Download(ctx context.Context, url string) (*Media, error) {
 }
 
 func (p *Processor) Upload(ctx context.Context, media *Media) (string, error) {
-	if p.storagePath == "" {
-		return "", nil
+	p.mu.RLock()
+	storage := p.storage
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return "", fmt.Errorf("no storage backend configured")
 	}
 
 	ext := extensionFromMime(media.MimeType)
-	filename := fmt.Sprintf("%s%s", media.ID, ext)
-	path := filepath.Join(p.storagePath, filename)
+	key := fmt.Sprintf("%s%s", media.ID, ext)
 
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return "", err
+	opts := StoragePutOptions{
+		MimeType: media.MimeType,
+		Metadata: map[string]string{
+			"media-type": string(media.Type),
+			"media-name": media.Name,
+		},
 	}
 
-	if err := os.WriteFile(path, media.Data, 0644); err != nil {
-		return "", err
+	obj, err := storage.Put(ctx, key, media.Data, opts)
+	if err != nil {
+		return "", fmt.Errorf("upload to storage: %w", err)
 	}
 
-	return path, nil
+	media.Path = obj.URL
+	media.URL = obj.URL
+
+	return obj.URL, nil
 }
 
-func (p *Processor) Save(data []byte, filename string) (string, error) {
-	if p.storagePath == "" {
-		return "", nil
+func (p *Processor) Save(ctx context.Context, media *Media) (string, error) {
+	p.mu.RLock()
+	storage := p.storage
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return "", fmt.Errorf("no storage backend configured")
 	}
 
-	path := filepath.Join(p.storagePath, filename)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return "", err
+	key := media.Name
+	if key == "" {
+		ext := extensionFromMime(media.MimeType)
+		key = fmt.Sprintf("%s%s", media.ID, ext)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return "", err
+	opts := StoragePutOptions{
+		MimeType: media.MimeType,
 	}
 
-	return path, nil
+	obj, err := storage.Put(ctx, key, media.Data, opts)
+	if err != nil {
+		return "", fmt.Errorf("save to storage: %w", err)
+	}
+
+	media.Path = obj.URL
+	media.URL = obj.URL
+
+	return obj.URL, nil
 }
 
-func (p *Processor) Load(path string) (*Media, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+func (p *Processor) Load(ctx context.Context, key string) (*Media, error) {
+	p.mu.RLock()
+	storage := p.storage
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return nil, fmt.Errorf("no storage backend configured")
 	}
 
-	info, err := os.Stat(path)
+	obj, err := storage.Get(ctx, key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load from storage: %w", err)
 	}
 
-	ext := strings.TrimPrefix(filepath.Ext(path), ".")
-	mimeType := mime.TypeByExtension(ext)
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
+	data, err := base64.StdEncoding.DecodeString(obj.Metadata["data"])
+	if err != nil {
+		return nil, fmt.Errorf("decode stored data: %w", err)
 	}
 
 	return &Media{
 		ID:       generateID(),
-		Type:     p.guessType(mimeType),
-		Name:     filepath.Base(path),
-		Size:     info.Size(),
-		MimeType: mimeType,
+		Type:     p.guessType(obj.MimeType),
+		Name:     filepath.Base(key),
+		Size:     obj.Size,
+		MimeType: obj.MimeType,
 		Data:     data,
 		Base64:   base64.StdEncoding.EncodeToString(data),
-		Path:     path,
+		Path:     obj.URL,
+		URL:      obj.URL,
 	}, nil
+}
+
+func (p *Processor) Delete(ctx context.Context, key string) error {
+	p.mu.RLock()
+	storage := p.storage
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return fmt.Errorf("no storage backend configured")
+	}
+
+	return storage.Delete(ctx, key)
+}
+
+func (p *Processor) Exists(ctx context.Context, key string) (bool, error) {
+	p.mu.RLock()
+	storage := p.storage
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return false, fmt.Errorf("no storage backend configured")
+	}
+
+	return storage.Exists(ctx, key)
+}
+
+func (p *Processor) List(ctx context.Context, prefix string) ([]*StorageObject, error) {
+	p.mu.RLock()
+	storage := p.storage
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return nil, fmt.Errorf("no storage backend configured")
+	}
+
+	return storage.List(ctx, prefix)
+}
+
+func (p *Processor) PresignURL(ctx context.Context, key string, expires time.Duration) (string, error) {
+	p.mu.RLock()
+	storage := p.storage
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return "", fmt.Errorf("no storage backend configured")
+	}
+
+	return storage.URL(ctx, key, expires)
 }
 
 func (p *Processor) Compress(ctx context.Context, media *Media, opts ImageOptions) (*Media, error) {
