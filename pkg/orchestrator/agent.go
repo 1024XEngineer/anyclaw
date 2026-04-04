@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/anyclaw/anyclaw/pkg/agent"
+	"github.com/anyclaw/anyclaw/pkg/isolation"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/memory"
 	"github.com/anyclaw/anyclaw/pkg/skills"
@@ -33,19 +34,31 @@ type AgentDefinition struct {
 	LLMMaxTokens   *int     `json:"llm_max_tokens,omitempty"`
 	LLMTemperature *float64 `json:"llm_temperature,omitempty"`
 	LLMProxy       string   `json:"llm_proxy,omitempty"`
+
+	ContextIsolationMode     string `json:"context_isolation_mode,omitempty"`
+	ContextVisibility        string `json:"context_visibility,omitempty"`
+	ContextNamespace         string `json:"context_namespace,omitempty"`
+	ContextMaxSize           int    `json:"context_max_size,omitempty"`
+	ContextTTLSeconds        int    `json:"context_ttl_seconds,omitempty"`
+	ContextAllowSharing      bool   `json:"context_allow_sharing,omitempty"`
+	ContextInheritFromParent bool   `json:"context_inherit_from_parent,omitempty"`
+	ContextParentScopeID     string `json:"context_parent_scope_id,omitempty"`
 }
 
 type SubAgent struct {
-	definition AgentDefinition
-	agent      *agent.Agent
-	llmClient  agent.LLMCaller
-	skills     *skills.SkillsManager
-	tools      *tools.Registry
-	memory     *memory.FileMemory
-	mu         sync.Mutex
-	lastResult string
-	lastError  error
-	execCount  int
+	definition      AgentDefinition
+	agent           *agent.Agent
+	llmClient       agent.LLMCaller
+	skills          *skills.SkillsManager
+	tools           *tools.Registry
+	memory          *memory.FileMemory
+	mu              sync.Mutex
+	lastResult      string
+	lastError       error
+	execCount       int
+	contextEngine   *isolation.IsolatedEngine
+	contextBoundary *isolation.ContextBoundary
+	contextScopeID  string
 }
 
 type LLMConfig struct {
@@ -59,6 +72,10 @@ type LLMConfig struct {
 }
 
 func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem *memory.FileMemory) (*SubAgent, error) {
+	return NewSubAgentWithContext(def, llmClient, allSkills, baseTools, mem, nil, "")
+}
+
+func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem *memory.FileMemory, isoManager *isolation.ContextIsolationManager, parentScopeID string) (*SubAgent, error) {
 	if strings.TrimSpace(def.Name) == "" {
 		return nil, fmt.Errorf("agent name is required")
 	}
@@ -150,14 +167,68 @@ func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skil
 		WorkDir:     def.WorkingDir,
 	})
 
-	return &SubAgent{
+	subAgent := &SubAgent{
 		definition: def,
 		agent:      ag,
 		llmClient:  effectiveLLM,
 		skills:     privateSkills,
 		tools:      privateTools,
 		memory:     agentMem,
-	}, nil
+	}
+
+	if isoManager != nil {
+		mode := isolation.IsolationMode(def.ContextIsolationMode)
+		if mode == "" {
+			mode = isolation.IsolationModeStrict
+		}
+
+		visibility := isolation.ContextVisibility(def.ContextVisibility)
+		if visibility == "" {
+			visibility = isolation.ContextVisibilityPrivate
+		}
+
+		namespace := def.ContextNamespace
+		if namespace == "" {
+			namespace = def.Name
+		}
+
+		maxSize := def.ContextMaxSize
+		if maxSize <= 0 {
+			maxSize = 1000
+		}
+
+		scope := &isolation.ContextScope{
+			AgentID:   def.Name,
+			SessionID: "",
+			TaskID:    "",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"domain":     def.Domain,
+				"permission": def.PermissionLevel,
+			},
+		}
+
+		var boundary *isolation.ContextBoundary
+		var err error
+
+		if def.ContextInheritFromParent && parentScopeID != "" {
+			boundary, err = isoManager.CreateChildBoundary(parentScopeID, scope, mode, visibility)
+		} else if def.ContextParentScopeID != "" {
+			boundary, err = isoManager.CreateChildBoundary(def.ContextParentScopeID, scope, mode, visibility)
+		} else {
+			boundary, err = isoManager.CreateBoundary(scope, mode, visibility)
+		}
+
+		if err == nil {
+			subAgent.contextBoundary = boundary
+			subAgent.contextScopeID = scope.ID()
+			if engine, ok := isoManager.GetEngine(scope.ID()); ok {
+				subAgent.contextEngine = engine
+			}
+		}
+	}
+
+	return subAgent, nil
 }
 
 func buildAgentPersonality(def AgentDefinition) string {
@@ -290,17 +361,37 @@ func (sa *SubAgent) Definition() AgentDefinition {
 	return sa.definition
 }
 
+func (sa *SubAgent) ContextEngine() *isolation.IsolatedEngine {
+	return sa.contextEngine
+}
+
+func (sa *SubAgent) ContextBoundary() *isolation.ContextBoundary {
+	return sa.contextBoundary
+}
+
+func (sa *SubAgent) ContextScopeID() string {
+	return sa.contextScopeID
+}
+
+func (sa *SubAgent) HasIsolatedContext() bool {
+	return sa.contextEngine != nil
+}
+
 type AgentInfo struct {
-	Name            string   `json:"name"`
-	Description     string   `json:"description"`
-	Persona         string   `json:"persona,omitempty"`
-	Domain          string   `json:"domain,omitempty"`
-	Expertise       []string `json:"expertise,omitempty"`
-	Skills          []string `json:"skills,omitempty"`
-	PermissionLevel string   `json:"permission_level,omitempty"`
-	LLMProvider     string   `json:"llm_provider,omitempty"`
-	LLMModel        string   `json:"llm_model,omitempty"`
-	ExecCount       int      `json:"exec_count"`
+	Name              string   `json:"name"`
+	Description       string   `json:"description"`
+	Persona           string   `json:"persona,omitempty"`
+	Domain            string   `json:"domain,omitempty"`
+	Expertise         []string `json:"expertise,omitempty"`
+	Skills            []string `json:"skills,omitempty"`
+	PermissionLevel   string   `json:"permission_level,omitempty"`
+	LLMProvider       string   `json:"llm_provider,omitempty"`
+	LLMModel          string   `json:"llm_model,omitempty"`
+	ExecCount         int      `json:"exec_count"`
+	ContextIsolation  string   `json:"context_isolation,omitempty"`
+	ContextVisibility string   `json:"context_visibility,omitempty"`
+	ContextScopeID    string   `json:"context_scope_id,omitempty"`
+	ContextDocCount   int      `json:"context_doc_count,omitempty"`
 }
 
 type AgentPool struct {
@@ -387,16 +478,22 @@ func (p *AgentPool) ListInfos() []AgentInfo {
 	list := make([]AgentInfo, 0, len(p.agents))
 	for _, sa := range p.agents {
 		info := AgentInfo{
-			Name:            sa.Name(),
-			Description:     sa.Description(),
-			Persona:         sa.Persona(),
-			Domain:          sa.Domain(),
-			Expertise:       sa.Expertise(),
-			Skills:          sa.Skills(),
-			PermissionLevel: sa.PermissionLevel(),
-			LLMProvider:     sa.definition.LLMProvider,
-			LLMModel:        sa.definition.LLMModel,
-			ExecCount:       sa.ExecCount(),
+			Name:              sa.Name(),
+			Description:       sa.Description(),
+			Persona:           sa.Persona(),
+			Domain:            sa.Domain(),
+			Expertise:         sa.Expertise(),
+			Skills:            sa.Skills(),
+			PermissionLevel:   sa.PermissionLevel(),
+			LLMProvider:       sa.definition.LLMProvider,
+			LLMModel:          sa.definition.LLMModel,
+			ExecCount:         sa.ExecCount(),
+			ContextIsolation:  string(sa.definition.ContextIsolationMode),
+			ContextVisibility: string(sa.definition.ContextVisibility),
+			ContextScopeID:    sa.contextScopeID,
+		}
+		if sa.contextEngine != nil {
+			info.ContextDocCount = sa.contextEngine.DocumentCount()
 		}
 		list = append(list, info)
 	}
