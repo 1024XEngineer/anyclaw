@@ -2,6 +2,7 @@ package speech
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -30,6 +31,7 @@ const (
 	InputM4A  AudioInputFormat = "m4a"
 	InputMP4  AudioInputFormat = "mp4"
 	InputMPEG AudioInputFormat = "mpeg"
+	InputMPGA AudioInputFormat = "mpga"
 	InputWEBM AudioInputFormat = "webm"
 )
 
@@ -204,7 +206,7 @@ func NewSTTError(code STTErrorCode, message string) *STTError {
 }
 
 func NewSTTErrorf(code STTErrorCode, format string, args ...interface{}) *STTError {
-	return &STTError{Code: code, Message: format}
+	return &STTError{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
 func (e *STTError) Error() string {
