@@ -14,16 +14,18 @@ import (
 )
 
 type Server struct {
-	mux      *http.ServeMux
-	im       *index.IndexManager
-	embedder embedding.Provider
-	addr     string
+	mux       *http.ServeMux
+	im        *index.IndexManager
+	embedder  embedding.Provider
+	batchProc *embedding.BatchProcessor
+	addr      string
 }
 
 type ServerConfig struct {
-	Addr     string
-	IndexMgr *index.IndexManager
-	Embedder embedding.Provider
+	Addr        string
+	IndexMgr    *index.IndexManager
+	Embedder    embedding.Provider
+	BatchConfig *embedding.BatchConfig
 }
 
 func NewServer(cfg ServerConfig) *Server {
@@ -36,6 +38,14 @@ func NewServer(cfg ServerConfig) *Server {
 	if s.addr == "" {
 		s.addr = ":8080"
 	}
+	if cfg.Embedder != nil {
+		mgr, _ := embedding.NewManager([]embedding.Provider{cfg.Embedder}, nil)
+		batchCfg := embedding.DefaultBatchConfig()
+		if cfg.BatchConfig != nil {
+			batchCfg = *cfg.BatchConfig
+		}
+		s.batchProc = embedding.NewBatchProcessor(mgr, batchCfg)
+	}
 	s.registerRoutes()
 	return s
 }
@@ -45,6 +55,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /v1/search/text", s.handleSearchText)
 	s.mux.HandleFunc("POST /v1/pure-search", s.handlePureSearch)
 	s.mux.HandleFunc("POST /v1/embed", s.handleEmbed)
+	s.mux.HandleFunc("POST /v1/embed/batch", s.handleEmbedBatch)
 	s.mux.HandleFunc("GET /v1/indexes", s.handleListIndexes)
 	s.mux.HandleFunc("POST /v1/indexes", s.handleCreateIndex)
 	s.mux.HandleFunc("GET /v1/indexes/{name}", s.handleGetIndex)
@@ -272,6 +283,96 @@ func (s *Server) handleEmbed(w http.ResponseWriter, r *http.Request) {
 		Vector:    vector,
 		Dimension: len(vector),
 		Provider:  s.embedder.Name(),
+	})
+}
+
+type EmbedBatchRequest struct {
+	Texts       []string `json:"texts"`
+	Concurrency int      `json:"concurrency"`
+	ChunkSize   int      `json:"chunk_size"`
+	MaxRetries  int      `json:"max_retries"`
+	RateLimit   int      `json:"rate_limit"`
+}
+
+type EmbedBatchResponse struct {
+	Embeddings [][]float32  `json:"embeddings"`
+	Errors     []BatchError `json:"errors,omitempty"`
+	Total      int          `json:"total"`
+	Succeeded  int          `json:"succeeded"`
+	Failed     int          `json:"failed"`
+	Duration   string       `json:"duration"`
+	Provider   string       `json:"provider"`
+}
+
+type BatchError struct {
+	Index int    `json:"index"`
+	Text  string `json:"text"`
+	Error string `json:"error"`
+}
+
+func (s *Server) handleEmbedBatch(w http.ResponseWriter, r *http.Request) {
+	if s.batchProc == nil {
+		writeError(w, http.StatusBadGateway, "batch processing not configured")
+		return
+	}
+
+	var req EmbedBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if len(req.Texts) == 0 {
+		writeError(w, http.StatusBadRequest, "texts array is required")
+		return
+	}
+	if len(req.Texts) > 10000 {
+		writeError(w, http.StatusBadRequest, "maximum 10000 texts per batch")
+		return
+	}
+
+	bp := s.batchProc
+	if req.Concurrency > 0 || req.ChunkSize > 0 || req.MaxRetries >= 0 || req.RateLimit > 0 {
+		cfg := s.batchProc.Config()
+		if req.Concurrency > 0 {
+			cfg.Concurrency = req.Concurrency
+		}
+		if req.ChunkSize > 0 {
+			cfg.ChunkSize = req.ChunkSize
+		}
+		if req.MaxRetries >= 0 {
+			cfg.MaxRetries = req.MaxRetries
+		}
+		if req.RateLimit > 0 {
+			cfg.RateLimitPerSec = req.RateLimit
+		}
+		bp = embedding.NewBatchProcessor(s.batchProc.Manager(), cfg)
+	}
+
+	ctx := r.Context()
+	result, err := bp.Process(ctx, req.Texts)
+	if err != nil {
+		writeErrorDetail(w, http.StatusInternalServerError, "batch processing failed", err.Error())
+		return
+	}
+
+	batchErrors := make([]BatchError, len(result.Errors))
+	for i, e := range result.Errors {
+		batchErrors[i] = BatchError{
+			Index: e.Index,
+			Text:  e.Text,
+			Error: e.Err.Error(),
+		}
+	}
+
+	writeJSON(w, http.StatusOK, EmbedBatchResponse{
+		Embeddings: result.Embeddings,
+		Errors:     batchErrors,
+		Total:      result.Total,
+		Succeeded:  result.Succeeded,
+		Failed:     result.Failed,
+		Duration:   result.Duration.String(),
+		Provider:   s.embedder.Name(),
 	})
 }
 

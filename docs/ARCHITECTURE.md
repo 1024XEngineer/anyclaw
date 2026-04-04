@@ -224,7 +224,7 @@ Reusable capability packages:
 File-first memory with **hybrid search** (OpenClaw-style):
 - **FileMemory**: JSON files organized by type (conversation, reflection, fact)
 - **Daily markdown**: Conversations appended to `YYYY-MM-DD.md` files
-- **Hybrid search**: Keyword (TF-IDF) + vector (placeholder) + temporal decay
+- **Hybrid search**: Keyword (TF-IDF) + provider-backed vector similarity + temporal decay
 - **MMR ranking**: Maximal Marginal Relevance for diverse results
 - **Temporal decay**: Exponential decay with configurable half-life (default 7 days)
 

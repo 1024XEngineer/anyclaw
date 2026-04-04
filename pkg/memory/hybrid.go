@@ -4,6 +4,7 @@
 package memory
 
 import (
+	"context"
 	"math"
 	"sort"
 	"strings"
@@ -20,17 +21,21 @@ type SearchResult struct {
 
 // SearchOptions configures memory search behavior.
 type SearchOptions struct {
-	Limit         int
-	Types         []string // Filter by entry types
-	MaxAge        time.Duration
-	MinScore      float64
-	UseVector     bool
-	UseKeyword    bool
-	VectorWeight  float64 // 0.0-1.0, weight for vector results in hybrid search
-	ApplyMMR      bool
-	MMRLambda     float64 // MMR diversity parameter (0.0-1.0, default 0.7)
-	ApplyTemporal bool
-	TemporalDecay float64 // Half-life in hours for temporal decay
+	Limit           int
+	Types           []string // Filter by entry types
+	MaxAge          time.Duration
+	MinScore        float64
+	UseVector       bool
+	UseKeyword      bool
+	VectorWeight    float64 // 0.0-1.0, weight for vector results in hybrid search
+	ApplyMMR        bool
+	MMRLambda       float64 // MMR diversity parameter (0.0-1.0, default 0.7)
+	ApplyTemporal   bool
+	TemporalDecay   float64 // Half-life in hours for temporal decay
+	Context         context.Context
+	Embedder        EmbeddingProvider
+	QueryEmbedding  []float64
+	EntryEmbeddings map[string][]float64
 }
 
 // DefaultSearchOptions returns sensible defaults matching OpenClaw's behavior.
@@ -44,6 +49,7 @@ func DefaultSearchOptions() SearchOptions {
 		MMRLambda:     0.7,
 		ApplyTemporal: true,
 		TemporalDecay: 168.0, // 7 days half-life
+		Context:       context.Background(),
 	}
 }
 
@@ -81,12 +87,16 @@ func HybridSearch(entries []MemoryEntry, query string, opts SearchOptions) []Sea
 	}
 
 	// Keyword search
-	keywordScores := keywordSearch(entries, query)
+	keywordScores := map[string]float64{}
+	if opts.UseKeyword || !opts.UseVector {
+		keywordScores = keywordSearch(entries, query)
+	}
 
-	// Vector search (placeholder - would use actual embeddings)
+	// Vector search uses configured embeddings when available and degrades
+	// to keyword scoring when the caller has not wired a vector provider yet.
 	var vectorScores map[string]float64
 	if opts.UseVector {
-		vectorScores = vectorSearch(entries, query)
+		vectorScores = vectorSearch(entries, query, opts)
 	}
 
 	// Combine scores
@@ -96,12 +106,16 @@ func HybridSearch(entries []MemoryEntry, query string, opts SearchOptions) []Sea
 		vecScore := vectorScores[entry.ID]
 
 		var combinedScore float64
-		var matchType string
+		matchType := "keyword"
 
-		if opts.UseVector && vecScore > 0 {
+		switch {
+		case opts.UseVector && vecScore > 0 && opts.UseKeyword && kwScore > 0:
 			combinedScore = opts.VectorWeight*vecScore + (1-opts.VectorWeight)*kwScore
 			matchType = "hybrid"
-		} else {
+		case opts.UseVector && vecScore > 0:
+			combinedScore = vecScore
+			matchType = "vector"
+		case opts.UseKeyword || !opts.UseVector:
 			combinedScore = kwScore
 			matchType = "keyword"
 		}
@@ -203,15 +217,34 @@ func keywordSearch(entries []MemoryEntry, query string) map[string]float64 {
 	return scores
 }
 
-// vectorSearch is a placeholder for vector embedding search.
-// In production, this would use SQLite-vec, LanceDB, or an external embedding API.
-func vectorSearch(entries []MemoryEntry, query string) map[string]float64 {
-	// Placeholder: returns keyword-based scores as a fallback
-	// Real implementation would:
-	// 1. Embed query using configured provider (OpenAI, Gemini, Voyage, Ollama)
-	// 2. Search vector index (SQLite-vec, LanceDB)
-	// 3. Return cosine similarity scores
-	return keywordSearch(entries, query)
+// vectorSearch performs provider-backed cosine similarity search and falls back
+// to keyword scoring when callers have not configured embeddings yet.
+func vectorSearch(entries []MemoryEntry, query string, opts SearchOptions) map[string]float64 {
+	queryEmbedding, ok := resolveQueryEmbedding(query, opts)
+	if !ok {
+		return keywordFallback(entries, query, opts)
+	}
+
+	entryEmbeddings, ok := resolveEntryEmbeddings(entries, opts)
+	if !ok {
+		return keywordFallback(entries, query, opts)
+	}
+
+	scores := make(map[string]float64, len(entries))
+	for _, entry := range entries {
+		embedding := entryEmbeddings[entry.ID]
+		if len(embedding) == 0 {
+			continue
+		}
+
+		score := CosineSimilarity(queryEmbedding, embedding)
+		if score < 0 {
+			score = 0
+		}
+		scores[entry.ID] = score
+	}
+
+	return scores
 }
 
 // temporalDecay applies exponential decay based on entry age.
@@ -317,4 +350,72 @@ func tokenize(text string) []string {
 type Result struct {
 	index int
 	score float64
+}
+
+func resolveQueryEmbedding(query string, opts SearchOptions) ([]float64, bool) {
+	if len(opts.QueryEmbedding) > 0 {
+		return opts.QueryEmbedding, true
+	}
+	if opts.Embedder == nil {
+		return nil, false
+	}
+
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	embedding, err := opts.Embedder.Embed(ctx, query)
+	if err != nil || len(embedding) == 0 {
+		return nil, false
+	}
+	return embedding, true
+}
+
+func resolveEntryEmbeddings(entries []MemoryEntry, opts SearchOptions) (map[string][]float64, bool) {
+	resolved := make(map[string][]float64, len(entries))
+	missingIDs := make([]string, 0, len(entries))
+	missingTexts := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		if embedding, ok := opts.EntryEmbeddings[entry.ID]; ok && len(embedding) > 0 {
+			resolved[entry.ID] = embedding
+			continue
+		}
+		if opts.Embedder == nil {
+			return nil, false
+		}
+		missingIDs = append(missingIDs, entry.ID)
+		missingTexts = append(missingTexts, entry.Content)
+	}
+
+	if len(missingTexts) == 0 {
+		return resolved, true
+	}
+
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	embeddings, err := opts.Embedder.EmbedBatch(ctx, missingTexts)
+	if err != nil || len(embeddings) != len(missingTexts) {
+		return nil, false
+	}
+
+	for i, id := range missingIDs {
+		if len(embeddings[i]) == 0 {
+			return nil, false
+		}
+		resolved[id] = embeddings[i]
+	}
+
+	return resolved, true
+}
+
+func keywordFallback(entries []MemoryEntry, query string, opts SearchOptions) map[string]float64 {
+	if opts.UseKeyword {
+		return keywordSearch(entries, query)
+	}
+	return map[string]float64{}
 }

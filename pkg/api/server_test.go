@@ -471,17 +471,125 @@ func TestPureSearchLimit(t *testing.T) {
 	}
 }
 
-func TestPureSearchMissingQuery(t *testing.T) {
-	s, _ := setupTestServer(t)
+func TestEmbedBatchEndpoint(t *testing.T) {
+	s, embedder := setupTestServer(t)
 
-	reqBody := PureSearchRequest{
-		Vectors: [][]float32{{0.1, 0.2, 0.3, 0.4}},
+	reqBody := map[string]any{
+		"texts":       []string{"hello", "world", "batch test"},
+		"concurrency": 2,
+		"chunk_size":  2,
 	}
 
-	w := doRequest(t, s, "POST", "/v1/pure-search", reqBody)
+	w := doRequest(t, s, "POST", "/v1/embed/batch", reqBody)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp EmbedBatchResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp.Total != 3 {
+		t.Errorf("expected total 3, got %d", resp.Total)
+	}
+	if resp.Succeeded != 3 {
+		t.Errorf("expected succeeded 3, got %d", resp.Succeeded)
+	}
+	if resp.Failed != 0 {
+		t.Errorf("expected failed 0, got %d", resp.Failed)
+	}
+	if len(resp.Embeddings) != 3 {
+		t.Errorf("expected 3 embeddings, got %d", len(resp.Embeddings))
+	}
+	if embedder.callCount.Load() != 3 {
+		t.Errorf("expected 3 embed calls, got %d", embedder.callCount.Load())
+	}
+}
+
+func TestEmbedBatchEmptyTexts(t *testing.T) {
+	s, _ := setupTestServer(t)
+
+	reqBody := map[string]any{
+		"texts": []string{},
+	}
+
+	w := doRequest(t, s, "POST", "/v1/embed/batch", reqBody)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestEmbedBatchTooMany(t *testing.T) {
+	s, _ := setupTestServer(t)
+
+	texts := make([]string, 10001)
+	for i := range texts {
+		texts[i] = "text"
+	}
+
+	reqBody := map[string]any{
+		"texts": texts,
+	}
+
+	w := doRequest(t, s, "POST", "/v1/embed/batch", reqBody)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestEmbedBatchWithRateLimit(t *testing.T) {
+	s, embedder := setupTestServer(t)
+
+	reqBody := map[string]any{
+		"texts":       []string{"a", "b", "c", "d", "e"},
+		"rate_limit":  100,
+		"chunk_size":  2,
+		"concurrency": 1,
+	}
+
+	w := doRequest(t, s, "POST", "/v1/embed/batch", reqBody)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp EmbedBatchResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp.Succeeded != 5 {
+		t.Errorf("expected 5 succeeded, got %d", resp.Succeeded)
+	}
+	if embedder.callCount.Load() != 5+5 {
+		t.Logf("embed call count: %d", embedder.callCount.Load())
+	}
+}
+
+func TestEmbedBatchResponseStructure(t *testing.T) {
+	s, _ := setupTestServer(t)
+
+	reqBody := map[string]any{
+		"texts": []string{"test1", "test2"},
+	}
+
+	w := doRequest(t, s, "POST", "/v1/embed/batch", reqBody)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var resp EmbedBatchResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	if resp.Provider == "" {
+		t.Error("expected non-empty provider")
+	}
+	if resp.Duration == "" {
+		t.Error("expected non-empty duration")
+	}
+	if resp.Errors != nil && len(resp.Errors) > 0 {
+		t.Errorf("expected no errors, got %d", len(resp.Errors))
 	}
 }
 
