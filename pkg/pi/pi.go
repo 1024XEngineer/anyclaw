@@ -22,7 +22,7 @@ type PiAgent struct {
 	name     string
 	config   *PiAgentConfig
 	agent    *agent.Agent
-	memory   *memory.FileMemory
+	memory   memory.MemoryBackend
 	skills   *skills.SkillsManager
 	tools    *tools.Registry
 	workDir  string

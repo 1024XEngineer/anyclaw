@@ -17,7 +17,7 @@ type Agent struct {
 	Model       string
 	Provider    string
 	Personality string
-	Memory      *memory.FileMemory
+	Memory      memory.MemoryBackend
 	Skills      *skills.SkillsManager
 	Tools       *tools.Registry
 	LLM         llm.Client

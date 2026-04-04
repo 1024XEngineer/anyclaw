@@ -39,7 +39,7 @@ type Orchestrator struct {
 	queue       *TaskQueue
 	allSkills   *skills.SkillsManager
 	baseTools   *tools.Registry
-	memory      *memory.FileMemory
+	memory      memory.MemoryBackend
 	llm         agent.LLMCaller
 	mu          sync.Mutex
 	status      OrchestratorStatus
@@ -80,7 +80,7 @@ func WithDecomposer(d *TaskDecomposer) OrchestratorOption {
 	}
 }
 
-func NewOrchestrator(cfg OrchestratorConfig, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem *memory.FileMemory, opts ...OrchestratorOption) (*Orchestrator, error) {
+func NewOrchestrator(cfg OrchestratorConfig, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem memory.MemoryBackend, opts ...OrchestratorOption) (*Orchestrator, error) {
 	if cfg.MaxConcurrentAgents <= 0 {
 		cfg.MaxConcurrentAgents = 4
 	}

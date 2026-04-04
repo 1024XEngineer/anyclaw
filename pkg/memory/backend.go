@@ -56,6 +56,20 @@ type Config struct {
 	WorkDir     string
 	MaxOpen     int
 	BusyTimeout time.Duration
+	Embedder    EmbeddingProvider
+	Cache       BackendCacheConfig
+	Warmup      BackendWarmupConfig
+}
+
+type BackendCacheConfig struct {
+	Enabled bool
+	MaxSize int
+	TTL     time.Duration
+}
+
+type BackendWarmupConfig struct {
+	Enabled bool
+	Queries []string
 }
 
 type BackendType string
@@ -73,5 +87,20 @@ func DefaultConfig(workDir string) Config {
 		WorkDir:     workDir,
 		MaxOpen:     1,
 		BusyTimeout: 30,
+		Cache: BackendCacheConfig{
+			Enabled: true,
+			MaxSize: 5000,
+			TTL:     5 * time.Minute,
+		},
+		Warmup: BackendWarmupConfig{
+			Enabled: true,
+			Queries: []string{
+				"task",
+				"project",
+				"config",
+				"error",
+				"setup",
+			},
+		},
 	}
 }

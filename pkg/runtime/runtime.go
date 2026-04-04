@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/memory"
 	"github.com/anyclaw/anyclaw/pkg/orchestrator"
 	"github.com/anyclaw/anyclaw/pkg/plugin"
+	"github.com/anyclaw/anyclaw/pkg/qmd"
+	"github.com/anyclaw/anyclaw/pkg/secrets"
 	"github.com/anyclaw/anyclaw/pkg/skills"
 	"github.com/anyclaw/anyclaw/pkg/tools"
 	"github.com/anyclaw/anyclaw/pkg/workspace"
@@ -30,6 +33,7 @@ const (
 	PhaseConfig       BootPhase = "config"
 	PhaseStorage      BootPhase = "storage"
 	PhaseSecurity     BootPhase = "security"
+	PhaseQMD          BootPhase = "qmd"
 	PhaseSkills       BootPhase = "skills"
 	PhaseTools        BootPhase = "tools"
 	PhasePlugins      BootPhase = "plugins"
@@ -62,18 +66,21 @@ type BootstrapOptions struct {
 }
 
 type App struct {
-	ConfigPath   string
-	Config       *config.Config
-	Agent        *agent.Agent
-	LLM          *llm.ClientWrapper
-	Memory       *memory.FileMemory
-	Skills       *skills.SkillsManager
-	Tools        *tools.Registry
-	Plugins      *plugin.Registry
-	Audit        *audit.Logger
-	Orchestrator *orchestrator.Orchestrator
-	WorkDir      string
-	WorkingDir   string
+	ConfigPath     string
+	Config         *config.Config
+	Agent          *agent.Agent
+	LLM            *llm.ClientWrapper
+	Memory         memory.MemoryBackend
+	Skills         *skills.SkillsManager
+	Tools          *tools.Registry
+	Plugins        *plugin.Registry
+	Audit          *audit.Logger
+	Orchestrator   *orchestrator.Orchestrator
+	QMD            *qmd.Client
+	SecretsManager *secrets.ActivationManager
+	SecretsStore   *secrets.Store
+	WorkDir        string
+	WorkingDir     string
 }
 
 func resolveRuntimePaths(cfg *config.Config, configPath string) {
@@ -195,6 +202,47 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	resolveRuntimePaths(app.Config, app.ConfigPath)
 	progress(BootEvent{Phase: PhaseConfig, Status: "ok", Message: fmt.Sprintf("provider=%s model=%s", app.Config.LLM.Provider, app.Config.LLM.Model), Dur: time.Since(t)})
 
+	// ── Phase 1.5: Secrets ───────────────────────────────────────────
+	progress(BootEvent{Phase: PhaseSecurity, Status: "start", Message: "initializing secrets"})
+	t = time.Now()
+
+	secretsConfigDir := filepath.Dir(app.ConfigPath)
+	if secretsConfigDir == "." {
+		secretsConfigDir = "."
+	}
+	secretsStorePath := filepath.Join(secretsConfigDir, ".anyclaw", "secrets", "store.json")
+	if err := os.MkdirAll(filepath.Dir(secretsStorePath), 0o700); err != nil {
+		progress(BootEvent{Phase: PhaseSecurity, Status: "warn", Message: fmt.Sprintf("secrets dir creation failed, continuing without secrets store: %v", err), Dur: time.Since(t)})
+	} else {
+		encKey := os.Getenv("ANYCLAW_SECRETS_KEY")
+		storeCfg := secrets.DefaultStoreConfig()
+		storeCfg.Path = secretsStorePath
+		if encKey != "" {
+			storeCfg.EncryptionKey = encKey
+		}
+		store, err := secrets.NewStore(storeCfg)
+		if err != nil {
+			progress(BootEvent{Phase: PhaseSecurity, Status: "warn", Message: fmt.Sprintf("secrets store init failed, continuing without persistence: %v", err), Dur: time.Since(t)})
+		} else {
+			app.SecretsStore = store
+
+			snap := buildInitialSecretsSnapshot(store, app.Config)
+			fbCfg := secrets.DefaultFallbackConfig()
+			fbCfg.EnvPrefix = "ANYCLAW_SECRET_"
+			am := secrets.NewActivationManagerWithFallback(store, snap, fbCfg)
+
+			startupCfg := secrets.DefaultStartupConfig()
+			startupCfg.ValidationMode = secrets.ValidationWarn
+			startupCfg.FailFast = false
+			if err := am.ValidateStartup(startupCfg); err != nil {
+				progress(BootEvent{Phase: PhaseSecurity, Status: "warn", Message: fmt.Sprintf("secrets startup validation warning: %v", err), Dur: time.Since(t)})
+			}
+
+			app.SecretsManager = am
+			progress(BootEvent{Phase: PhaseSecurity, Status: "ok", Message: "secrets manager initialized", Dur: time.Since(t)})
+		}
+	}
+
 	// ── Phase 2: Storage (work dirs + memory) ────────────────────────
 	progress(BootEvent{Phase: PhaseStorage, Status: "start", Message: "initializing storage"})
 	t = time.Now()
@@ -241,12 +289,48 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		return nil, fmt.Errorf("storage: bootstrap workspace %q: %w", workingDir, err)
 	}
 
-	mem := memory.NewFileMemory(workDir)
-	mem.SetDailyDir(filepath.Join(workingDir, "memory"))
+	memCfg := memory.DefaultConfig(workDir)
+	var secretsSnap *secrets.RuntimeSnapshot
+	if app.SecretsManager != nil {
+		secretsSnap = app.SecretsManager.GetActiveSnapshot()
+	}
+	if embedder := resolveEmbedder(app.Config, secretsSnap); embedder != nil {
+		memCfg.Embedder = embedder
+	}
+	mem, err := memory.NewMemoryBackend(memCfg)
+	if err != nil {
+		progress(BootEvent{Phase: PhaseStorage, Status: "fail", Message: "memory backend creation failed", Err: err, Dur: time.Since(t)})
+		return nil, fmt.Errorf("storage: create memory backend: %w", err)
+	}
 	if err := mem.Init(); err != nil {
 		progress(BootEvent{Phase: PhaseStorage, Status: "fail", Message: "memory init failed", Err: err, Dur: time.Since(t)})
 		return nil, fmt.Errorf("storage: init memory: %w", err)
 	}
+	if db, ok := mem.(interface{ SetDailyDir(string) }); ok {
+		db.SetDailyDir(filepath.Join(workingDir, "memory"))
+	}
+
+	if warmupper, ok := mem.(interface {
+		Warmup([]string, int) memory.WarmupProgress
+	}); ok {
+		warmupCfg := memCfg.Warmup
+		if warmupCfg.Enabled && len(warmupCfg.Queries) > 0 {
+			go func() {
+				result := warmupper.Warmup(warmupCfg.Queries, 4)
+				_ = result
+			}()
+		}
+	}
+
+	if sqliteMem, ok := mem.(interface {
+		StartAutoBackup(string, time.Duration, int) error
+	}); ok {
+		backupDir := filepath.Join(workDir, "backups")
+		if err := sqliteMem.StartAutoBackup(backupDir, 1*time.Hour, 10); err != nil {
+			progress(BootEvent{Phase: PhaseStorage, Status: "warn", Message: fmt.Sprintf("auto-backup init failed: %v", err), Dur: time.Since(t)})
+		}
+	}
+
 	app.Memory = mem
 	progress(BootEvent{Phase: PhaseStorage, Status: "ok", Message: fmt.Sprintf("work_dir=%s working_dir=%s", workDir, workingDir), Dur: time.Since(t)})
 
@@ -257,8 +341,33 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	auditLogger := audit.New(app.Config.Security.AuditLog, app.Config.Agent.Name)
 	app.Audit = auditLogger
 
+	// Resolve security tokens through secrets manager
+	if app.SecretsManager != nil {
+		secretsSnap := app.SecretsManager.GetActiveSnapshot()
+		app.Config.Security.APIToken = resolveSecret(secretsSnap, app.Config.Security.APIToken, "security_api_token")
+		app.Config.Security.WebhookSecret = resolveSecret(secretsSnap, app.Config.Security.WebhookSecret, "security_webhook_secret")
+	}
+
 	secured := strings.TrimSpace(app.Config.Security.APIToken) != ""
 	progress(BootEvent{Phase: PhaseSecurity, Status: "ok", Message: fmt.Sprintf("audit_log=%s secured=%v", app.Config.Security.AuditLog, secured), Dur: time.Since(t)})
+
+	// ── Phase 3.5: QMD (in-memory data store) ────────────────────────
+	progress(BootEvent{Phase: PhaseQMD, Status: "start", Message: "initializing QMD"})
+	t = time.Now()
+
+	qmdServer := qmd.NewServer(qmd.ServerConfig{})
+	if err := qmdServer.Start(); err != nil {
+		progress(BootEvent{Phase: PhaseQMD, Status: "warn", Message: fmt.Sprintf("QMD server failed to start, running without structured data store: %v", err), Dur: time.Since(t)})
+	} else {
+		qmdClient := qmd.NewClient(qmd.DefaultClientConfig())
+		ctx := context.Background()
+		if err := qmdClient.Ping(ctx); err != nil {
+			progress(BootEvent{Phase: PhaseQMD, Status: "warn", Message: fmt.Sprintf("QMD server not reachable: %v", err), Dur: time.Since(t)})
+		} else {
+			app.QMD = qmdClient
+			progress(BootEvent{Phase: PhaseQMD, Status: "ok", Message: "QMD in-memory data store ready", Dur: time.Since(t)})
+		}
+	}
 
 	// ── Phase 4: Skills ──────────────────────────────────────────────
 	progress(BootEvent{Phase: PhaseSkills, Status: "start", Message: "loading skills"})
@@ -301,6 +410,11 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		AllowedWritePaths:    app.Config.Security.AllowedWritePaths,
 		AllowedEgressDomains: app.Config.Security.AllowedEgressDomains,
 	})
+	var qmdClient tools.QMDClient
+	if app.QMD != nil {
+		qmdClient = &qmdAdapter{client: app.QMD}
+	}
+
 	tools.RegisterBuiltins(registry, tools.BuiltinOptions{
 		WorkingDir:            workingDir,
 		PermissionLevel:       app.Config.Agent.PermissionLevel,
@@ -311,6 +425,8 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		CommandTimeoutSeconds: app.Config.Security.CommandTimeoutSeconds,
 		AuditLogger:           auditLogger,
 		Sandbox:               sandboxManager,
+		MemoryBackend:         mem,
+		QMDClient:             qmdClient,
 	})
 	sk.RegisterTools(registry, skills.ExecutionOptions{AllowExec: app.Config.Plugins.AllowExec, ExecTimeoutSeconds: app.Config.Plugins.ExecTimeoutSeconds})
 	app.Tools = registry
@@ -343,10 +459,11 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	progress(BootEvent{Phase: PhaseLLM, Status: "start", Message: fmt.Sprintf("connecting to %s/%s", app.Config.LLM.Provider, app.Config.LLM.Model)})
 	t = time.Now()
 
+	llmAPIKey := resolveSecret(secretsSnap, app.Config.LLM.APIKey, "llm_api_key")
 	llmWrapper, err := llm.NewClientWrapper(llm.Config{
 		Provider:    app.Config.LLM.Provider,
 		Model:       app.Config.LLM.Model,
-		APIKey:      app.Config.LLM.APIKey,
+		APIKey:      llmAPIKey,
 		BaseURL:     app.Config.LLM.BaseURL,
 		Proxy:       app.Config.LLM.Proxy,
 		MaxTokens:   app.Config.LLM.MaxTokens,
@@ -561,4 +678,188 @@ func copyFloat64Ptr(value *float64) *float64 {
 	}
 	copied := *value
 	return &copied
+}
+
+func resolveEmbedder(cfg *config.Config, secretsSnap *secrets.RuntimeSnapshot) memory.EmbeddingProvider {
+	if cfg == nil {
+		return nil
+	}
+	if embedModel := strings.TrimSpace(cfg.LLM.Extra["embed_model"]); embedModel != "" {
+		baseURL := cfg.LLM.BaseURL
+		if v := strings.TrimSpace(cfg.LLM.Extra["embed_base_url"]); v != "" {
+			baseURL = v
+		}
+		apiKey := resolveSecret(secretsSnap, cfg.LLM.APIKey, "llm_api_key")
+		if v := strings.TrimSpace(cfg.LLM.Extra["embed_api_key"]); v != "" {
+			apiKey = resolveSecret(secretsSnap, v, "embed_api_key")
+		}
+		switch strings.ToLower(cfg.LLM.Provider) {
+		case "ollama":
+			return memory.NewOllamaEmbeddingProvider(baseURL, embedModel)
+		default:
+			return memory.NewOpenAIEmbeddingProvider(apiKey, embedModel)
+		}
+	}
+	if strings.ToLower(cfg.LLM.Provider) == "ollama" {
+		return memory.NewOllamaEmbeddingProvider(cfg.LLM.BaseURL, "")
+	}
+	apiKey := resolveSecret(secretsSnap, cfg.LLM.APIKey, "llm_api_key")
+	if strings.TrimSpace(apiKey) != "" {
+		return memory.NewOpenAIEmbeddingProvider(apiKey, "")
+	}
+	return nil
+}
+
+type qmdAdapter struct {
+	client *qmd.Client
+}
+
+func (a *qmdAdapter) CreateTable(ctx context.Context, name string, columns []string) error {
+	return a.client.CreateTable(ctx, name, columns)
+}
+
+func (a *qmdAdapter) Insert(ctx context.Context, table string, record map[string]any) error {
+	id, _ := record["id"].(string)
+	r := &qmd.Record{ID: id, Data: record}
+	return a.client.Insert(ctx, table, r)
+}
+
+func (a *qmdAdapter) Get(ctx context.Context, table, id string) (map[string]any, error) {
+	r, err := a.client.Get(ctx, table, id)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"id": r.ID}
+	for k, v := range r.Data {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (a *qmdAdapter) Update(ctx context.Context, table string, record map[string]any) error {
+	id, _ := record["id"].(string)
+	r := &qmd.Record{ID: id, Data: record}
+	return a.client.Update(ctx, table, r)
+}
+
+func (a *qmdAdapter) Delete(ctx context.Context, table, id string) error {
+	return a.client.Delete(ctx, table, id)
+}
+
+func (a *qmdAdapter) List(ctx context.Context, table string, limit int) ([]map[string]any, error) {
+	records, err := a.client.List(ctx, table, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, len(records))
+	for i, r := range records {
+		m := map[string]any{"id": r.ID}
+		for k, v := range r.Data {
+			m[k] = v
+		}
+		out[i] = m
+	}
+	return out, nil
+}
+
+func (a *qmdAdapter) Query(ctx context.Context, table, field string, value any, limit int) ([]map[string]any, error) {
+	records, err := a.client.Query(ctx, table, field, value, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, len(records))
+	for i, r := range records {
+		m := map[string]any{"id": r.ID}
+		for k, v := range r.Data {
+			m[k] = v
+		}
+		out[i] = m
+	}
+	return out, nil
+}
+
+func (a *qmdAdapter) ListTables(ctx context.Context) ([]tools.TableStat, error) {
+	tables, err := a.client.ListTables(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tools.TableStat, len(tables))
+	for i, t := range tables {
+		out[i] = tools.TableStat{Name: t.Name, RowCount: t.RowCount, Columns: t.Columns}
+	}
+	return out, nil
+}
+
+func (a *qmdAdapter) Count(ctx context.Context, table string) (int, error) {
+	return a.client.Count(ctx, table)
+}
+
+func buildInitialSecretsSnapshot(store *secrets.Store, cfg *config.Config) *secrets.RuntimeSnapshot {
+	entries := make(map[string]*secrets.SecretEntry)
+	now := time.Now().UTC()
+
+	seedSecret := func(key string, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		entries[key] = &secrets.SecretEntry{
+			ID:        fmt.Sprintf("sec-%d", time.Now().UnixNano()),
+			Key:       key,
+			Value:     value,
+			Scope:     secrets.ScopeGlobal,
+			Source:    secrets.SourceManual,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+	}
+
+	seedSecret("llm_api_key", cfg.LLM.APIKey)
+	seedSecret("security_api_token", cfg.Security.APIToken)
+	seedSecret("security_webhook_secret", cfg.Security.WebhookSecret)
+
+	for _, p := range cfg.Providers {
+		if strings.TrimSpace(p.APIKey) != "" {
+			seedSecret("provider_"+p.ID+"_api_key", p.APIKey)
+		}
+	}
+
+	if strings.TrimSpace(cfg.Channels.Telegram.BotToken) != "" {
+		seedSecret("channel_telegram_bot_token", cfg.Channels.Telegram.BotToken)
+	}
+	if strings.TrimSpace(cfg.Channels.Slack.BotToken) != "" {
+		seedSecret("channel_slack_bot_token", cfg.Channels.Slack.BotToken)
+	}
+	if strings.TrimSpace(cfg.Channels.Discord.BotToken) != "" {
+		seedSecret("channel_discord_bot_token", cfg.Channels.Discord.BotToken)
+	}
+	if strings.TrimSpace(cfg.Channels.WhatsApp.AccessToken) != "" {
+		seedSecret("channel_whatsapp_access_token", cfg.Channels.WhatsApp.AccessToken)
+	}
+	if strings.TrimSpace(cfg.Channels.Signal.BearerToken) != "" {
+		seedSecret("channel_signal_bearer_token", cfg.Channels.Signal.BearerToken)
+	}
+
+	snap := secrets.NewRuntimeSnapshot(entries, "bootstrap")
+
+	for _, entry := range entries {
+		_ = store.SetSecret(entry)
+	}
+	if len(entries) > 0 {
+		_, _ = store.CreateSnapshot("bootstrap")
+	}
+
+	return snap
+}
+
+func resolveSecret(snap *secrets.RuntimeSnapshot, plaintext string, secretKey string) string {
+	if snap != nil {
+		resolved := snap.ResolveValue(plaintext)
+		if resolved != plaintext {
+			return resolved
+		}
+		if entry, ok := snap.Get(secretKey); ok {
+			return entry.Value
+		}
+	}
+	return plaintext
 }

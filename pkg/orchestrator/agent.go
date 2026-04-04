@@ -51,7 +51,7 @@ type SubAgent struct {
 	llmClient       agent.LLMCaller
 	skills          *skills.SkillsManager
 	tools           *tools.Registry
-	memory          *memory.FileMemory
+	memory          memory.MemoryBackend
 	mu              sync.Mutex
 	lastResult      string
 	lastError       error
@@ -71,11 +71,11 @@ type LLMConfig struct {
 	Proxy       string
 }
 
-func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem *memory.FileMemory) (*SubAgent, error) {
+func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem memory.MemoryBackend) (*SubAgent, error) {
 	return NewSubAgentWithContext(def, llmClient, allSkills, baseTools, mem, nil, "")
 }
 
-func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem *memory.FileMemory, isoManager *isolation.ContextIsolationManager, parentScopeID string) (*SubAgent, error) {
+func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem memory.MemoryBackend, isoManager *isolation.ContextIsolationManager, parentScopeID string) (*SubAgent, error) {
 	if strings.TrimSpace(def.Name) == "" {
 		return nil, fmt.Errorf("agent name is required")
 	}
@@ -142,10 +142,17 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 	}
 
 	// Each agent gets its own memory instance for isolation
-	var agentMem *memory.FileMemory
+	var agentMem memory.MemoryBackend
 	if mem != nil && strings.TrimSpace(def.WorkingDir) != "" {
-		agentMem = memory.NewFileMemory(def.WorkingDir)
-		if err := agentMem.Init(); err != nil {
+		subCfg := memory.DefaultConfig(def.WorkingDir)
+		subMem, err := memory.NewMemoryBackend(subCfg)
+		if err == nil {
+			if initErr := subMem.Init(); initErr == nil {
+				agentMem = subMem
+			} else {
+				agentMem = mem // fallback
+			}
+		} else {
 			agentMem = mem // fallback
 		}
 	} else {

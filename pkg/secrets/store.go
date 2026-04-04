@@ -14,11 +14,13 @@ import (
 )
 
 type persistedData struct {
-	Secrets    []*SecretEntry    `json:"secrets"`
-	Snapshots  []*Snapshot       `json:"snapshots"`
-	Locks      []*ActivationLock `json:"locks"`
-	AuditLog   []*AuditEntry     `json:"audit_log,omitempty"`
-	LastUpdate time.Time         `json:"last_update"`
+	Secrets          []*SecretEntry    `json:"secrets"`
+	Snapshots        []*Snapshot       `json:"snapshots"`
+	Locks            []*ActivationLock `json:"locks"`
+	VersionHistories []*VersionHistory `json:"version_histories,omitempty"`
+	RotationPolicies []*RotationPolicy `json:"rotation_policies,omitempty"`
+	AuditLog         []*AuditEntry     `json:"audit_log,omitempty"`
+	LastUpdate       time.Time         `json:"last_update"`
 }
 
 type Store struct {
@@ -97,6 +99,17 @@ func (s *Store) load() error {
 				secret.Value = decrypted
 			}
 		}
+		for _, vh := range s.data.VersionHistories {
+			for _, v := range vh.Versions {
+				if v.Value != "" && isEncryptedValue(v.Value) {
+					decrypted, err := DecryptValue(v.Value, s.encryptionKey)
+					if err != nil {
+						continue
+					}
+					v.Value = decrypted
+				}
+			}
+		}
 	}
 
 	return nil
@@ -104,21 +117,34 @@ func (s *Store) load() error {
 
 func (s *Store) saveLocked() error {
 	saveData := &persistedData{
-		Secrets:    cloneEntries(s.data.Secrets),
-		Snapshots:  cloneSnapshots(s.data.Snapshots),
-		Locks:      cloneLocks(s.data.Locks),
-		AuditLog:   cloneAuditEntries(s.data.AuditLog),
-		LastUpdate: time.Now().UTC(),
+		Secrets:          cloneEntries(s.data.Secrets),
+		Snapshots:        cloneSnapshots(s.data.Snapshots),
+		Locks:            cloneLocks(s.data.Locks),
+		VersionHistories: s.data.VersionHistories,
+		RotationPolicies: s.data.RotationPolicies,
+		AuditLog:         cloneAuditEntries(s.data.AuditLog),
+		LastUpdate:       time.Now().UTC(),
 	}
 
 	if s.encryptionKey != nil {
 		for _, secret := range saveData.Secrets {
-			if secret.Value != "" {
+			if secret.Value != "" && !isEncryptedValue(secret.Value) {
 				encrypted, err := EncryptValue(secret.Value, s.encryptionKey)
 				if err != nil {
 					return fmt.Errorf("encrypt secret %s: %w", secret.Key, err)
 				}
 				secret.Value = encrypted
+			}
+		}
+		for _, vh := range saveData.VersionHistories {
+			for _, v := range vh.Versions {
+				if v.Value != "" && !isEncryptedValue(v.Value) {
+					encrypted, err := EncryptValue(v.Value, s.encryptionKey)
+					if err != nil {
+						return fmt.Errorf("encrypt version %s v%d: %w", vh.Key, v.Version, err)
+					}
+					v.Value = encrypted
+				}
 			}
 		}
 	}
@@ -238,7 +264,7 @@ func (s *Store) CreateSnapshot(source string) (*Snapshot, error) {
 
 	secrets := make(map[string]*SecretEntry)
 	for _, entry := range s.data.Secrets {
-		secrets[entry.ID] = cloneEntry(entry)
+		secrets[entry.Key] = cloneEntry(entry)
 	}
 
 	version := uint64(0)
@@ -463,6 +489,237 @@ func (s *Store) Config() *StoreConfig {
 	return s.config
 }
 
+func (s *Store) SetRotationPolicy(policy *RotationPolicy) error {
+	if policy == nil || policy.Key == "" {
+		return fmt.Errorf("policy key is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i, existing := range s.data.RotationPolicies {
+		if existing.Key == policy.Key {
+			s.data.RotationPolicies[i] = policy
+			return s.saveLocked()
+		}
+	}
+
+	s.data.RotationPolicies = append(s.data.RotationPolicies, policy)
+	return s.saveLocked()
+}
+
+func (s *Store) GetRotationPolicy(key string) (*RotationPolicy, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, policy := range s.data.RotationPolicies {
+		if policy.Key == key {
+			return policy, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Store) DeleteRotationPolicy(key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filtered := make([]*RotationPolicy, 0, len(s.data.RotationPolicies))
+	found := false
+	for _, policy := range s.data.RotationPolicies {
+		if policy.Key == key {
+			found = true
+			continue
+		}
+		filtered = append(filtered, policy)
+	}
+
+	if !found {
+		return fmt.Errorf("rotation policy not found")
+	}
+
+	s.data.RotationPolicies = filtered
+	return s.saveLocked()
+}
+
+func (s *Store) ListRotationPolicies() []*RotationPolicy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]*RotationPolicy, len(s.data.RotationPolicies))
+	copy(result, s.data.RotationPolicies)
+	return result
+}
+
+func (s *Store) GetVersionHistory(key string) (*VersionHistory, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, vh := range s.data.VersionHistories {
+		if vh.Key == key {
+			return cloneVersionHistory(vh), true
+		}
+	}
+	return nil, false
+}
+
+func (s *Store) ListVersionHistories() []*VersionHistory {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]*VersionHistory, 0, len(s.data.VersionHistories))
+	for _, vh := range s.data.VersionHistories {
+		result = append(result, cloneVersionHistory(vh))
+	}
+	return result
+}
+
+func (s *Store) RecordRotation(key string, oldVersion uint64, newVersion uint64, newValue string, actor string, metadata map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+
+	var vh *VersionHistory
+	for i, existing := range s.data.VersionHistories {
+		if existing.Key == key {
+			vh = existing
+			s.data.VersionHistories[i] = vh
+			break
+		}
+	}
+
+	if vh == nil {
+		vh = &VersionHistory{
+			Key:      key,
+			Versions: []*SecretVersion{},
+		}
+		s.data.VersionHistories = append(s.data.VersionHistories, vh)
+	}
+
+	for i, v := range vh.Versions {
+		if v.Active {
+			v.Active = false
+			t := now
+			v.RotatedAt = &t
+			v.RotatedBy = actor
+			vh.Versions[i] = v
+		}
+	}
+
+	newVer := &SecretVersion{
+		Version:   newVersion,
+		Value:     newValue,
+		CreatedBy: actor,
+		CreatedAt: now,
+		Active:    true,
+		Metadata:  metadata,
+	}
+	vh.Versions = append(vh.Versions, newVer)
+
+	vh.Current = newVersion
+	vh.TotalRotates++
+	vh.LastRotation = &now
+
+	var policy *RotationPolicy
+	for _, p := range s.data.RotationPolicies {
+		if p.Key == key {
+			policy = p
+			break
+		}
+	}
+
+	if policy != nil && policy.MaxVersions > 0 && len(vh.Versions) > policy.MaxVersions {
+		vh.Versions = vh.Versions[len(vh.Versions)-policy.MaxVersions:]
+	}
+
+	if policy != nil && policy.Interval > 0 {
+		next := now.Add(policy.Interval)
+		vh.NextRotation = &next
+		policy.NextRotation = &next
+	}
+
+	return s.saveLocked()
+}
+
+func (s *Store) GetActiveVersion(key string) (*SecretVersion, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, vh := range s.data.VersionHistories {
+		if vh.Key == key {
+			for _, v := range vh.Versions {
+				if v.Active {
+					return v, true
+				}
+			}
+		}
+	}
+	return nil, false
+}
+
+func (s *Store) RollbackVersion(key string, targetVersion uint64, actor string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, vh := range s.data.VersionHistories {
+		if vh.Key == key {
+			var target *SecretVersion
+			for _, v := range vh.Versions {
+				if v.Version == targetVersion {
+					target = v
+					break
+				}
+			}
+
+			if target == nil {
+				return fmt.Errorf("version %d not found for key %s", targetVersion, key)
+			}
+
+			now := time.Now().UTC()
+			for i, v := range vh.Versions {
+				if v.Active {
+					v.Active = false
+					t := now
+					v.RotatedAt = &t
+					v.RotatedBy = actor
+					vh.Versions[i] = v
+				}
+			}
+
+			target.Active = true
+			vh.Current = targetVersion
+			vh.LastRotation = &now
+
+			return s.saveLocked()
+		}
+	}
+
+	return fmt.Errorf("version history not found for key %s", key)
+}
+
+func (s *Store) DeleteOldVersions(key string, keep int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, vh := range s.data.VersionHistories {
+		if vh.Key == key {
+			if keep <= 0 || len(vh.Versions) <= keep {
+				return nil
+			}
+
+			sort.Slice(vh.Versions, func(i, j int) bool {
+				return vh.Versions[i].Version > vh.Versions[j].Version
+			})
+
+			vh.Versions = vh.Versions[:keep]
+			return s.saveLocked()
+		}
+	}
+
+	return fmt.Errorf("version history not found for key %s", key)
+}
+
 func computeSnapshotChecksum(snap *Snapshot) string {
 	keys := make([]string, 0, len(snap.Secrets))
 	for k := range snap.Secrets {
@@ -616,4 +873,52 @@ func cloneAuditEntries(entries []*AuditEntry) []*AuditEntry {
 		result[i] = cloneAuditEntry(e)
 	}
 	return result
+}
+
+func cloneVersion(v *SecretVersion) *SecretVersion {
+	if v == nil {
+		return nil
+	}
+	c := *v
+	if v.RotatedAt != nil {
+		t := *v.RotatedAt
+		c.RotatedAt = &t
+	}
+	if v.Metadata != nil {
+		c.Metadata = make(map[string]string)
+		for k, val := range v.Metadata {
+			c.Metadata[k] = val
+		}
+	}
+	return &c
+}
+
+func cloneVersionHistory(vh *VersionHistory) *VersionHistory {
+	if vh == nil {
+		return nil
+	}
+	c := *vh
+	if vh.Versions != nil {
+		c.Versions = make([]*SecretVersion, len(vh.Versions))
+		for i, v := range vh.Versions {
+			c.Versions[i] = cloneVersion(v)
+		}
+	}
+	if vh.LastRotation != nil {
+		t := *vh.LastRotation
+		c.LastRotation = &t
+	}
+	if vh.NextRotation != nil {
+		t := *vh.NextRotation
+		c.NextRotation = &t
+	}
+	if vh.Policy != nil {
+		p := *vh.Policy
+		if vh.Policy.NextRotation != nil {
+			t := *vh.Policy.NextRotation
+			p.NextRotation = &t
+		}
+		c.Policy = &p
+	}
+	return &c
 }

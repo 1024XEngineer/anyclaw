@@ -7,17 +7,26 @@ import (
 )
 
 func NewMemoryBackend(cfg Config) (MemoryBackend, error) {
+	opts := []SQLiteMemoryOption{}
+	if cfg.Embedder != nil {
+		opts = append(opts, WithEmbedder(cfg.Embedder))
+	}
+	if cfg.Cache.Enabled {
+		ccfg := CacheConfig{MaxSize: cfg.Cache.MaxSize, TTL: cfg.Cache.TTL}
+		opts = append(opts, WithCache(ccfg))
+	}
+
 	switch cfg.Backend {
 	case BackendFile:
 		return NewFileMemory(cfg.WorkDir), nil
 	case BackendSQLite:
-		mem, err := NewSQLiteMemory(cfg.WorkDir, cfg.DSN)
+		mem, err := NewSQLiteMemory(cfg.WorkDir, cfg.DSN, opts...)
 		if err != nil {
 			return nil, err
 		}
 		return mem, nil
 	case BackendDual:
-		return NewDualMemory(cfg.WorkDir, cfg.DSN)
+		return NewDualMemory(cfg.WorkDir, cfg.DSN, opts...)
 	default:
 		return nil, fmt.Errorf("unknown backend type: %s", cfg.Backend)
 	}

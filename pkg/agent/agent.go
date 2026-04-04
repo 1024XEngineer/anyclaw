@@ -30,7 +30,7 @@ type LLMCaller interface {
 type Agent struct {
 	config             Config
 	llm                LLMCaller
-	memory             *memory.FileMemory
+	memory             memory.MemoryBackend
 	skills             *skills.SkillsManager
 	tools              *tools.Registry
 	workDir            string
@@ -50,7 +50,7 @@ type Config struct {
 	Description string
 	Personality string
 	LLM         LLMCaller
-	Memory      *memory.FileMemory
+	Memory      memory.MemoryBackend
 	Skills      *skills.SkillsManager
 	Tools       *tools.Registry
 	WorkDir     string

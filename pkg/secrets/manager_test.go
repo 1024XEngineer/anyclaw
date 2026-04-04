@@ -1,8 +1,10 @@
 package secrets
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -732,5 +734,1191 @@ func TestIsEncryptedValue(t *testing.T) {
 				t.Errorf("isEncryptedValue(%q) = %v, want %v", tt.value, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestScanReferences(t *testing.T) {
+	secrets := map[string]*SecretEntry{
+		"db_url": {
+			Key:   "db_url",
+			Value: "postgresql://${SECRET:db_host}:${SECRET:db_port}/mydb",
+			Scope: ScopeGlobal,
+		},
+		"db_host": {
+			Key:   "db_host",
+			Value: "localhost",
+			Scope: ScopeGlobal,
+		},
+		"db_port": {
+			Key:   "db_port",
+			Value: "5432",
+			Scope: ScopeGlobal,
+		},
+		"api_key": {
+			Key:   "api_key",
+			Value: "plain-key",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "test")
+	refs := snap.ScanReferences()
+
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 entry with references, got %d", len(refs))
+	}
+
+	dbRefs := refs["db_url"]
+	if len(dbRefs) != 2 {
+		t.Fatalf("expected 2 refs for db_url, got %d", len(dbRefs))
+	}
+	if dbRefs[0] != "db_host" || dbRefs[1] != "db_port" {
+		t.Errorf("unexpected refs: %v", dbRefs)
+	}
+}
+
+func TestValidateReferencesStrict(t *testing.T) {
+	secrets := map[string]*SecretEntry{
+		"db_url": {
+			Key:   "db_url",
+			Value: "postgresql://${SECRET:db_host}:5432/mydb",
+			Scope: ScopeGlobal,
+		},
+		"db_host": {
+			Key:   "db_host",
+			Value: "localhost",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "test")
+	result := snap.ValidateReferences(ValidationStrict, nil)
+
+	if !result.Valid {
+		t.Errorf("expected valid, got errors: %v", result.Errors)
+	}
+	if result.Scanned != 1 {
+		t.Errorf("expected 1 scanned entry, got %d", result.Scanned)
+	}
+	if len(result.Refs["db_url"]) != 1 {
+		t.Errorf("expected 1 ref for db_url, got %d", len(result.Refs["db_url"]))
+	}
+}
+
+func TestValidateReferencesMissingRef(t *testing.T) {
+	secrets := map[string]*SecretEntry{
+		"db_url": {
+			Key:   "db_url",
+			Value: "postgresql://${SECRET:missing_host}:5432/mydb",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "test")
+	result := snap.ValidateReferences(ValidationStrict, nil)
+
+	if result.Valid {
+		t.Fatal("expected validation to fail")
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("expected 1 error, got %d", len(result.Errors))
+	}
+	if result.Errors[0].RefKey != "missing_host" {
+		t.Errorf("expected ref 'missing_host', got '%s'", result.Errors[0].RefKey)
+	}
+}
+
+func TestValidateReferencesRequiredKeys(t *testing.T) {
+	secrets := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "key-123",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "test")
+	result := snap.ValidateReferences(ValidationStrict, []string{"api_key", "db_password", "token"})
+
+	if result.Valid {
+		t.Fatal("expected validation to fail")
+	}
+
+	var missingKeys []string
+	for _, err := range result.Errors {
+		if err.Message == "required secret is missing" {
+			missingKeys = append(missingKeys, err.SecretKey)
+		}
+	}
+
+	if len(missingKeys) != 2 {
+		t.Fatalf("expected 2 missing required keys, got %d: %v", len(missingKeys), missingKeys)
+	}
+}
+
+func TestValidateReferencesEmptyValue(t *testing.T) {
+	secrets := map[string]*SecretEntry{
+		"empty_key": {
+			Key:   "empty_key",
+			Value: "",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "test")
+
+	result := snap.ValidateReferences(ValidationStrict, nil)
+	if result.Valid {
+		t.Fatal("expected strict validation to fail on empty value")
+	}
+
+	result = snap.ValidateReferences(ValidationWarn, nil)
+	if !result.Valid {
+		t.Fatal("expected warn mode to pass on empty value")
+	}
+}
+
+func TestResolveValueStrict(t *testing.T) {
+	secrets := map[string]*SecretEntry{
+		"host": {
+			Key:   "host",
+			Value: "localhost",
+			Scope: ScopeGlobal,
+		},
+		"port": {
+			Key:   "port",
+			Value: "5432",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "test")
+
+	resolved, err := snap.ResolveValueStrict("postgresql://${SECRET:host}:${SECRET:port}/mydb")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved != "postgresql://localhost:5432/mydb" {
+		t.Errorf("expected 'postgresql://localhost:5432/mydb', got '%s'", resolved)
+	}
+
+	_, err = snap.ResolveValueStrict("postgresql://${SECRET:missing_host}:5432/mydb")
+	if err == nil {
+		t.Fatal("expected error for missing ref")
+	}
+	if !strings.Contains(err.Error(), "missing_host") {
+		t.Errorf("expected error about 'missing_host', got: %v", err)
+	}
+}
+
+func TestValidateStartupFailFast(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	secrets := map[string]*SecretEntry{
+		"db_url": {
+			Key:   "db_url",
+			Value: "${SECRET:missing_key}",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "test")
+	manager := NewActivationManager(store, snap)
+
+	cfg := &StartupConfig{
+		FailFast:       true,
+		ValidationMode: ValidationStrict,
+	}
+
+	err := manager.ValidateStartup(cfg)
+	if err == nil {
+		t.Fatal("expected startup validation to fail")
+	}
+	if !strings.Contains(err.Error(), "startup validation failed") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestValidateStartupWarnMode(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	secrets := map[string]*SecretEntry{
+		"db_url": {
+			Key:   "db_url",
+			Value: "${SECRET:missing_key}",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "test")
+	manager := NewActivationManager(store, snap)
+
+	cfg := &StartupConfig{
+		FailFast:       false,
+		ValidationMode: ValidationStrict,
+	}
+
+	err := manager.ValidateStartup(cfg)
+	if err != nil {
+		t.Fatalf("expected no error in warn mode, got: %v", err)
+	}
+}
+
+func TestValidateStartupOff(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(nil, "test")
+	manager := NewActivationManager(store, snap)
+
+	cfg := &StartupConfig{
+		FailFast:       true,
+		ValidationMode: ValidationOff,
+	}
+
+	err := manager.ValidateStartup(cfg)
+	if err != nil {
+		t.Fatalf("expected no error when validation is off, got: %v", err)
+	}
+}
+
+func TestValidateStartupRequiredKeys(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	secrets := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "key-123",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "test")
+	manager := NewActivationManager(store, snap)
+
+	cfg := &StartupConfig{
+		FailFast:       true,
+		ValidationMode: ValidationStrict,
+		RequiredKeys:   []string{"api_key", "db_password"},
+	}
+
+	err := manager.ValidateStartup(cfg)
+	if err == nil {
+		t.Fatal("expected error for missing required key")
+	}
+	if !strings.Contains(err.Error(), "db_password") {
+		t.Errorf("expected error about 'db_password', got: %v", err)
+	}
+}
+
+func TestValidateStartupNoSnapshot(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	manager := NewActivationManager(store, nil)
+
+	cfg := DefaultStartupConfig()
+	cfg.FailFast = true
+
+	err := manager.ValidateStartup(cfg)
+	if err == nil {
+		t.Fatal("expected error when no snapshot loaded")
+	}
+	if !strings.Contains(err.Error(), "no active snapshot") {
+		t.Errorf("expected 'no active snapshot' error, got: %v", err)
+	}
+}
+
+func TestValidateStartupNoSnapshotWarn(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	manager := NewActivationManager(store, nil)
+
+	cfg := &StartupConfig{
+		FailFast:       false,
+		ValidationMode: ValidationStrict,
+	}
+
+	err := manager.ValidateStartup(cfg)
+	if err != nil {
+		t.Fatalf("expected no error in warn mode without snapshot, got: %v", err)
+	}
+}
+
+func TestResolveValueStrictNoRefs(t *testing.T) {
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{}, "test")
+
+	resolved, err := snap.ResolveValueStrict("plain-text-value")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved != "plain-text-value" {
+		t.Errorf("expected 'plain-text-value', got '%s'", resolved)
+	}
+}
+
+func TestResolveValueStrictMalformed(t *testing.T) {
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{}, "test")
+
+	_, err := snap.ResolveValueStrict("${SECRET:unclosed_ref")
+	if err == nil {
+		t.Fatal("expected error for malformed ref")
+	}
+}
+
+func TestFallbackFromLastSnapshot(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	secrets := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "original-key",
+			Scope: ScopeGlobal,
+		},
+		"db_pass": {
+			Key:   "db_pass",
+			Value: "original-pass",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "initial")
+	fbCfg := DefaultFallbackConfig()
+	fbCfg.Strategy = FallbackLastSnapshot
+
+	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
+
+	manager.CreateSnapshot("pre-fallback")
+
+	active := manager.GetActiveSnapshot()
+	entry, _ := active.Get("api_key")
+	if entry.Value != "original-key" {
+		t.Errorf("expected 'original-key', got '%s'", entry.Value)
+	}
+
+	recovered, err := manager.DetectAndFallback("test_trigger")
+	if err != nil {
+		t.Fatalf("fallback failed: %v", err)
+	}
+
+	rEntry, ok := recovered.Get("api_key")
+	if !ok {
+		t.Fatal("expected api_key in recovered snapshot")
+	}
+	if rEntry.Value != "original-key" {
+		t.Errorf("expected 'original-key' from fallback, got '%s'", rEntry.Value)
+	}
+
+	status := manager.RecoveryStatus()
+	if status.State != RecoveryRecovered {
+		t.Errorf("expected state recovered, got %s", status.State)
+	}
+	if status.AttemptCount != 1 {
+		t.Errorf("expected 1 attempt, got %d", status.AttemptCount)
+	}
+}
+
+func TestFallbackFromEnvVars(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	os.Setenv("ANYCLAW_SECRET_TEST_KEY", "env-secret-value")
+	os.Setenv("ANYCLAW_SECRET_DB_HOST", "env-db-host")
+	defer func() {
+		os.Unsetenv("ANYCLAW_SECRET_TEST_KEY")
+		os.Unsetenv("ANYCLAW_SECRET_DB_HOST")
+	}()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "old-key",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	fbCfg := DefaultFallbackConfig()
+	fbCfg.Strategy = FallbackEnvVars
+
+	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
+	manager.CreateSnapshot("pre-fallback")
+
+	recovered, err := manager.DetectAndFallback("env_fallback_test")
+	if err != nil {
+		t.Fatalf("fallback failed: %v", err)
+	}
+
+	entry, ok := recovered.Get("TEST_KEY")
+	if !ok {
+		t.Fatal("expected TEST_KEY in recovered snapshot")
+	}
+	if entry.Value != "env-secret-value" {
+		t.Errorf("expected 'env-secret-value', got '%s'", entry.Value)
+	}
+
+	entry, ok = recovered.Get("DB_HOST")
+	if !ok {
+		t.Fatal("expected DB_HOST in recovered snapshot")
+	}
+	if entry.Value != "env-db-host" {
+		t.Errorf("expected 'env-db-host', got '%s'", entry.Value)
+	}
+}
+
+func TestFallbackFromDefaults(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	secrets := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "real-key",
+			Scope: ScopeGlobal,
+		},
+		"db_pass": {
+			Key:   "db_pass",
+			Value: "real-pass",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "initial")
+
+	fbCfg := DefaultFallbackConfig()
+	fbCfg.Strategy = FallbackDefaults
+	fbCfg.DefaultValue = "DEFAULT_PLACEHOLDER"
+
+	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
+	manager.CreateSnapshot("pre-fallback")
+
+	recovered, err := manager.DetectAndFallback("default_fallback_test")
+	if err != nil {
+		t.Fatalf("fallback failed: %v", err)
+	}
+
+	entry, ok := recovered.Get("api_key")
+	if !ok {
+		t.Fatal("expected api_key in recovered snapshot")
+	}
+	if entry.Value != "DEFAULT_PLACEHOLDER" {
+		t.Errorf("expected 'DEFAULT_PLACEHOLDER', got '%s'", entry.Value)
+	}
+
+	entry, ok = recovered.Get("db_pass")
+	if !ok {
+		t.Fatal("expected db_pass in recovered snapshot")
+	}
+	if entry.Value != "DEFAULT_PLACEHOLDER" {
+		t.Errorf("expected 'DEFAULT_PLACEHOLDER', got '%s'", entry.Value)
+	}
+}
+
+func TestFallbackToEmpty(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "real-key",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	fbCfg := DefaultFallbackConfig()
+	fbCfg.Strategy = FallbackEmpty
+
+	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
+	manager.CreateSnapshot("pre-fallback")
+
+	recovered, err := manager.DetectAndFallback("empty_fallback_test")
+	if err != nil {
+		t.Fatalf("fallback failed: %v", err)
+	}
+
+	all := recovered.GetAll()
+	if len(all) != 0 {
+		t.Errorf("expected 0 secrets, got %d", len(all))
+	}
+}
+
+func TestFallbackDisabled(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "key",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	fbCfg := DefaultFallbackConfig()
+	fbCfg.Enabled = false
+
+	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
+
+	_, err := manager.DetectAndFallback("test")
+	if err == nil {
+		t.Fatal("expected error when fallback disabled")
+	}
+}
+
+func TestFallbackMaxAttempts(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	fbCfg := DefaultFallbackConfig()
+	fbCfg.Strategy = FallbackLastSnapshot
+	fbCfg.MaxAttempts = 2
+
+	manager := NewActivationManagerWithFallback(store, nil, fbCfg)
+
+	_, err1 := manager.DetectAndFallback("attempt1")
+	if err1 == nil {
+		t.Fatal("expected first fallback to fail (no snapshots)")
+	}
+
+	_, err2 := manager.DetectAndFallback("attempt2")
+	if err2 == nil {
+		t.Fatal("expected second fallback to fail")
+	}
+
+	_, err3 := manager.DetectAndFallback("attempt3")
+	if err3 == nil {
+		t.Fatal("expected third fallback to be blocked by max attempts")
+	}
+	if !strings.Contains(err3.Error(), "max fallback attempts") {
+		t.Errorf("expected max attempts error, got: %v", err3)
+	}
+}
+
+func TestRestoreFromFallback(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	secrets := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "original",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "initial")
+	fbCfg := DefaultFallbackConfig()
+	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
+	manager.CreateSnapshot("pre-fallback")
+
+	active := manager.GetActiveSnapshot()
+	active.Update(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "corrupted",
+			Scope: ScopeGlobal,
+		},
+	})
+
+	cEntry, _ := active.Get("api_key")
+	if cEntry.Value != "corrupted" {
+		t.Errorf("expected 'corrupted', got '%s'", cEntry.Value)
+	}
+
+	if err := manager.RestoreFromFallback(); err != nil {
+		t.Fatalf("RestoreFromFallback failed: %v", err)
+	}
+
+	restored := manager.GetActiveSnapshot()
+	rEntry, ok := restored.Get("api_key")
+	if !ok {
+		t.Fatal("expected api_key after restore")
+	}
+	if rEntry.Value != "original" {
+		t.Errorf("expected 'original' after restore, got '%s'", rEntry.Value)
+	}
+}
+
+func TestResetRecovery(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "key",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	fbCfg := DefaultFallbackConfig()
+	fbCfg.Strategy = FallbackLastSnapshot
+
+	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
+	manager.CreateSnapshot("pre-fallback")
+
+	manager.DetectAndFallback("test")
+
+	status := manager.RecoveryStatus()
+	if status.State != RecoveryRecovered {
+		t.Fatalf("expected recovered state, got %s", status.State)
+	}
+	if status.AttemptCount != 1 {
+		t.Fatalf("expected 1 attempt, got %d", status.AttemptCount)
+	}
+
+	manager.ResetRecovery()
+
+	status = manager.RecoveryStatus()
+	if status.State != RecoveryNormal {
+		t.Errorf("expected normal state after reset, got %s", status.State)
+	}
+	if status.AttemptCount != 0 {
+		t.Errorf("expected 0 attempts after reset, got %d", status.AttemptCount)
+	}
+}
+
+func TestRecoveryStatus(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	secrets := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "key",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "initial")
+	fbCfg := DefaultFallbackConfig()
+	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
+
+	status := manager.RecoveryStatus()
+	if status.State != RecoveryNormal {
+		t.Errorf("expected normal state, got %s", status.State)
+	}
+
+	manager.DetectAndFallback("test")
+	status = manager.RecoveryStatus()
+	if status.State != RecoveryRecovered {
+		t.Errorf("expected recovered state, got %s", status.State)
+	}
+	if status.LastEvent == nil {
+		t.Fatal("expected last event to be set")
+	}
+	if !status.LastEvent.Success {
+		t.Error("expected last event to be successful")
+	}
+}
+
+func TestFallbackWithStoreSnapshot(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	store.SetSecret(&SecretEntry{
+		Key:   "stored_key",
+		Value: "stored-value",
+		Scope: ScopeGlobal,
+	})
+	store.CreateSnapshot("stored")
+
+	fbCfg := DefaultFallbackConfig()
+	fbCfg.Strategy = FallbackLastSnapshot
+
+	manager := NewActivationManagerWithFallback(store, nil, fbCfg)
+
+	recovered, err := manager.DetectAndFallback("store_snapshot_test")
+	if err != nil {
+		t.Fatalf("fallback failed: %v", err)
+	}
+
+	entry, ok := recovered.Get("stored_key")
+	if !ok {
+		t.Fatal("expected stored_key from store snapshot")
+	}
+	if entry.Value != "stored-value" {
+		t.Errorf("expected 'stored-value', got '%s'", entry.Value)
+	}
+}
+
+func TestRotateSecret(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	secrets := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "old-key-value",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "initial")
+	fbCfg := DefaultFallbackConfig()
+	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
+
+	req := &RotationRequest{
+		Key:         "api_key",
+		NewValue:    "new-key-value",
+		RequestedBy: "admin",
+		Reason:      "quarterly rotation",
+		ActivateNow: true,
+	}
+
+	result, err := manager.RotateSecret(req)
+	if err != nil {
+		t.Fatalf("RotateSecret failed: %v", err)
+	}
+	if result.Key != "api_key" {
+		t.Errorf("expected key api_key, got %s", result.Key)
+	}
+	if result.OldVersion != 0 {
+		t.Errorf("expected old version 0, got %d", result.OldVersion)
+	}
+	if result.NewVersion != 1 {
+		t.Errorf("expected new version 1, got %d", result.NewVersion)
+	}
+	if !result.Activated {
+		t.Error("expected activated to be true")
+	}
+
+	active := manager.GetActiveSnapshot()
+	entry, ok := active.Get("api_key")
+	if !ok {
+		t.Fatal("expected api_key in active snapshot")
+	}
+	if entry.Value != "new-key-value" {
+		t.Errorf("expected 'new-key-value', got '%s'", entry.Value)
+	}
+	if entry.Metadata["version"] != "1" {
+		t.Errorf("expected version metadata '1', got '%s'", entry.Metadata["version"])
+	}
+}
+
+func TestRotateSecretMultipleTimes(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"db_pass": {
+			Key:   "db_pass",
+			Value: "pass-v1",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	for i := 1; i <= 3; i++ {
+		req := &RotationRequest{
+			Key:         "db_pass",
+			NewValue:    fmt.Sprintf("pass-v%d", i+1),
+			RequestedBy: "admin",
+			Reason:      fmt.Sprintf("rotation %d", i),
+			ActivateNow: true,
+		}
+		result, err := manager.RotateSecret(req)
+		if err != nil {
+			t.Fatalf("rotation %d failed: %v", i, err)
+		}
+		if result.NewVersion != uint64(i) {
+			t.Errorf("rotation %d: expected version %d, got %d", i, i, result.NewVersion)
+		}
+	}
+
+	vh, err := manager.GetVersionHistory("db_pass")
+	if err != nil {
+		t.Fatalf("GetVersionHistory failed: %v", err)
+	}
+	if vh.Current != 3 {
+		t.Errorf("expected current version 3, got %d", vh.Current)
+	}
+	if vh.TotalRotates != 3 {
+		t.Errorf("expected 3 total rotates, got %d", vh.TotalRotates)
+	}
+	if len(vh.Versions) != 3 {
+		t.Errorf("expected 3 versions, got %d", len(vh.Versions))
+	}
+}
+
+func TestVersionHistory(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"token": {
+			Key:   "token",
+			Value: "v1",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	manager.RotateSecret(&RotationRequest{
+		Key:         "token",
+		NewValue:    "v2",
+		RequestedBy: "user1",
+		Reason:      "rotate",
+		ActivateNow: true,
+	})
+	manager.RotateSecret(&RotationRequest{
+		Key:         "token",
+		NewValue:    "v3",
+		RequestedBy: "user2",
+		Reason:      "rotate again",
+		ActivateNow: true,
+	})
+
+	vh, err := manager.GetVersionHistory("token")
+	if err != nil {
+		t.Fatalf("GetVersionHistory failed: %v", err)
+	}
+
+	if vh.Key != "token" {
+		t.Errorf("expected key 'token', got '%s'", vh.Key)
+	}
+	if vh.Current != 2 {
+		t.Errorf("expected current 2, got %d", vh.Current)
+	}
+	if vh.LastRotation == nil {
+		t.Error("expected last rotation to be set")
+	}
+
+	activeVer := vh.Versions[len(vh.Versions)-1]
+	if !activeVer.Active {
+		t.Error("expected latest version to be active")
+	}
+	if activeVer.Value != "v3" {
+		t.Errorf("expected active value 'v3', got '%s'", activeVer.Value)
+	}
+
+	inactiveVer := vh.Versions[0]
+	if inactiveVer.Active {
+		t.Error("expected first version to be inactive")
+	}
+}
+
+func TestRollbackVersion(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "v1-value",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	manager.RotateSecret(&RotationRequest{
+		Key:         "api_key",
+		NewValue:    "v2-value",
+		RequestedBy: "admin",
+		Reason:      "rotate",
+		ActivateNow: true,
+	})
+	manager.RotateSecret(&RotationRequest{
+		Key:         "api_key",
+		NewValue:    "v3-value",
+		RequestedBy: "admin",
+		Reason:      "rotate again",
+		ActivateNow: true,
+	})
+
+	active := manager.GetActiveSnapshot()
+	entry, _ := active.Get("api_key")
+	if entry.Value != "v3-value" {
+		t.Fatalf("expected 'v3-value' before rollback, got '%s'", entry.Value)
+	}
+
+	if err := manager.RollbackVersion("api_key", 1, "admin"); err != nil {
+		t.Fatalf("RollbackVersion failed: %v", err)
+	}
+
+	active = manager.GetActiveSnapshot()
+	entry, _ = active.Get("api_key")
+	if entry.Value != "v2-value" {
+		t.Errorf("expected 'v2-value' after rollback to v1 (version 1 is v2-value), got '%s'", entry.Value)
+	}
+
+	vh, _ := manager.GetVersionHistory("api_key")
+	if vh.Current != 1 {
+		t.Errorf("expected current version 1 after rollback, got %d", vh.Current)
+	}
+}
+
+func TestRollbackVersionNotFound(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "v1",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	err := manager.RollbackVersion("api_key", 99, "admin")
+	if err == nil {
+		t.Fatal("expected error for nonexistent version")
+	}
+}
+
+func TestRotationPolicy(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "key-value",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	policy := &RotationPolicy{
+		Key:          "api_key",
+		Strategy:     RotationScheduled,
+		Interval:     30 * 24 * time.Hour,
+		MaxVersions:  5,
+		GracePeriod:  24 * time.Hour,
+		AutoActivate: true,
+	}
+
+	if err := manager.SetRotationPolicy(policy); err != nil {
+		t.Fatalf("SetRotationPolicy failed: %v", err)
+	}
+
+	got, ok := manager.GetRotationPolicy("api_key")
+	if !ok {
+		t.Fatal("expected rotation policy to exist")
+	}
+	if got.Strategy != RotationScheduled {
+		t.Errorf("expected strategy scheduled, got %s", got.Strategy)
+	}
+	if got.MaxVersions != 5 {
+		t.Errorf("expected max versions 5, got %d", got.MaxVersions)
+	}
+
+	policies := manager.ListRotationPolicies()
+	if len(policies) != 1 {
+		t.Fatalf("expected 1 policy, got %d", len(policies))
+	}
+
+	if err := manager.DeleteRotationPolicy("api_key"); err != nil {
+		t.Fatalf("DeleteRotationPolicy failed: %v", err)
+	}
+
+	_, ok = manager.GetRotationPolicy("api_key")
+	if ok {
+		t.Fatal("expected policy to be deleted")
+	}
+}
+
+func TestCheckScheduledRotations(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "current-key",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	past := time.Now().Add(-time.Hour)
+	policy := &RotationPolicy{
+		Key:          "api_key",
+		Strategy:     RotationScheduled,
+		Interval:     24 * time.Hour,
+		NextRotation: &past,
+		AutoActivate: true,
+	}
+	manager.SetRotationPolicy(policy)
+
+	results, err := manager.CheckScheduledRotations("system")
+	if err != nil {
+		t.Fatalf("CheckScheduledRotations failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 rotation result, got %d", len(results))
+	}
+	if results[0].Key != "api_key" {
+		t.Errorf("expected key api_key, got %s", results[0].Key)
+	}
+	if results[0].NewVersion != 1 {
+		t.Errorf("expected new version 1, got %d", results[0].NewVersion)
+	}
+	if results[0].Activated != true {
+		t.Error("expected activated to be true")
+	}
+}
+
+func TestCheckScheduledRotationsNotDue(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "current-key",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	future := time.Now().Add(24 * time.Hour)
+	policy := &RotationPolicy{
+		Key:          "api_key",
+		Strategy:     RotationScheduled,
+		Interval:     24 * time.Hour,
+		NextRotation: &future,
+	}
+	manager.SetRotationPolicy(policy)
+
+	results, err := manager.CheckScheduledRotations("system")
+	if err != nil {
+		t.Fatalf("CheckScheduledRotations failed: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 rotations (not due yet), got %d", len(results))
+	}
+}
+
+func TestCleanupOldVersions(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "v1",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	for i := 1; i <= 5; i++ {
+		manager.RotateSecret(&RotationRequest{
+			Key:         "api_key",
+			NewValue:    fmt.Sprintf("v%d", i+1),
+			RequestedBy: "admin",
+			ActivateNow: true,
+		})
+	}
+
+	vh, _ := manager.GetVersionHistory("api_key")
+	if len(vh.Versions) != 5 {
+		t.Fatalf("expected 5 versions before cleanup, got %d", len(vh.Versions))
+	}
+
+	if err := manager.CleanupOldVersions("api_key", 2); err != nil {
+		t.Fatalf("CleanupOldVersions failed: %v", err)
+	}
+
+	vh, _ = manager.GetVersionHistory("api_key")
+	if len(vh.Versions) != 2 {
+		t.Errorf("expected 2 versions after cleanup, got %d", len(vh.Versions))
+	}
+}
+
+func TestRotationPolicyMaxVersions(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "v1",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	manager.SetRotationPolicy(&RotationPolicy{
+		Key:         "api_key",
+		MaxVersions: 3,
+	})
+
+	for i := 1; i <= 5; i++ {
+		manager.RotateSecret(&RotationRequest{
+			Key:         "api_key",
+			NewValue:    fmt.Sprintf("v%d", i+1),
+			RequestedBy: "admin",
+			ActivateNow: true,
+		})
+	}
+
+	vh, _ := manager.GetVersionHistory("api_key")
+	if len(vh.Versions) != 3 {
+		t.Errorf("expected 3 versions (max_versions limit), got %d", len(vh.Versions))
+	}
+}
+
+func TestRotateSecretNotFound(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "key",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	_, err := manager.RotateSecret(&RotationRequest{
+		Key:         "nonexistent",
+		NewValue:    "new-value",
+		RequestedBy: "admin",
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent key")
+	}
+}
+
+func TestListVersionHistories(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"key1": {Key: "key1", Value: "v1", Scope: ScopeGlobal},
+		"key2": {Key: "key2", Value: "v1", Scope: ScopeGlobal},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+
+	manager.RotateSecret(&RotationRequest{
+		Key: "key1", NewValue: "v2", RequestedBy: "admin", ActivateNow: true,
+	})
+	manager.RotateSecret(&RotationRequest{
+		Key: "key2", NewValue: "v2", RequestedBy: "admin", ActivateNow: true,
+	})
+
+	histories := manager.ListVersionHistories()
+	if len(histories) != 2 {
+		t.Fatalf("expected 2 version histories, got %d", len(histories))
 	}
 }

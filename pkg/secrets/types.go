@@ -193,3 +193,169 @@ func GenerateEncryptionKey() (string, error) {
 	}
 	return base64.StdEncoding.EncodeToString(key), nil
 }
+
+type ValidationError struct {
+	SecretKey  string `json:"secret_key"`
+	RefKey     string `json:"ref_key"`
+	Value      string `json:"value,omitempty"`
+	Message    string `json:"message"`
+	LineNumber int    `json:"line_number,omitempty"`
+}
+
+func (e *ValidationError) Error() string {
+	if e.SecretKey != "" {
+		return fmt.Sprintf("secret %q: %s (unresolved reference: %q)", e.SecretKey, e.Message, e.RefKey)
+	}
+	return fmt.Sprintf("unresolved reference %q: %s", e.RefKey, e.Message)
+}
+
+type ValidationResult struct {
+	Valid   bool                `json:"valid"`
+	Errors  []*ValidationError  `json:"errors,omitempty"`
+	Refs    map[string][]string `json:"references"`
+	Scanned int                 `json:"scanned"`
+}
+
+func (r *ValidationResult) AddError(err *ValidationError) {
+	r.Valid = false
+	r.Errors = append(r.Errors, err)
+}
+
+type ValidationMode string
+
+const (
+	ValidationStrict ValidationMode = "strict"
+	ValidationWarn   ValidationMode = "warn"
+	ValidationOff    ValidationMode = "off"
+)
+
+type StartupConfig struct {
+	FailFast       bool           `json:"fail_fast"`
+	ValidationMode ValidationMode `json:"validation_mode"`
+	RequiredKeys   []string       `json:"required_keys,omitempty"`
+}
+
+func DefaultStartupConfig() *StartupConfig {
+	return &StartupConfig{
+		FailFast:       true,
+		ValidationMode: ValidationStrict,
+	}
+}
+
+type FallbackStrategy string
+
+const (
+	FallbackLastSnapshot FallbackStrategy = "last_snapshot"
+	FallbackEnvVars      FallbackStrategy = "env_vars"
+	FallbackDefaults     FallbackStrategy = "defaults"
+	FallbackEmpty        FallbackStrategy = "empty"
+)
+
+type FallbackConfig struct {
+	Enabled         bool             `json:"enabled"`
+	Strategy        FallbackStrategy `json:"strategy"`
+	EnvPrefix       string           `json:"env_prefix"`
+	DefaultValue    string           `json:"default_value"`
+	MaxAttempts     int              `json:"max_attempts"`
+	RecoveryTimeout time.Duration    `json:"recovery_timeout"`
+}
+
+func DefaultFallbackConfig() *FallbackConfig {
+	return &FallbackConfig{
+		Enabled:         true,
+		Strategy:        FallbackLastSnapshot,
+		EnvPrefix:       "ANYCLAW_SECRET_",
+		DefaultValue:    "",
+		MaxAttempts:     3,
+		RecoveryTimeout: 30 * time.Second,
+	}
+}
+
+type FallbackEvent struct {
+	ID          string            `json:"id"`
+	Trigger     string            `json:"trigger"`
+	Strategy    FallbackStrategy  `json:"strategy"`
+	Timestamp   time.Time         `json:"timestamp"`
+	Details     map[string]string `json:"details"`
+	Success     bool              `json:"success"`
+	Error       string            `json:"error,omitempty"`
+	RestoredKey int               `json:"restored_keys"`
+}
+
+type RecoveryState string
+
+const (
+	RecoveryNormal    RecoveryState = "normal"
+	RecoveryDetecting RecoveryState = "detecting"
+	RecoveryFalling   RecoveryState = "falling_back"
+	RecoveryRecovered RecoveryState = "recovered"
+	RecoveryFailed    RecoveryState = "failed"
+)
+
+type RecoveryStatus struct {
+	State          RecoveryState  `json:"state"`
+	CurrentSnapID  string         `json:"current_snapshot_id"`
+	FallbackSnapID string         `json:"fallback_snapshot_id"`
+	LastEvent      *FallbackEvent `json:"last_event,omitempty"`
+	AttemptCount   int            `json:"attempt_count"`
+	LastRecovery   *time.Time     `json:"last_recovery,omitempty"`
+}
+
+type RotationStrategy string
+
+const (
+	RotationManual    RotationStrategy = "manual"
+	RotationScheduled RotationStrategy = "scheduled"
+	RotationOnExpiry  RotationStrategy = "on_expiry"
+	RotationOnAccess  RotationStrategy = "on_access"
+)
+
+type SecretVersion struct {
+	Version   uint64            `json:"version"`
+	Value     string            `json:"value"`
+	CreatedBy string            `json:"created_by"`
+	CreatedAt time.Time         `json:"created_at"`
+	Active    bool              `json:"active"`
+	RotatedAt *time.Time        `json:"rotated_at,omitempty"`
+	RotatedBy string            `json:"rotated_by,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+}
+
+type RotationPolicy struct {
+	Key          string           `json:"key"`
+	Strategy     RotationStrategy `json:"strategy"`
+	Interval     time.Duration    `json:"interval"`
+	NextRotation *time.Time       `json:"next_rotation,omitempty"`
+	MaxVersions  int              `json:"max_versions"`
+	GracePeriod  time.Duration    `json:"grace_period"`
+	AutoActivate bool             `json:"auto_activate"`
+	NotifyBefore time.Duration    `json:"notify_before"`
+}
+
+type RotationRequest struct {
+	Key         string            `json:"key"`
+	NewValue    string            `json:"new_value"`
+	RequestedBy string            `json:"requested_by"`
+	Reason      string            `json:"reason"`
+	ActivateNow bool              `json:"activate_now"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+type RotationResult struct {
+	Key        string     `json:"key"`
+	OldVersion uint64     `json:"old_version"`
+	NewVersion uint64     `json:"new_version"`
+	Activated  bool       `json:"activated"`
+	RotatedAt  time.Time  `json:"rotated_at"`
+	GraceEnd   *time.Time `json:"grace_end,omitempty"`
+}
+
+type VersionHistory struct {
+	Key          string           `json:"key"`
+	Current      uint64           `json:"current_version"`
+	TotalRotates int              `json:"total_rotates"`
+	Versions     []*SecretVersion `json:"versions"`
+	LastRotation *time.Time       `json:"last_rotation,omitempty"`
+	NextRotation *time.Time       `json:"next_rotation,omitempty"`
+	Policy       *RotationPolicy  `json:"policy,omitempty"`
+}

@@ -6,7 +6,35 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/anyclaw/anyclaw/pkg/memory"
 )
+
+// MemoryBackend is an alias for memory.MemoryBackend to avoid import cycles.
+type MemoryBackend = memory.MemoryBackend
+
+// VectorMemoryBackend is an alias for memory.VectorBackend to avoid import cycles.
+type VectorMemoryBackend = memory.VectorBackend
+
+// QMDClient is the interface for QMD structured data operations.
+type QMDClient interface {
+	CreateTable(ctx context.Context, name string, columns []string) error
+	Insert(ctx context.Context, table string, record map[string]any) error
+	Get(ctx context.Context, table, id string) (map[string]any, error)
+	Update(ctx context.Context, table string, record map[string]any) error
+	Delete(ctx context.Context, table, id string) error
+	List(ctx context.Context, table string, limit int) ([]map[string]any, error)
+	Query(ctx context.Context, table, field string, value any, limit int) ([]map[string]any, error)
+	ListTables(ctx context.Context) ([]TableStat, error)
+	Count(ctx context.Context, table string) (int, error)
+}
+
+// TableStat represents a QMD table summary.
+type TableStat struct {
+	Name     string `json:"name"`
+	RowCount int    `json:"row_count"`
+	Columns  int    `json:"columns"`
+}
 
 // AuditLogger 审计日志接口
 type AuditLogger interface {
@@ -28,6 +56,8 @@ type BuiltinOptions struct {
 	ConfirmDangerousCommand DangerousCommandConfirmer
 	AuditLogger             AuditLogger
 	Sandbox                 *SandboxManager
+	MemoryBackend           MemoryBackend
+	QMDClient               QMDClient
 }
 
 // ToolFunc 工具函数

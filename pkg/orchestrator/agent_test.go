@@ -65,6 +65,7 @@ func TestNewSubAgentWithContextStoresConversationInIsolationEngine(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewSubAgentWithContext: %v", err)
 	}
+	t.Cleanup(func() { sa.memory.Close() })
 	if !sa.HasIsolatedContext() {
 		t.Fatal("expected isolated context engine to be attached")
 	}

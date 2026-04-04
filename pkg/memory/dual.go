@@ -3,6 +3,7 @@ package memory
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
 type DualMemory struct {
@@ -14,10 +15,10 @@ type DualMemory struct {
 	syncOnRead  bool
 }
 
-func NewDualMemory(workDir string, dsn string) (*DualMemory, error) {
+func NewDualMemory(workDir string, dsn string, opts ...SQLiteMemoryOption) (*DualMemory, error) {
 	fileMem := NewFileMemory(workDir)
 
-	sqliteMem, err := NewSQLiteMemory(workDir, dsn)
+	sqliteMem, err := NewSQLiteMemory(workDir, dsn, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SQLite memory: %w", err)
 	}
@@ -257,4 +258,16 @@ func (d *DualMemory) SyncSQLiteToFile() error {
 	}
 
 	return nil
+}
+
+func (d *DualMemory) Warmup(queries []string, concurrency int) WarmupProgress {
+	return d.sqlite.Warmup(queries, concurrency)
+}
+
+func (d *DualMemory) CacheStats() CacheStats {
+	return d.sqlite.CacheStats()
+}
+
+func (d *DualMemory) StartAutoBackup(backupDir string, interval time.Duration, maxBackups int) error {
+	return d.sqlite.StartAutoBackup(backupDir, interval, maxBackups)
 }

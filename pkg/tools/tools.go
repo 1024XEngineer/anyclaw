@@ -1,10 +1,15 @@
 package tools
 
-import "context"
+import (
+	"context"
+
+	"github.com/anyclaw/anyclaw/pkg/memory"
+)
 
 func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 	RegisterFileTools(r, opts)
 	RegisterMemoryTools(r, opts)
+	RegisterQMDTools(r, opts)
 	RegisterWebTools(r, opts)
 	RegisterDesktopTools(r, opts)
 	RegisterCLIHubTools(r, opts)
@@ -108,19 +113,65 @@ func RegisterMemoryTools(r *Registry, opts BuiltinOptions) {
 
 	r.RegisterTool(
 		"memory_search",
-		"Search daily workspace memory files under memory/*.md",
+		"Search memory entries. Uses the memory backend (SQLite/dual) when available, falls back to daily memory files.",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query": map[string]string{"type": "string", "description": "Text to search for in daily memory files"},
+				"query": map[string]string{"type": "string", "description": "Text to search for in memory entries"},
 				"limit": map[string]string{"type": "number", "description": "Maximum number of matches to return"},
-				"date":  map[string]string{"type": "string", "description": "Optional day filter: YYYY-MM-DD, today, yesterday, or latest"},
+				"date":  map[string]string{"type": "string", "description": "Optional day filter for daily files: YYYY-MM-DD, today, yesterday, or latest"},
 			},
 			"required": []string{"query"},
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "memory_search", input, func(ctx context.Context, input map[string]any) (string, error) {
-				return MemorySearchToolWithCwd(ctx, input, workingDir)
+				return MemorySearchToolWithBackend(ctx, input, workingDir, opts.MemoryBackend)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"memory_vector_search",
+		"Search memory entries using vector embeddings. Requires a vector-capable memory backend.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":     map[string]string{"type": "string", "description": "Text query (used as fallback if no embedding provided)"},
+				"limit":     map[string]string{"type": "number", "description": "Maximum number of matches to return"},
+				"threshold": map[string]string{"type": "number", "description": "Minimum cosine similarity threshold (default: 0.5)"},
+				"embedding": map[string]string{"type": "array", "description": "Query embedding vector (optional, falls back to text search)"},
+			},
+			"required": []string{"query"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "memory_vector_search", input, func(ctx context.Context, input map[string]any) (string, error) {
+				if vec, ok := opts.MemoryBackend.(memory.VectorBackend); ok {
+					return MemoryVectorSearchTool(ctx, input, opts.MemoryBackend, vec)
+				}
+				return MemorySearchToolWithBackend(ctx, input, workingDir, opts.MemoryBackend)
+			})(ctx, input)
+		},
+	)
+
+	r.RegisterTool(
+		"memory_hybrid_search",
+		"Search memory entries using combined text + vector scoring. Requires a vector-capable memory backend.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":         map[string]string{"type": "string", "description": "Text query for hybrid search"},
+				"limit":         map[string]string{"type": "number", "description": "Maximum number of matches to return"},
+				"vector_weight": map[string]string{"type": "number", "description": "Weight for vector score vs text score (0.0-1.0, default: 0.5)"},
+				"embedding":     map[string]string{"type": "array", "description": "Query embedding vector (required for hybrid)"},
+			},
+			"required": []string{"query"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "memory_hybrid_search", input, func(ctx context.Context, input map[string]any) (string, error) {
+				if vec, ok := opts.MemoryBackend.(memory.VectorBackend); ok {
+					return MemoryHybridSearchTool(ctx, input, opts.MemoryBackend, vec)
+				}
+				return MemorySearchToolWithBackend(ctx, input, workingDir, opts.MemoryBackend)
 			})(ctx, input)
 		},
 	)

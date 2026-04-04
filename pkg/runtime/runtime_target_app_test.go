@@ -61,6 +61,7 @@ func TestNewTargetAppAppliesAgentProfileProviderAndPreservesWorkspaceOverride(t 
 	if err != nil {
 		t.Fatalf("NewTargetApp: %v", err)
 	}
+	t.Cleanup(func() { app.Memory.Close() })
 
 	absWorkspacePath, err := filepath.Abs(workspacePath)
 	if err != nil {
@@ -162,6 +163,7 @@ func TestNewTargetAppResolvesImplicitMainAgentProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTargetApp: %v", err)
 	}
+	t.Cleanup(func() { app.Memory.Close() })
 
 	absProfileWorkingDir, err := filepath.Abs(filepath.Join(tempDir, "workflows", "go-expert"))
 	if err != nil {
