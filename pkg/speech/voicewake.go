@@ -94,6 +94,7 @@ type VoiceWake struct {
 	lastTranscript  string
 	lastWakeMatch   string
 	lastConfidence  float64
+	lastEnergy      float64
 }
 
 func NewVoiceWake(cfg VoiceWakeConfig) *VoiceWake {
@@ -264,6 +265,7 @@ func (vw *VoiceWake) listenLoop() {
 						"phrase":     result.Keyword,
 						"confidence": result.Confidence,
 						"engine":     string(result.Engine),
+						"energy":     0.0,
 					},
 				})
 
@@ -384,6 +386,7 @@ func (vw *VoiceWake) checkWakeWord(transcript string) {
 		vw.mu.Lock()
 		vw.setState(VoiceWakeStateTriggered)
 		vw.cooldownUntil = time.Now().Add(vw.cfg.CooldownTime)
+		energy := vw.lastEnergy
 		vw.mu.Unlock()
 
 		vw.notifyListeners(VoiceWakeEvent{
@@ -394,6 +397,7 @@ func (vw *VoiceWake) checkWakeWord(transcript string) {
 				"phrase":     phrase,
 				"confidence": confidence,
 				"transcript": transcript,
+				"energy":     energy,
 			},
 		})
 
@@ -410,6 +414,10 @@ func (vw *VoiceWake) checkWakeWord(transcript string) {
 }
 
 func (vw *VoiceWake) onVADStateChanged(state VADState, energy float64, zcr float64) {
+	vw.mu.Lock()
+	vw.lastEnergy = energy
+	vw.mu.Unlock()
+
 	switch state {
 	case VADStateSpeech:
 		vw.notifyListeners(VoiceWakeEvent{
