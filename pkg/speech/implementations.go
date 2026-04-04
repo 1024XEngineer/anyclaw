@@ -6,166 +6,200 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"time"
 )
 
-// OpenAI TTS implementation with real API calls
-func (t *OpenAITTS) SynthesizeReal(ctx context.Context, text string, options TTSOptions) (*AudioResult, error) {
-	if t.apiKey == "" {
-		return nil, fmt.Errorf("OpenAI API key not configured")
+type OpenAIProvider struct {
+	apiKey  string
+	baseURL string
+	voice   string
+	timeout time.Duration
+	client  *http.Client
+}
+
+type OpenAIOption func(*OpenAIProvider)
+
+func WithOpenAIBaseURL(url string) OpenAIOption {
+	return func(p *OpenAIProvider) {
+		p.baseURL = url
+	}
+}
+
+func WithOpenAIVoice(voice string) OpenAIOption {
+	return func(p *OpenAIProvider) {
+		p.voice = voice
+	}
+}
+
+func WithOpenAITimeout(timeout time.Duration) OpenAIOption {
+	return func(p *OpenAIProvider) {
+		p.timeout = timeout
+	}
+}
+
+func NewOpenAIProvider(apiKey string, opts ...OpenAIOption) (*OpenAIProvider, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("openai: API key is required")
 	}
 
-	voice := options.Voice
-	if voice == "" {
-		voice = "alloy"
+	p := &OpenAIProvider{
+		apiKey:  apiKey,
+		baseURL: "https://api.openai.com",
+		voice:   "alloy",
+		timeout: 60 * time.Second,
+		client:  &http.Client{Timeout: 60 * time.Second},
 	}
 
-	speed := options.Speed
-	if speed <= 0 {
-		speed = 1.0
+	for _, opt := range opts {
+		opt(p)
 	}
 
-	model := "tts-1"
-	if options.Engine == "hd" {
-		model = "tts-1-hd"
+	p.client.Timeout = p.timeout
+
+	return p, nil
+}
+
+func (p *OpenAIProvider) Name() string {
+	return "openai"
+}
+
+func (p *OpenAIProvider) Type() ProviderType {
+	return ProviderOpenAI
+}
+
+func (p *OpenAIProvider) Synthesize(ctx context.Context, text string, opts ...SynthesizeOption) (*AudioResult, error) {
+	options := SynthesizeOptions{
+		Voice:      p.voice,
+		Speed:      1.0,
+		Format:     FormatMP3,
+		SampleRate: 24000,
+	}
+	for _, opt := range opts {
+		opt(&options)
 	}
 
 	payload := map[string]any{
-		"model":  model,
+		"model":  "tts-1",
 		"input":  text,
-		"voice":  voice,
-		"speed":  speed,
-		"format": "mp3",
+		"voice":  options.Voice,
+		"speed":  options.Speed,
+		"format": string(options.Format),
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("openai: failed to marshal request: %w", err)
+	}
 
-	url := t.baseURL + "/v1/audio/speech"
+	url := p.baseURL + "/v1/audio/speech"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("openai: failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("openai: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("TTS API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("openai: API error (%d): %s", resp.StatusCode, string(respBody))
 	}
 
 	audioData, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("openai: failed to read response: %w", err)
 	}
 
 	return &AudioResult{
-		AudioData:   audioData,
-		Format:      "mp3",
-		SampleRate:  24000,
+		Data:        audioData,
+		Format:      options.Format,
+		SampleRate:  options.SampleRate,
 		ContentType: "audio/mpeg",
 	}, nil
 }
 
-// OpenAI STT implementation with real API calls
-func (s *OpenAISTT) RecognizeReal(ctx context.Context, audioData []byte, options STTOptions) (*TranscriptionResult, error) {
-	if s.apiKey == "" {
-		return nil, fmt.Errorf("OpenAI API key not configured")
-	}
-
-	// Create multipart form
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-
-	// Add file
-	part, err := writer.CreateFormFile("file", "audio.wav")
-	if err != nil {
-		return nil, err
-	}
-	part.Write(audioData)
-
-	// Add model
-	writer.WriteField("model", "whisper-1")
-
-	if options.Language != "" {
-		writer.WriteField("language", options.Language)
-	}
-
-	writer.Close()
-
-	url := s.baseURL + "/v1/audio/transcriptions"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, &buf)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+s.apiKey)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("STT API error (%d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var result struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, err
-	}
-
-	return &TranscriptionResult{
-		Text:       result.Text,
-		Confidence: 0.95,
-		Language:   options.Language,
+func (p *OpenAIProvider) ListVoices(ctx context.Context) ([]Voice, error) {
+	_ = ctx
+	return []Voice{
+		{ID: "alloy", Name: "Alloy", Language: "en", Gender: GenderNeutral, Provider: "openai"},
+		{ID: "echo", Name: "Echo", Language: "en", Gender: GenderMale, Provider: "openai"},
+		{ID: "fable", Name: "Fable", Language: "en", Gender: GenderNeutral, Provider: "openai"},
+		{ID: "onyx", Name: "Onyx", Language: "en", Gender: GenderMale, Provider: "openai"},
+		{ID: "nova", Name: "Nova", Language: "en", Gender: GenderFemale, Provider: "openai"},
+		{ID: "shimmer", Name: "Shimmer", Language: "en", Gender: GenderFemale, Provider: "openai"},
 	}, nil
 }
 
-// ElevenLabs TTS implementation
-type ElevenLabsTTS struct {
-	config  TTSConfig
+type ElevenLabsProvider struct {
 	apiKey  string
 	baseURL string
+	voice   string
+	timeout time.Duration
+	client  *http.Client
 }
 
-func NewElevenLabsTTS() *ElevenLabsTTS {
-	return &ElevenLabsTTS{
+type ElevenLabsOption func(*ElevenLabsProvider)
+
+func WithElevenLabsBaseURL(url string) ElevenLabsOption {
+	return func(p *ElevenLabsProvider) {
+		p.baseURL = url
+	}
+}
+
+func WithElevenLabsVoice(voice string) ElevenLabsOption {
+	return func(p *ElevenLabsProvider) {
+		p.voice = voice
+	}
+}
+
+func WithElevenLabsTimeout(timeout time.Duration) ElevenLabsOption {
+	return func(p *ElevenLabsProvider) {
+		p.timeout = timeout
+	}
+}
+
+func NewElevenLabsProvider(apiKey string, opts ...ElevenLabsOption) (*ElevenLabsProvider, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("elevenlabs: API key is required")
+	}
+
+	p := &ElevenLabsProvider{
+		apiKey:  apiKey,
 		baseURL: "https://api.elevenlabs.io/v1",
+		voice:   "21m00Tcm4TlvDq8ikWAM",
+		timeout: 60 * time.Second,
+		client:  &http.Client{Timeout: 60 * time.Second},
 	}
+
+	for _, opt := range opts {
+		opt(p)
+	}
+
+	p.client.Timeout = p.timeout
+
+	return p, nil
 }
 
-func (t *ElevenLabsTTS) Name() string { return "elevenlabs-tts" }
-
-func (t *ElevenLabsTTS) Initialize(config TTSConfig) error {
-	t.config = config
-	t.apiKey = config.APIKey
-	if config.Endpoint != "" {
-		t.baseURL = config.Endpoint
-	}
-	return nil
+func (p *ElevenLabsProvider) Name() string {
+	return "elevenlabs"
 }
 
-func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string, options TTSOptions) (*AudioResult, error) {
-	if t.apiKey == "" {
-		return nil, fmt.Errorf("ElevenLabs API key not configured")
-	}
+func (p *ElevenLabsProvider) Type() ProviderType {
+	return ProviderElevenLabs
+}
 
-	voiceID := options.Voice
-	if voiceID == "" {
-		voiceID = "21m00Tcm4TlvDq8ikWAM" // Rachel voice
+func (p *ElevenLabsProvider) Synthesize(ctx context.Context, text string, opts ...SynthesizeOption) (*AudioResult, error) {
+	options := SynthesizeOptions{
+		Voice:  p.voice,
+		Format: FormatMP3,
+	}
+	for _, opt := range opts {
+		opt(&options)
 	}
 
 	payload := map[string]any{
@@ -178,200 +212,168 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string, options TTS
 			"use_speaker_boost": true,
 		},
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("elevenlabs: failed to marshal request: %w", err)
+	}
 
-	url := fmt.Sprintf("%s/text-to-speech/%s", t.baseURL, voiceID)
+	url := fmt.Sprintf("%s/text-to-speech/%s", p.baseURL, options.Voice)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elevenlabs: failed to create request: %w", err)
 	}
-	req.Header.Set("xi-api-key", t.apiKey)
+	req.Header.Set("xi-api-key", p.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elevenlabs: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ElevenLabs API error (%d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("elevenlabs: API error (%d): %s", resp.StatusCode, string(respBody))
 	}
 
-	audioData, _ := io.ReadAll(resp.Body)
+	audioData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("elevenlabs: failed to read response: %w", err)
+	}
 
 	return &AudioResult{
-		AudioData:   audioData,
-		Format:      "mp3",
+		Data:        audioData,
+		Format:      options.Format,
 		ContentType: "audio/mpeg",
 	}, nil
 }
 
-func (t *ElevenLabsTTS) ListVoices() []Voice {
+func (p *ElevenLabsProvider) ListVoices(ctx context.Context) ([]Voice, error) {
+	_ = ctx
 	return []Voice{
-		{ID: "21m00Tcm4TlvDq8ikWAM", Name: "Rachel", Language: "en", Gender: "female", Provider: "elevenlabs"},
-		{ID: "EXAVITQu4vr4xnSDxMaL", Name: "Bella", Language: "en", Gender: "female", Provider: "elevenlabs"},
-		{ID: "ErXwobaYiN019PkySvjV", Name: "Antoni", Language: "en", Gender: "male", Provider: "elevenlabs"},
-		{ID: "VR6AewLTigWG4xSOukaG", Name: "Arnold", Language: "en", Gender: "male", Provider: "elevenlabs"},
-		{ID: "pNInz6obpgDQGcFmaJgB", Name: "Adam", Language: "en", Gender: "male", Provider: "elevenlabs"},
+		{ID: "21m00Tcm4TlvDq8ikWAM", Name: "Rachel", Language: "en", Gender: GenderFemale, Provider: "elevenlabs"},
+		{ID: "EXAVITQu4vr4xnSDxMaL", Name: "Bella", Language: "en", Gender: GenderFemale, Provider: "elevenlabs"},
+		{ID: "ErXwobaYiN019PkySvjV", Name: "Antoni", Language: "en", Gender: GenderMale, Provider: "elevenlabs"},
+		{ID: "VR6AewLTigWG4xSOukaG", Name: "Arnold", Language: "en", Gender: GenderMale, Provider: "elevenlabs"},
+		{ID: "pNInz6obpgDQGcFmaJgB", Name: "Adam", Language: "en", Gender: GenderMale, Provider: "elevenlabs"},
+	}, nil
+}
+
+type EdgeProvider struct {
+	baseURL  string
+	voice    string
+	language string
+	timeout  time.Duration
+	client   *http.Client
+}
+
+type EdgeOption func(*EdgeProvider)
+
+func WithEdgeBaseURL(url string) EdgeOption {
+	return func(p *EdgeProvider) {
+		p.baseURL = url
 	}
 }
 
-func (t *ElevenLabsTTS) Close() error {
-	return nil
-}
-
-// Edge TTS implementation (Microsoft Edge Read Aloud)
-type EdgeTTS struct {
-	config  TTSConfig
-	baseURL string
-}
-
-func NewEdgeTTS() *EdgeTTS {
-	return &EdgeTTS{
-		baseURL: "https://speech.platform.bing.com",
+func WithEdgeVoice(voice string) EdgeOption {
+	return func(p *EdgeProvider) {
+		p.voice = voice
 	}
 }
 
-func (t *EdgeTTS) Name() string { return "edge-tts" }
-
-func (t *EdgeTTS) Initialize(config TTSConfig) error {
-	t.config = config
-	if config.Endpoint != "" {
-		t.baseURL = config.Endpoint
+func WithEdgeLanguage(lang string) EdgeOption {
+	return func(p *EdgeProvider) {
+		p.language = lang
 	}
-	return nil
 }
 
-func (t *EdgeTTS) Synthesize(ctx context.Context, text string, options TTSOptions) (*AudioResult, error) {
-	// Edge TTS uses SSML
-	voice := options.Voice
-	if voice == "" {
-		voice = "en-US-AriaNeural"
+func WithEdgeTimeout(timeout time.Duration) EdgeOption {
+	return func(p *EdgeProvider) {
+		p.timeout = timeout
+	}
+}
+
+func NewEdgeProvider(opts ...EdgeOption) (*EdgeProvider, error) {
+	p := &EdgeProvider{
+		baseURL:  "https://speech.platform.bing.com",
+		voice:    "en-US-AriaNeural",
+		language: "en-US",
+		timeout:  30 * time.Second,
+		client:   &http.Client{Timeout: 30 * time.Second},
 	}
 
-	ssml := fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
+	for _, opt := range opts {
+		opt(p)
+	}
+
+	p.client.Timeout = p.timeout
+
+	return p, nil
+}
+
+func (p *EdgeProvider) Name() string {
+	return "edge"
+}
+
+func (p *EdgeProvider) Type() ProviderType {
+	return ProviderEdge
+}
+
+func (p *EdgeProvider) Synthesize(ctx context.Context, text string, opts ...SynthesizeOption) (*AudioResult, error) {
+	options := SynthesizeOptions{
+		Voice:    p.voice,
+		Language: p.language,
+		Format:   FormatMP3,
+	}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	if options.Voice == "" {
+		options.Voice = p.voice
+	}
+
+	ssml := fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="%s">
 		<voice name="%s">%s</voice>
-	</speak>`, voice, text)
+	</speak>`, options.Language, options.Voice, text)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL+"/synthesize", bytes.NewReader([]byte(ssml)))
+	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/synthesize", bytes.NewReader([]byte(ssml)))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("edge: failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/ssml+xml")
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("edge: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	audioData, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("edge: API error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	audioData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("edge: failed to read response: %w", err)
+	}
 
 	return &AudioResult{
-		AudioData:   audioData,
-		Format:      "audio-24khz-48kbitrate-mono-mp3",
+		Data:        audioData,
+		Format:      options.Format,
 		ContentType: "audio/mpeg",
 	}, nil
 }
 
-func (t *EdgeTTS) ListVoices() []Voice {
+func (p *EdgeProvider) ListVoices(ctx context.Context) ([]Voice, error) {
+	_ = ctx
 	return []Voice{
-		{ID: "en-US-AriaNeural", Name: "Aria", Language: "en-US", Gender: "female", Provider: "edge"},
-		{ID: "en-US-GuyNeural", Name: "Guy", Language: "en-US", Gender: "male", Provider: "edge"},
-		{ID: "zh-CN-XiaoxiaoNeural", Name: "Xiaoxiao", Language: "zh-CN", Gender: "female", Provider: "edge"},
-		{ID: "zh-CN-YunxiNeural", Name: "Yunxi", Language: "zh-CN", Gender: "male", Provider: "edge"},
-		{ID: "ja-JP-NanamiNeural", Name: "Nanami", Language: "ja-JP", Gender: "female", Provider: "edge"},
-		{ID: "ko-KR-SunHiNeural", Name: "SunHi", Language: "ko-KR", Gender: "female", Provider: "edge"},
-	}
-}
-
-func (t *EdgeTTS) Close() error {
-	return nil
-}
-
-// SpeechManager provides high-level speech operations
-type SpeechManager struct {
-	registry   *SpeechProviderRegistry
-	defaultTTS string
-	defaultSTT string
-}
-
-func NewSpeechManager() *SpeechManager {
-	registry := NewSpeechProviderRegistry()
-
-	// Register default providers
-	registry.RegisterTTS("openai", NewOpenAITTS())
-	registry.RegisterTTS("elevenlabs", NewElevenLabsTTS())
-	registry.RegisterTTS("edge", NewEdgeTTS())
-	registry.RegisterSTT("openai", NewOpenAISTT())
-
-	return &SpeechManager{
-		registry:   registry,
-		defaultTTS: "openai",
-		defaultSTT: "openai",
-	}
-}
-
-func (sm *SpeechManager) TextToSpeech(ctx context.Context, text string, voice string, provider string) (*AudioResult, error) {
-	if provider == "" {
-		provider = sm.defaultTTS
-	}
-
-	engine, ok := sm.registry.GetTTS(provider)
-	if !ok {
-		return nil, fmt.Errorf("TTS provider not found: %s", provider)
-	}
-
-	options := TTSOptions{
-		Voice:  voice,
-		Speed:  1.0,
-		Engine: provider,
-	}
-
-	return engine.Synthesize(ctx, text, options)
-}
-
-func (sm *SpeechManager) SpeechToText(ctx context.Context, audioData []byte, language string, provider string) (*TranscriptionResult, error) {
-	if provider == "" {
-		provider = sm.defaultSTT
-	}
-
-	engine, ok := sm.registry.GetSTT(provider)
-	if !ok {
-		return nil, fmt.Errorf("STT provider not found: %s", provider)
-	}
-
-	options := STTOptions{
-		Language: language,
-	}
-
-	return engine.Recognize(ctx, audioData, options)
-}
-
-func (sm *SpeechManager) ListTTSVoices(provider string) []Voice {
-	if provider == "" {
-		provider = sm.defaultTTS
-	}
-
-	engine, ok := sm.registry.GetTTS(provider)
-	if !ok {
-		return nil
-	}
-	return engine.ListVoices()
-}
-
-func (sm *SpeechManager) ListSTTModels(provider string) []STTModel {
-	if provider == "" {
-		provider = sm.defaultSTT
-	}
-
-	engine, ok := sm.registry.GetSTT(provider)
-	if !ok {
-		return nil
-	}
-	return engine.ListModels()
+		{ID: "en-US-AriaNeural", Name: "Aria", Language: "en-US", LanguageTag: "en-US", Gender: GenderFemale, Provider: "edge"},
+		{ID: "en-US-GuyNeural", Name: "Guy", Language: "en-US", LanguageTag: "en-US", Gender: GenderMale, Provider: "edge"},
+		{ID: "zh-CN-XiaoxiaoNeural", Name: "Xiaoxiao", Language: "zh-CN", LanguageTag: "zh-CN", Gender: GenderFemale, Provider: "edge"},
+		{ID: "zh-CN-YunxiNeural", Name: "Yunxi", Language: "zh-CN", LanguageTag: "zh-CN", Gender: GenderMale, Provider: "edge"},
+		{ID: "ja-JP-NanamiNeural", Name: "Nanami", Language: "ja-JP", LanguageTag: "ja-JP", Gender: GenderFemale, Provider: "edge"},
+		{ID: "ko-KR-SunHiNeural", Name: "SunHi", Language: "ko-KR", LanguageTag: "ko-KR", Gender: GenderFemale, Provider: "edge"},
+	}, nil
 }

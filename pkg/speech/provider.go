@@ -2,290 +2,174 @@ package speech
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"time"
 )
 
-type TTSEngine interface {
+type ProviderType string
+
+const (
+	ProviderOpenAI     ProviderType = "openai"
+	ProviderElevenLabs ProviderType = "elevenlabs"
+	ProviderEdge       ProviderType = "edge"
+	ProviderAzure      ProviderType = "azure"
+	ProviderGoogle     ProviderType = "google"
+	ProviderAliyun     ProviderType = "aliyun"
+	ProviderCustom     ProviderType = "custom"
+)
+
+type AudioFormat string
+
+const (
+	FormatMP3  AudioFormat = "mp3"
+	FormatWAV  AudioFormat = "wav"
+	FormatOGG  AudioFormat = "ogg"
+	FormatFLAC AudioFormat = "flac"
+	FormatPCM  AudioFormat = "pcm"
+)
+
+type VoiceGender string
+
+const (
+	GenderMale    VoiceGender = "male"
+	GenderFemale  VoiceGender = "female"
+	GenderNeutral VoiceGender = "neutral"
+)
+
+type Provider interface {
 	Name() string
-	Initialize(config TTSConfig) error
-	Synthesize(ctx context.Context, text string, options TTSOptions) (*AudioResult, error)
-	ListVoices() []Voice
-	Close() error
+	Type() ProviderType
+	Synthesize(ctx context.Context, text string, opts ...SynthesizeOption) (*AudioResult, error)
+	ListVoices(ctx context.Context) ([]Voice, error)
 }
 
-type STTEngine interface {
-	Name() string
-	Initialize(config STTConfig) error
-	Recognize(ctx context.Context, audioData []byte, options STTOptions) (*TranscriptionResult, error)
-	ListModels() []STTModel
-	Close() error
-}
-
-type TTSConfig struct {
-	Provider    string
+type Config struct {
+	Type        ProviderType
 	APIKey      string
-	Endpoint    string
-	VoiceID     string
+	BaseURL     string
+	Voice       string
 	Language    string
 	SampleRate  int
-	AudioFormat string
+	AudioFormat AudioFormat
+	Timeout     time.Duration
 }
 
-type TTSOptions struct {
-	Voice  string
-	Speed  float64
-	Pitch  float64
-	Volume float64
-	Format string
-	Engine string
+func NewProvider(cfg Config) (Provider, error) {
+	switch cfg.Type {
+	case ProviderOpenAI:
+		opts := []OpenAIOption{}
+		if cfg.BaseURL != "" {
+			opts = append(opts, WithOpenAIBaseURL(cfg.BaseURL))
+		}
+		if cfg.Voice != "" {
+			opts = append(opts, WithOpenAIVoice(cfg.Voice))
+		}
+		if cfg.Timeout > 0 {
+			opts = append(opts, WithOpenAITimeout(cfg.Timeout))
+		}
+		return NewOpenAIProvider(cfg.APIKey, opts...)
+	case ProviderElevenLabs:
+		opts := []ElevenLabsOption{}
+		if cfg.BaseURL != "" {
+			opts = append(opts, WithElevenLabsBaseURL(cfg.BaseURL))
+		}
+		if cfg.Voice != "" {
+			opts = append(opts, WithElevenLabsVoice(cfg.Voice))
+		}
+		if cfg.Timeout > 0 {
+			opts = append(opts, WithElevenLabsTimeout(cfg.Timeout))
+		}
+		return NewElevenLabsProvider(cfg.APIKey, opts...)
+	case ProviderEdge:
+		opts := []EdgeOption{}
+		if cfg.BaseURL != "" {
+			opts = append(opts, WithEdgeBaseURL(cfg.BaseURL))
+		}
+		if cfg.Voice != "" {
+			opts = append(opts, WithEdgeVoice(cfg.Voice))
+		}
+		if cfg.Language != "" {
+			opts = append(opts, WithEdgeLanguage(cfg.Language))
+		}
+		if cfg.Timeout > 0 {
+			opts = append(opts, WithEdgeTimeout(cfg.Timeout))
+		}
+		return NewEdgeProvider(opts...)
+	default:
+		return nil, fmt.Errorf("unknown TTS provider: %s", cfg.Type)
+	}
+}
+
+type SynthesizeOptions struct {
+	Voice      string
+	Speed      float64
+	Pitch      float64
+	Volume     float64
+	Format     AudioFormat
+	Language   string
+	SampleRate int
+}
+
+type SynthesizeOption func(*SynthesizeOptions)
+
+func WithVoice(voice string) SynthesizeOption {
+	return func(o *SynthesizeOptions) {
+		o.Voice = voice
+	}
+}
+
+func WithSpeed(speed float64) SynthesizeOption {
+	return func(o *SynthesizeOptions) {
+		o.Speed = speed
+	}
+}
+
+func WithPitch(pitch float64) SynthesizeOption {
+	return func(o *SynthesizeOptions) {
+		o.Pitch = pitch
+	}
+}
+
+func WithVolume(volume float64) SynthesizeOption {
+	return func(o *SynthesizeOptions) {
+		o.Volume = volume
+	}
+}
+
+func WithFormat(format AudioFormat) SynthesizeOption {
+	return func(o *SynthesizeOptions) {
+		o.Format = format
+	}
+}
+
+func WithLanguage(lang string) SynthesizeOption {
+	return func(o *SynthesizeOptions) {
+		o.Language = lang
+	}
+}
+
+func WithSampleRate(rate int) SynthesizeOption {
+	return func(o *SynthesizeOptions) {
+		o.SampleRate = rate
+	}
 }
 
 type AudioResult struct {
-	AudioData   []byte
-	Format      string
+	Data        []byte
+	Format      AudioFormat
 	SampleRate  int
+	Channels    int
+	BitDepth    int
 	Duration    time.Duration
 	ContentType string
 }
 
 type Voice struct {
-	ID       string
-	Name     string
-	Language string
-	Gender   string
-	Provider string
-}
-
-type STTConfig struct {
-	Provider   string
-	APIKey     string
-	Endpoint   string
-	Model      string
-	Language   string
-	SampleRate int
-}
-
-type STTOptions struct {
-	Model       string
-	Language    string
-	Punctuation bool
-	Diarization bool
-}
-
-type TranscriptionResult struct {
-	Text       string
-	Confidence float64
-	Segments   []TranscriptionSegment
-	Language   string
-	Duration   time.Duration
-}
-
-type TranscriptionSegment struct {
-	Text       string
-	StartTime  time.Duration
-	EndTime    time.Duration
-	Confidence float64
-}
-
-type STTModel struct {
 	ID          string
 	Name        string
 	Language    string
+	LanguageTag string
+	Gender      VoiceGender
 	Provider    string
 	Description string
-}
-
-type SpeechProviderRegistry struct {
-	ttsEngines map[string]TTSEngine
-	sttEngines map[string]STTEngine
-}
-
-func NewSpeechProviderRegistry() *SpeechProviderRegistry {
-	return &SpeechProviderRegistry{
-		ttsEngines: make(map[string]TTSEngine),
-		sttEngines: make(map[string]STTEngine),
-	}
-}
-
-func (r *SpeechProviderRegistry) RegisterTTS(name string, engine TTSEngine) error {
-	if _, exists := r.ttsEngines[name]; exists {
-		return fmt.Errorf("TTS engine already registered: %s", name)
-	}
-	r.ttsEngines[name] = engine
-	return nil
-}
-
-func (r *SpeechProviderRegistry) RegisterSTT(name string, engine STTEngine) error {
-	if _, exists := r.sttEngines[name]; exists {
-		return fmt.Errorf("STT engine already registered: %s", name)
-	}
-	r.sttEngines[name] = engine
-	return nil
-}
-
-func (r *SpeechProviderRegistry) GetTTS(name string) (TTSEngine, bool) {
-	engine, ok := r.ttsEngines[name]
-	return engine, ok
-}
-
-func (r *SpeechProviderRegistry) GetSTT(name string) (STTEngine, bool) {
-	engine, ok := r.sttEngines[name]
-	return engine, ok
-}
-
-func (r *SpeechProviderRegistry) ListTTS() []string {
-	names := make([]string, 0, len(r.ttsEngines))
-	for name := range r.ttsEngines {
-		names = append(names, name)
-	}
-	return names
-}
-
-func (r *SpeechProviderRegistry) ListSTT() []string {
-	names := make([]string, 0, len(r.sttEngines))
-	for name := range r.sttEngines {
-		names = append(names, name)
-	}
-	return names
-}
-
-type OpenAITTS struct {
-	config  TTSConfig
-	baseURL string
-	apiKey  string
-	client  HTTPClient
-}
-
-type HTTPClient interface {
-	Do(req interface{}) (interface{}, error)
-}
-
-func NewOpenAITTS() *OpenAITTS {
-	return &OpenAITTS{}
-}
-
-func (t *OpenAITTS) Name() string { return "openai-tts" }
-
-func (t *OpenAITTS) Initialize(config TTSConfig) error {
-	t.config = config
-	if config.Endpoint != "" {
-		t.baseURL = config.Endpoint
-	} else {
-		t.baseURL = "https://api.openai.com"
-	}
-	t.apiKey = config.APIKey
-	return nil
-}
-
-func (t *OpenAITTS) Synthesize(ctx context.Context, text string, options TTSOptions) (*AudioResult, error) {
-	_ = ctx
-	_ = text
-	_ = options
-	return &AudioResult{
-		AudioData:   []byte{},
-		Format:      "mp3",
-		SampleRate:  24000,
-		Duration:    0,
-		ContentType: "audio/mp3",
-	}, nil
-}
-
-func (t *OpenAITTS) ListVoices() []Voice {
-	return []Voice{
-		{ID: "alloy", Name: "Alloy", Language: "en", Gender: "neutral", Provider: "openai"},
-		{ID: "echo", Name: "Echo", Language: "en", Gender: "male", Provider: "openai"},
-		{ID: "fable", Name: "Fable", Language: "en", Gender: "neutral", Provider: "openai"},
-		{ID: "onyx", Name: "Onyx", Language: "en", Gender: "male", Provider: "openai"},
-		{ID: "shimmer", Name: "Shimmer", Language: "en", Gender: "female", Provider: "openai"},
-	}
-}
-
-func (t *OpenAITTS) Close() error {
-	return nil
-}
-
-type OpenAISTT struct {
-	config  STTConfig
-	baseURL string
-	apiKey  string
-}
-
-func NewOpenAISTT() *OpenAISTT {
-	return &OpenAISTT{}
-}
-
-func (s *OpenAISTT) Name() string { return "openai-stt" }
-
-func (s *OpenAISTT) Initialize(config STTConfig) error {
-	s.config = config
-	if config.Endpoint != "" {
-		s.baseURL = config.Endpoint
-	} else {
-		s.baseURL = "https://api.openai.com"
-	}
-	s.apiKey = config.APIKey
-	return nil
-}
-
-func (s *OpenAISTT) Recognize(ctx context.Context, audioData []byte, options STTOptions) (*TranscriptionResult, error) {
-	_ = ctx
-	_ = audioData
-	_ = options
-	return &TranscriptionResult{
-		Text:       "",
-		Confidence: 0.0,
-		Language:   "en",
-	}, nil
-}
-
-func (s *OpenAISTT) ListModels() []STTModel {
-	return []STTModel{
-		{ID: "whisper-1", Name: "Whisper", Language: "multi", Provider: "openai", Description: "OpenAI Whisper model"},
-	}
-}
-
-func (s *OpenAISTT) Close() error {
-	return nil
-}
-
-type PluginSpeechProvider struct {
-	Name_      string
-	Type_      string
-	Entrypoint string
-	Config     map[string]any
-}
-
-func (p *PluginSpeechProvider) AsTTS() TTSEngine {
-	return nil
-}
-
-func (p *PluginSpeechProvider) AsSTT() STTEngine {
-	return nil
-}
-
-func RegisterPluginSpeechProvider(registry *SpeechProviderRegistry, manifest map[string]any) error {
-	name, _ := manifest["name"].(string)
-	speechType, _ := manifest["speech_type"].(string)
-
-	if name == "" || speechType == "" {
-		return fmt.Errorf("invalid manifest: missing name or speech_type")
-	}
-
-	if speechType == "tts" {
-		return registry.RegisterTTS(name, nil)
-	} else if speechType == "stt" {
-		return registry.RegisterSTT(name, nil)
-	}
-
-	return fmt.Errorf("unsupported speech type: %s", speechType)
-}
-
-func AudioToBase64(data []byte) string {
-	return base64.StdEncoding.EncodeToString(data)
-}
-
-func Base64ToAudio(b64 string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(b64)
 }
