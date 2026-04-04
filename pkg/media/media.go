@@ -48,6 +48,7 @@ type Processor struct {
 	allowedTypes []Type
 	httpClient   *http.Client
 	detector     *Detector
+	transcoder   *Transcoder
 }
 
 func NewProcessor(storagePath string) *Processor {
@@ -57,7 +58,20 @@ func NewProcessor(storagePath string) *Processor {
 		allowedTypes: []Type{TypeImage, TypeAudio, TypeVideo, TypeDoc},
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		detector:     NewDetector(),
+		transcoder:   NewTranscoder(),
 	}
+}
+
+func (p *Processor) SetTranscoder(t *Transcoder) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.transcoder = t
+}
+
+func (p *Processor) Transcoder() *Transcoder {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.transcoder
 }
 
 func (p *Processor) SetDetector(d *Detector) {
@@ -252,6 +266,124 @@ func (p *Processor) Load(path string) (*Media, error) {
 		Base64:   base64.StdEncoding.EncodeToString(data),
 		Path:     path,
 	}, nil
+}
+
+func (p *Processor) Compress(ctx context.Context, media *Media, opts ImageOptions) (*Media, error) {
+	p.mu.RLock()
+	transcoder := p.transcoder
+	p.mu.RUnlock()
+
+	if transcoder == nil {
+		return nil, fmt.Errorf("no transcoder configured")
+	}
+
+	if len(media.Data) == 0 && media.Path != "" {
+		data, err := os.ReadFile(media.Path)
+		if err != nil {
+			return nil, fmt.Errorf("read media file: %w", err)
+		}
+		media.Data = data
+	}
+
+	var result []byte
+	var err error
+
+	switch media.Type {
+	case TypeImage:
+		result, err = transcoder.CompressImage(media.Data, opts)
+	case TypeAudio:
+		audioOpts := DefaultAudioOptions()
+		if opts.Format != FormatUnknown {
+			audioOpts.Format = opts.Format
+		}
+		if opts.Quality > 0 {
+			audioOpts.Bitrate = opts.Quality
+		}
+		result, err = transcoder.TranscodeAudio(ctx, media.Data, audioOpts)
+	case TypeVideo:
+		videoOpts := DefaultVideoOptions()
+		if opts.Format != FormatUnknown {
+			videoOpts.Format = opts.Format
+		}
+		if opts.Quality > 0 {
+			videoOpts.CRF = 51 - opts.Quality/2
+		}
+		result, err = transcoder.TranscodeVideo(ctx, media.Data, videoOpts)
+	default:
+		return nil, fmt.Errorf("unsupported media type for compression: %s", media.Type)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("compress media: %w", err)
+	}
+
+	media.Data = result
+	media.Size = int64(len(result))
+	media.Base64 = base64.StdEncoding.EncodeToString(result)
+
+	detected := DetectMediaType(result, media.Name, media.MimeType)
+	if detected.Format != FormatUnknown {
+		media.Type = detected.Type
+		media.MimeType = detected.MimeType
+		if media.Metadata == nil {
+			media.Metadata = make(map[string]any)
+		}
+		media.Metadata["format"] = string(detected.Format)
+	}
+
+	return media, nil
+}
+
+func (p *Processor) Convert(ctx context.Context, media *Media, targetFormat Format) (*Media, error) {
+	p.mu.RLock()
+	transcoder := p.transcoder
+	p.mu.RUnlock()
+
+	if transcoder == nil {
+		return nil, fmt.Errorf("no transcoder configured")
+	}
+
+	if len(media.Data) == 0 && media.Path != "" {
+		data, err := os.ReadFile(media.Path)
+		if err != nil {
+			return nil, fmt.Errorf("read media file: %w", err)
+		}
+		media.Data = data
+	}
+
+	var result []byte
+	var err error
+
+	switch media.Type {
+	case TypeImage:
+		result, err = transcoder.ConvertImage(media.Data, targetFormat)
+	case TypeAudio:
+		audioOpts := DefaultAudioOptions()
+		audioOpts.Format = targetFormat
+		result, err = transcoder.TranscodeAudio(ctx, media.Data, audioOpts)
+	case TypeVideo:
+		videoOpts := DefaultVideoOptions()
+		videoOpts.Format = targetFormat
+		result, err = transcoder.TranscodeVideo(ctx, media.Data, videoOpts)
+	default:
+		return nil, fmt.Errorf("unsupported media type for conversion: %s", media.Type)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("convert media: %w", err)
+	}
+
+	media.Data = result
+	media.Size = int64(len(result))
+	media.Base64 = base64.StdEncoding.EncodeToString(result)
+	media.MimeType = formatToMIME(targetFormat)
+
+	if media.Metadata == nil {
+		media.Metadata = make(map[string]any)
+	}
+	media.Metadata["format"] = string(targetFormat)
+
+	return media, nil
 }
 
 func (p *Processor) guessType(mimeType string) Type {

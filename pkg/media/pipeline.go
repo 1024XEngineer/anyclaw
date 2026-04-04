@@ -35,6 +35,10 @@ type MediaPipelineConfig struct {
 	UserAgent        string
 	AllowedMimeTypes []string
 	BlockedSchemes   []string
+	Transcode        bool
+	ImageOptions     ImageOptions
+	AudioOptions     AudioOptions
+	VideoOptions     VideoOptions
 }
 
 func DefaultMediaPipelineConfig() MediaPipelineConfig {
@@ -471,7 +475,85 @@ func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int6
 
 	_, _ = p.processor.Process(ctx, media)
 
+	if p.config.Transcode {
+		if err := p.transcodeMedia(ctx, media); err != nil {
+			return nil, fmt.Errorf("media-pipeline: transcode failed: %w", err)
+		}
+	}
+
 	return media, nil
+}
+
+func (p *MediaPipeline) transcodeMedia(ctx context.Context, media *Media) error {
+	transcoder := p.processor.Transcoder()
+	if transcoder == nil {
+		return nil
+	}
+
+	switch media.Type {
+	case TypeImage:
+		opts := p.config.ImageOptions
+		if opts.Format == FormatUnknown {
+			opts.Format = FormatJPEG
+		}
+		if opts.Quality == 0 {
+			opts.Quality = int(QualityHigh)
+		}
+		result, err := transcoder.CompressImage(media.Data, opts)
+		if err != nil {
+			return fmt.Errorf("compress image: %w", err)
+		}
+		media.Data = result
+		media.Size = int64(len(result))
+		media.Base64 = ""
+		detected := DetectMediaType(result, media.Name, media.MimeType)
+		if detected.Format != FormatUnknown {
+			media.MimeType = detected.MimeType
+			if media.Metadata == nil {
+				media.Metadata = make(map[string]any)
+			}
+			media.Metadata["format"] = string(detected.Format)
+			media.Metadata["compressed"] = true
+		}
+	case TypeAudio:
+		opts := p.config.AudioOptions
+		if opts.Format == FormatUnknown {
+			opts.Format = FormatMP3
+		}
+		result, err := transcoder.TranscodeAudio(ctx, media.Data, opts)
+		if err != nil {
+			return fmt.Errorf("transcode audio: %w", err)
+		}
+		media.Data = result
+		media.Size = int64(len(result))
+		media.Base64 = ""
+		media.MimeType = formatToMIME(opts.Format)
+		if media.Metadata == nil {
+			media.Metadata = make(map[string]any)
+		}
+		media.Metadata["format"] = string(opts.Format)
+		media.Metadata["compressed"] = true
+	case TypeVideo:
+		opts := p.config.VideoOptions
+		if opts.Format == FormatUnknown {
+			opts.Format = FormatMP4
+		}
+		result, err := transcoder.TranscodeVideo(ctx, media.Data, opts)
+		if err != nil {
+			return fmt.Errorf("transcode video: %w", err)
+		}
+		media.Data = result
+		media.Size = int64(len(result))
+		media.Base64 = ""
+		media.MimeType = formatToMIME(opts.Format)
+		if media.Metadata == nil {
+			media.Metadata = make(map[string]any)
+		}
+		media.Metadata["format"] = string(opts.Format)
+		media.Metadata["compressed"] = true
+	}
+
+	return nil
 }
 
 func filenameFromURL(rawURL string) string {
