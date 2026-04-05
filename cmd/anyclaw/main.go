@@ -106,6 +106,8 @@ func run(ctx context.Context, args []string) error {
 			return runTaskCommand(ctx, args[1:])
 		case "mcp":
 			return runMCPCommand(args[1:])
+		case "tui":
+			return runTUICommand(args[1:])
 		}
 	}
 

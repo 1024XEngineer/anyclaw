@@ -22,6 +22,7 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/chat"
 	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/anyclaw/anyclaw/pkg/cron"
 	"github.com/anyclaw/anyclaw/pkg/discovery"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/mcp"
@@ -953,7 +954,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/discovery", s.wrap("/discovery", s.handleDiscoveryUI))
 
 	// Cron jobs
-	mux.HandleFunc("/cron", s.wrap("/cron", requirePermission("cron.read", s.handleCronList)))
+	cron.RegisterUIHandler(mux, cronScheduler, "/cron")
 	mux.HandleFunc("/cron/", s.wrap("/cron/", s.handleCronByID))
 
 	// Canvas

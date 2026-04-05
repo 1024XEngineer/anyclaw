@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/anyclaw/anyclaw/pkg/cron"
 )
@@ -156,12 +157,25 @@ func (s *Server) handleNodeInvoke(w http.ResponseWriter, r *http.Request) {
 // Cron handlers
 
 var cronScheduler *cron.Scheduler
+var cronInitOnce sync.Once
+
+func (s *Server) initCronScheduler() {
+	cronInitOnce.Do(func() {
+		executor := cron.NewAgentExecutor(s.app.Agent, s.app.Orchestrator)
+		cronScheduler = cron.NewScheduler(executor)
+
+		persister, err := cron.NewFilePersister("")
+		if err == nil {
+			cronScheduler.SetPersister(persister)
+			_ = cronScheduler.LoadPersisted()
+		}
+
+		_ = cronScheduler.Start()
+	})
+}
 
 func (s *Server) handleCronList(w http.ResponseWriter, r *http.Request) {
-	if cronScheduler == nil {
-		cronScheduler = cron.New()
-		_ = cronScheduler.Start()
-	}
+	s.initCronScheduler()
 
 	switch r.Method {
 	case http.MethodGet:
@@ -196,10 +210,7 @@ func (s *Server) handleCronList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCronByID(w http.ResponseWriter, r *http.Request) {
-	if cronScheduler == nil {
-		cronScheduler = cron.New()
-		_ = cronScheduler.Start()
-	}
+	s.initCronScheduler()
 
 	path := strings.TrimPrefix(r.URL.Path, "/cron/")
 	path = strings.TrimSpace(path)
@@ -270,10 +281,7 @@ func (s *Server) handleCronStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if cronScheduler == nil {
-		cronScheduler = cron.New()
-		_ = cronScheduler.Start()
-	}
+	s.initCronScheduler()
 
 	writeJSON(w, http.StatusOK, cronScheduler.Stats())
 }

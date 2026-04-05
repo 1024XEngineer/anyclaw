@@ -9,21 +9,22 @@ import (
 )
 
 type Task struct {
-	ID         string                 `json:"id"`
-	Name       string                 `json:"name"`
-	Schedule   string                 `json:"schedule"`
-	Command    string                 `json:"command"`
-	Input      map[string]interface{} `json:"input,omitempty"`
-	Agent      string                 `json:"agent,omitempty"`
-	Workspace  string                 `json:"workspace,omitempty"`
-	Enabled    bool                   `json:"enabled"`
-	Timezone   string                 `json:"timezone,omitempty"`
-	MaxRetries int                    `json:"max_retries"`
-	Timeout    int                    `json:"timeout_seconds"`
-	CreatedAt  time.Time              `json:"created_at"`
-	UpdatedAt  time.Time              `json:"updated_at"`
-	LastRun    *time.Time             `json:"last_run,omitempty"`
-	NextRun    *time.Time             `json:"next_run,omitempty"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Schedule     string                 `json:"schedule"`
+	Command      string                 `json:"command"`
+	Input        map[string]interface{} `json:"input,omitempty"`
+	Agent        string                 `json:"agent,omitempty"`
+	Workspace    string                 `json:"workspace,omitempty"`
+	Enabled      bool                   `json:"enabled"`
+	Timezone     string                 `json:"timezone,omitempty"`
+	MaxRetries   int                    `json:"max_retries"`
+	RetryBackoff string                 `json:"retry_backoff,omitempty"` // "fixed", "exponential", "linear"
+	Timeout      int                    `json:"timeout_seconds"`
+	CreatedAt    time.Time              `json:"created_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
+	LastRun      *time.Time             `json:"last_run,omitempty"`
+	NextRun      *time.Time             `json:"next_run,omitempty"`
 }
 
 type TaskRun struct {
@@ -36,6 +37,7 @@ type TaskRun struct {
 	Error     string     `json:"error,omitempty"`
 	Output    string     `json:"output,omitempty"`
 	Retries   int        `json:"retries"`
+	Cancelled bool       `json:"cancelled,omitempty"`
 }
 
 type Executor interface {
@@ -50,6 +52,15 @@ type Scheduler struct {
 	running        bool
 	stopCh         chan struct{}
 	runHistorySize int
+	cancelFuncs    map[string]context.CancelFunc
+	persister      TaskPersister
+}
+
+type TaskPersister interface {
+	SaveTasks(tasks []*Task) error
+	LoadTasks() ([]*Task, error)
+	SaveRuns(runs []*TaskRun) error
+	LoadRuns() ([]*TaskRun, error)
 }
 
 func NewScheduler(executor Executor) *Scheduler {
@@ -59,7 +70,34 @@ func NewScheduler(executor Executor) *Scheduler {
 		executor:       executor,
 		runHistorySize: 100,
 		stopCh:         make(chan struct{}),
+		cancelFuncs:    make(map[string]context.CancelFunc),
 	}
+}
+
+func (s *Scheduler) SetPersister(p TaskPersister) {
+	s.persister = p
+}
+
+func (s *Scheduler) LoadPersisted() error {
+	if s.persister == nil {
+		return nil
+	}
+	tasks, err := s.persister.LoadTasks()
+	if err != nil {
+		return err
+	}
+	for _, t := range tasks {
+		s.tasks[t.ID] = t
+	}
+
+	runs, err := s.persister.LoadRuns()
+	if err != nil {
+		return err
+	}
+	for _, r := range runs {
+		s.taskRuns[r.TaskID] = append(s.taskRuns[r.TaskID], r)
+	}
+	return nil
 }
 
 func New() *Scheduler {
@@ -382,13 +420,44 @@ func (s *Scheduler) runTask(taskID string) {
 	}
 	s.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(task.Timeout)*time.Second)
-	defer cancel()
+	timeout := time.Duration(task.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 300 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+	s.mu.Lock()
+	s.cancelFuncs[run.ID] = cancel
+	s.mu.Unlock()
+
+	defer func() {
+		cancel()
+		s.mu.Lock()
+		delete(s.cancelFuncs, run.ID)
+		s.mu.Unlock()
+	}()
 
 	var result string
 	var err error
+	actualRetries := 0
 
 	for i := 0; i <= task.MaxRetries; i++ {
+		select {
+		case <-ctx.Done():
+			run.Status = "cancelled"
+			run.Cancelled = true
+			run.Retries = actualRetries
+			endTime := time.Now()
+			run.EndTime = &endTime
+			s.mu.Lock()
+			task.UpdatedAt = time.Now()
+			next := calculateNextRun(task.Schedule, time.Now())
+			task.NextRun = &next
+			s.mu.Unlock()
+			return
+		default:
+		}
+
 		if s.executor != nil {
 			result, err = s.executor.Execute(ctx, task.Command, task.Input)
 		} else {
@@ -400,7 +469,23 @@ func (s *Scheduler) runTask(taskID string) {
 		}
 
 		if i < task.MaxRetries {
-			time.Sleep(time.Second * 2)
+			actualRetries++
+			delay := s.calculateRetryDelay(i, task)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				run.Status = "cancelled"
+				run.Cancelled = true
+				run.Retries = actualRetries
+				endTime := time.Now()
+				run.EndTime = &endTime
+				s.mu.Lock()
+				task.UpdatedAt = time.Now()
+				next := calculateNextRun(task.Schedule, time.Now())
+				task.NextRun = &next
+				s.mu.Unlock()
+				return
+			}
 		}
 	}
 
@@ -416,13 +501,33 @@ func (s *Scheduler) runTask(taskID string) {
 		run.Output = result
 	}
 
-	run.Retries = task.MaxRetries
+	run.Retries = actualRetries
 
 	s.mu.Lock()
 	task.UpdatedAt = time.Now()
 	next := calculateNextRun(task.Schedule, time.Now())
 	task.NextRun = &next
 	s.mu.Unlock()
+
+	// Persist if configured
+	if s.persister != nil {
+		allRuns := make([]*TaskRun, 0)
+		for _, runs := range s.taskRuns {
+			allRuns = append(allRuns, runs...)
+		}
+		_ = s.persister.SaveRuns(allRuns)
+	}
+}
+
+func (s *Scheduler) calculateRetryDelay(attempt int, task *Task) time.Duration {
+	switch task.RetryBackoff {
+	case "exponential":
+		return time.Duration(1<<uint(attempt)) * time.Second
+	case "linear":
+		return time.Duration(attempt+1) * time.Second
+	default:
+		return 2 * time.Second
+	}
 }
 
 func (s *Scheduler) GetTaskRuns(taskID string) []*TaskRun {
