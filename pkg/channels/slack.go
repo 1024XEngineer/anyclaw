@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
@@ -87,11 +88,12 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 	var payload struct {
 		OK       bool `json:"ok"`
 		Messages []struct {
-			Text  string `json:"text"`
-			Ts    string `json:"ts"`
-			User  string `json:"user"`
-			BotID string `json:"bot_id"`
-			Files []struct {
+			Text     string `json:"text"`
+			Ts       string `json:"ts"`
+			ThreadTS string `json:"thread_ts"`
+			User     string `json:"user"`
+			BotID    string `json:"bot_id"`
+			Files    []struct {
 				Mimetype string `json:"mimetype"`
 				URL      string `json:"url_private"`
 				Title    string `json:"title"`
@@ -116,6 +118,7 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 			"reply_target": a.config.DefaultChannel,
 			"message_id":   msg.Ts,
 			"sender":       msg.User,
+			"thread_id":    msg.ThreadTS,
 		}
 
 		audioURL, audioMIME := a.findAudioFile(msg.Files)
@@ -127,7 +130,7 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 				meta["caption"] = strings.TrimSpace(msg.Text)
 			}
 
-			decision := a.router.Decide(RouteRequest{Channel: "slack", Source: a.config.DefaultChannel + ":" + msg.User, Text: "[voice message]"})
+			decision := a.router.Decide(RouteRequest{Channel: "slack", Source: a.config.DefaultChannel + ":" + msg.User, Text: "[voice message]", ThreadID: msg.ThreadTS})
 			sessionID := a.sessions[decision.Key]
 			if decision.SessionID != "" {
 				sessionID = decision.SessionID
@@ -139,7 +142,7 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 			if sessionID != "" {
 				a.sessions[decision.Key] = sessionID
 			}
-			if err := a.sendMessage(ctx, response); err != nil {
+			if err := a.sendMessage(ctx, response, msg.ThreadTS); err != nil {
 				return err
 			}
 			a.base.markActivity()
@@ -160,7 +163,7 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 			continue
 		}
 
-		decision := a.router.Decide(RouteRequest{Channel: "slack", Source: a.config.DefaultChannel + ":" + msg.User, Text: msg.Text})
+		decision := a.router.Decide(RouteRequest{Channel: "slack", Source: a.config.DefaultChannel + ":" + msg.User, Text: msg.Text, ThreadID: msg.ThreadTS})
 		sessionID := a.sessions[decision.Key]
 		if decision.SessionID != "" {
 			sessionID = decision.SessionID
@@ -172,7 +175,7 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 		if sessionID != "" {
 			a.sessions[decision.Key] = sessionID
 		}
-		if err := a.sendMessage(ctx, response); err != nil {
+		if err := a.sendMessage(ctx, response, msg.ThreadTS); err != nil {
 			return err
 		}
 		a.base.markActivity()
@@ -188,8 +191,12 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 	return nil
 }
 
-func (a *SlackAdapter) sendMessage(ctx context.Context, text string) error {
-	body, _ := json.Marshal(map[string]any{"channel": a.config.DefaultChannel, "text": text})
+func (a *SlackAdapter) sendMessage(ctx context.Context, text string, threadTS string) error {
+	bodyMap := map[string]any{"channel": a.config.DefaultChannel, "text": text}
+	if strings.TrimSpace(threadTS) != "" {
+		bodyMap["thread_ts"] = threadTS
+	}
+	body, _ := json.Marshal(bodyMap)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/chat.postMessage", bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -225,4 +232,206 @@ func (a *SlackAdapter) findAudioFile(files []struct {
 		}
 	}
 	return "", ""
+}
+
+func (a *SlackAdapter) sendMessageWithResult(ctx context.Context, text string) (string, error) {
+	body, _ := json.Marshal(map[string]any{"channel": a.config.DefaultChannel, "text": text})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/chat.postMessage", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.config.BotToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("slack send failed: %s", resp.Status)
+	}
+
+	var result struct {
+		OK bool   `json:"ok"`
+		Ts string `json:"ts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if !result.OK || result.Ts == "" {
+		return "", nil
+	}
+	return result.Ts, nil
+}
+
+func (a *SlackAdapter) editMessage(ctx context.Context, ts string, text string) error {
+	if ts == "" {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]any{"channel": a.config.DefaultChannel, "ts": ts, "text": text})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/chat.update", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.config.BotToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func (a *SlackAdapter) sendStreamingMessage(ctx context.Context, streamFn func(onChunk func(chunk string)) error) error {
+	streamInterval := time.Duration(a.config.StreamInterval) * time.Millisecond
+	if streamInterval <= 0 {
+		streamInterval = 500 * time.Millisecond
+	}
+
+	initialTs, err := a.sendMessageWithResult(ctx, "\u200B")
+	if err != nil {
+		return err
+	}
+	if initialTs == "" {
+		return streamFn(func(chunk string) {})
+	}
+
+	var accumulated strings.Builder
+	var mu sync.Mutex
+	lastEdit := time.Now()
+
+	onChunk := func(chunk string) {
+		mu.Lock()
+		accumulated.WriteString(chunk)
+		shouldEdit := time.Since(lastEdit) >= streamInterval
+		if shouldEdit {
+			lastEdit = time.Now()
+		}
+		mu.Unlock()
+
+		if shouldEdit {
+			mu.Lock()
+			text := accumulated.String()
+			mu.Unlock()
+			a.editMessage(ctx, initialTs, text)
+		}
+	}
+
+	if err := streamFn(onChunk); err != nil {
+		mu.Lock()
+		final := accumulated.String()
+		mu.Unlock()
+		a.editMessage(ctx, initialTs, final+"\n\n[Error: "+err.Error()+"]")
+		return err
+	}
+
+	mu.Lock()
+	final := accumulated.String()
+	mu.Unlock()
+	a.editMessage(ctx, initialTs, final)
+	return nil
+}
+
+func (a *SlackAdapter) RunStream(ctx context.Context, handle StreamChunkHandler) error {
+	a.base.setRunning(true)
+	defer a.base.setRunning(false)
+	interval := time.Duration(a.config.PollEvery) * time.Second
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		if err := a.pollOnceStream(ctx, handle); err != nil {
+			a.base.setError(err)
+			a.append("channel.slack.error", "", map[string]any{"error": err.Error()})
+		} else {
+			a.base.setError(nil)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHandler) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://slack.com/api/conversations.history?channel="+a.config.DefaultChannel+"&limit=10", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.config.BotToken)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		OK       bool `json:"ok"`
+		Messages []struct {
+			Text     string `json:"text"`
+			Ts       string `json:"ts"`
+			ThreadTS string `json:"thread_ts"`
+			User     string `json:"user"`
+			BotID    string `json:"bot_id"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return err
+	}
+
+	for i := len(payload.Messages) - 1; i >= 0; i-- {
+		msg := payload.Messages[i]
+		if msg.Ts == "" || msg.Ts == a.latestTS || msg.BotID != "" {
+			continue
+		}
+		a.latestTS = msg.Ts
+
+		if strings.TrimSpace(msg.Text) == "" {
+			continue
+		}
+
+		meta := map[string]string{
+			"channel":      "slack",
+			"channel_id":   a.config.DefaultChannel,
+			"user_id":      msg.User,
+			"reply_target": a.config.DefaultChannel,
+			"message_id":   msg.Ts,
+			"sender":       msg.User,
+			"thread_id":    msg.ThreadTS,
+		}
+
+		decision := a.router.Decide(RouteRequest{Channel: "slack", Source: a.config.DefaultChannel + ":" + msg.User, Text: msg.Text, ThreadID: msg.ThreadTS})
+		sessionID := a.sessions[decision.Key]
+		if decision.SessionID != "" {
+			sessionID = decision.SessionID
+		}
+
+		err := a.sendStreamingMessage(ctx, func(onChunk func(chunk string)) error {
+			_, err := handle(ctx, sessionID, msg.Text, meta, func(chunk string) error {
+				onChunk(chunk)
+				return nil
+			})
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		a.sessions[decision.Key] = sessionID
+		a.base.markActivity()
+		a.append("channel.slack.message", sessionID, map[string]any{
+			"channel":   a.config.DefaultChannel,
+			"user":      msg.User,
+			"text":      msg.Text,
+			"route":     decision.Key,
+			"agent":     decision.Agent,
+			"workspace": decision.Workspace,
+			"streaming": true,
+		})
+	}
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
@@ -306,6 +307,230 @@ func (a *TelegramAdapter) sendMessage(ctx context.Context, chatID string, text s
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram send failed: %s", resp.Status)
+	}
+	return nil
+}
+
+func (a *TelegramAdapter) sendStreamingMessage(ctx context.Context, chatID string, streamFn func(onChunk func(chunk string)) error) error {
+	streamInterval := time.Duration(a.config.StreamInterval) * time.Millisecond
+	if streamInterval <= 0 {
+		streamInterval = 500 * time.Millisecond
+	}
+
+	initialMsgID, err := a.sendMessageWithResult(ctx, chatID, "\u200B")
+	if err != nil {
+		return err
+	}
+	if initialMsgID == "" {
+		return streamFn(func(chunk string) {})
+	}
+
+	var accumulated strings.Builder
+	var mu sync.Mutex
+	lastEdit := time.Now()
+
+	onChunk := func(chunk string) {
+		mu.Lock()
+		accumulated.WriteString(chunk)
+		shouldEdit := time.Since(lastEdit) >= streamInterval
+		if shouldEdit {
+			lastEdit = time.Now()
+		}
+		mu.Unlock()
+
+		if shouldEdit {
+			mu.Lock()
+			text := accumulated.String()
+			mu.Unlock()
+			a.editMessage(ctx, chatID, initialMsgID, text)
+		}
+	}
+
+	if err := streamFn(onChunk); err != nil {
+		mu.Lock()
+		final := accumulated.String()
+		mu.Unlock()
+		a.editMessage(ctx, chatID, initialMsgID, final+"\n\n[Error: "+err.Error()+"]")
+		return err
+	}
+
+	mu.Lock()
+	final := accumulated.String()
+	mu.Unlock()
+	a.editMessage(ctx, chatID, initialMsgID, final)
+	return nil
+}
+
+func (a *TelegramAdapter) sendMessageWithResult(ctx context.Context, chatID string, text string) (string, error) {
+	values := url.Values{}
+	values.Set("chat_id", chatID)
+	values.Set("text", text)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/sendMessage", strings.NewReader(values.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("telegram send failed: %s", resp.Status)
+	}
+
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if !result.OK {
+		return "", nil
+	}
+	return strconv.Itoa(result.Result.MessageID), nil
+}
+
+func (a *TelegramAdapter) editMessage(ctx context.Context, chatID string, messageID string, text string) error {
+	if messageID == "" {
+		return nil
+	}
+	values := url.Values{}
+	values.Set("chat_id", chatID)
+	values.Set("message_id", messageID)
+	truncated := text
+	if len([]rune(truncated)) > 4096 {
+		truncated = string([]rune(truncated)[:4093]) + "..."
+	}
+	values.Set("text", truncated)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/editMessageText", strings.NewReader(values.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func (a *TelegramAdapter) RunStream(ctx context.Context, handle StreamChunkHandler) error {
+	a.base.setRunning(true)
+	defer a.base.setRunning(false)
+	interval := time.Duration(a.config.PollEvery) * time.Second
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		if err := a.pollOnceStream(ctx, handle); err != nil {
+			a.base.setError(err)
+			a.append("channel.telegram.error", "", map[string]any{"error": err.Error()})
+		} else {
+			a.base.setError(nil)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *TelegramAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHandler) error {
+	u := fmt.Sprintf("%s/getUpdates?timeout=1&offset=%d", a.baseURL, a.offset)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		OK     bool `json:"ok"`
+		Result []struct {
+			UpdateID int64 `json:"update_id"`
+			Message  struct {
+				Text string `json:"text"`
+				Chat struct {
+					ID int64 `json:"id"`
+				} `json:"chat"`
+				From struct {
+					Username string `json:"username"`
+					ID       int64  `json:"id"`
+				} `json:"from"`
+			} `json:"message"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return err
+	}
+
+	for _, update := range payload.Result {
+		a.offset = update.UpdateID + 1
+		chatID := strconv.FormatInt(update.Message.Chat.ID, 10)
+		if strings.TrimSpace(a.config.ChatID) != "" && chatID != strings.TrimSpace(a.config.ChatID) {
+			continue
+		}
+
+		text := strings.TrimSpace(update.Message.Text)
+		if text == "" {
+			continue
+		}
+
+		username := update.Message.From.Username
+		messageID := strconv.FormatInt(update.UpdateID, 10)
+
+		meta := map[string]string{
+			"channel":      "telegram",
+			"chat_id":      chatID,
+			"username":     username,
+			"reply_target": chatID,
+			"message_id":   messageID,
+			"sender":       username,
+		}
+
+		decision := a.router.Decide(RouteRequest{Channel: "telegram", Source: chatID, Text: text})
+		sessionID := a.sessions[decision.Key]
+		if decision.SessionID != "" {
+			sessionID = decision.SessionID
+		}
+
+		var responseText string
+		err := a.sendStreamingMessage(ctx, chatID, func(onChunk func(chunk string)) error {
+			_, err := handle(ctx, sessionID, text, meta, func(chunk string) error {
+				onChunk(chunk)
+				responseText += chunk
+				return nil
+			})
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if responseText != "" {
+			a.sessions[decision.Key] = sessionID
+		}
+		a.base.markActivity()
+		a.append("channel.telegram.message", sessionID, map[string]any{
+			"chat_id":   chatID,
+			"text":      text,
+			"route":     decision.Key,
+			"agent":     decision.Agent,
+			"workspace": decision.Workspace,
+			"streaming": true,
+		})
 	}
 	return nil
 }

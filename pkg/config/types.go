@@ -14,6 +14,23 @@ type Config struct {
 	Security     SecurityConfig     `json:"security"`
 	Orchestrator OrchestratorConfig `json:"orchestrator"`
 	Speech       SpeechConfig       `json:"speech"`
+	MCP          MCPConfig          `json:"mcp"`
+}
+
+type MCPConfig struct {
+	Enabled bool              `json:"enabled"`
+	Servers []MCPServerConfig `json:"servers"`
+}
+
+type MCPServerConfig struct {
+	Name        string            `json:"name"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Transport   string            `json:"transport"`
+	Enabled     bool              `json:"enabled"`
+	AutoConnect bool              `json:"auto_connect"`
+	TimeoutSec  int               `json:"timeout_seconds"`
 }
 
 type LLMConfig struct {
@@ -167,10 +184,12 @@ type ChannelsConfig struct {
 }
 
 type TelegramChannelConfig struct {
-	Enabled   bool   `json:"enabled"`
-	BotToken  string `json:"bot_token"`
-	ChatID    string `json:"chat_id"`
-	PollEvery int    `json:"poll_every_seconds"`
+	Enabled        bool   `json:"enabled"`
+	BotToken       string `json:"bot_token"`
+	ChatID         string `json:"chat_id"`
+	PollEvery      int    `json:"poll_every_seconds"`
+	StreamReply    bool   `json:"stream_reply"`
+	StreamInterval int    `json:"stream_interval_ms"`
 }
 
 type SlackChannelConfig struct {
@@ -179,6 +198,8 @@ type SlackChannelConfig struct {
 	AppToken       string `json:"app_token"`
 	DefaultChannel string `json:"default_channel"`
 	PollEvery      int    `json:"poll_every_seconds"`
+	StreamReply    bool   `json:"stream_reply"`
+	StreamInterval int    `json:"stream_interval_ms"`
 }
 
 type DiscordChannelConfig struct {
@@ -190,6 +211,8 @@ type DiscordChannelConfig struct {
 	GuildID        string `json:"guild_id"`
 	PublicKey      string `json:"public_key"`
 	UseGatewayWS   bool   `json:"use_gateway_ws"`
+	StreamReply    bool   `json:"stream_reply"`
+	StreamInterval int    `json:"stream_interval_ms"`
 }
 
 type WhatsAppChannelConfig struct {

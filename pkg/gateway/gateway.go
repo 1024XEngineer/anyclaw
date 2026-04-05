@@ -22,6 +22,7 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/chat"
 	"github.com/anyclaw/anyclaw/pkg/config"
 	"github.com/anyclaw/anyclaw/pkg/llm"
+	"github.com/anyclaw/anyclaw/pkg/mcp"
 	"github.com/anyclaw/anyclaw/pkg/plugin"
 	"github.com/anyclaw/anyclaw/pkg/routing"
 	"github.com/anyclaw/anyclaw/pkg/runtime"
@@ -79,6 +80,9 @@ type Server struct {
 	ttsPipeline    *speech.TTSPipeline
 	ttsIntegration *speech.Integration
 	ttsManager     *speech.Manager
+	mcpRegistry    *mcp.Registry
+	mcpServer      *mcp.Server
+	marketStore    *plugin.Store
 }
 
 var titleCase = cases.Title(language.English)
@@ -784,6 +788,8 @@ func (s *Server) Run(ctx context.Context) error {
 	addr := runtime.GatewayAddress(s.app.Config)
 	mux := http.NewServeMux()
 	s.initChannels()
+	s.initMCP(ctx)
+	s.initMarketStore()
 	if err := s.ensureDefaultWorkspace(); err != nil {
 		return err
 	}
@@ -849,6 +855,17 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/skills", s.wrap("/skills", requirePermission("skills.read", s.handleSkills)))
 	mux.HandleFunc("/tools/activity", s.wrap("/tools/activity", requirePermission("tools.read", s.handleToolActivity)))
 	mux.HandleFunc("/tools", s.wrap("/tools", requirePermission("tools.read", s.handleTools)))
+	mux.HandleFunc("/mcp/servers", s.wrap("/mcp/servers", requirePermission("mcp.read", s.handleMCPServers)))
+	mux.HandleFunc("/mcp/tools", s.wrap("/mcp/tools", requirePermission("mcp.read", s.handleMCPTools)))
+	mux.HandleFunc("/mcp/resources", s.wrap("/mcp/resources", requirePermission("mcp.read", s.handleMCPResources)))
+	mux.HandleFunc("/mcp/prompts", s.wrap("/mcp/prompts", requirePermission("mcp.read", s.handleMCPPrompts)))
+	mux.HandleFunc("/mcp/call", s.wrap("/mcp/call", requirePermission("mcp.write", s.handleMCPCall)))
+	mux.HandleFunc("/mcp/servers/", s.wrap("/mcp/servers/", s.handleMCPServerAction))
+	mux.HandleFunc("/market/search", s.wrap("/market/search", requirePermission("market.read", s.handleMarketSearch)))
+	mux.HandleFunc("/market/plugins", s.wrap("/market/plugins", requirePermission("market.read", s.handleMarketPlugins)))
+	mux.HandleFunc("/market/plugins/", s.wrap("/market/plugins/", s.handleMarketPluginAction))
+	mux.HandleFunc("/market/installed", s.wrap("/market/installed", requirePermission("market.read", s.handleMarketInstalled)))
+	mux.HandleFunc("/market/categories", s.wrap("/market/categories", requirePermission("market.read", s.handleMarketCategories)))
 	mux.HandleFunc("/channels/whatsapp/webhook", s.rateLimit.Wrap(s.handleWhatsAppWebhook))
 	mux.HandleFunc("/channels/discord/interactions", s.rateLimit.Wrap(s.handleDiscordInteractions))
 	mux.HandleFunc("/ingress/web", s.rateLimit.Wrap(s.handleSignedIngress))
@@ -863,6 +880,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/webchat", s.wrap("/webchat", s.handleWebChat))
 	s.registerDashboardRoutes(mux)
 	mux.HandleFunc("/api/webchat/status", s.wrap("/api/webchat/status", s.handleWebChatStatus))
+	mux.HandleFunc("/market", s.wrap("/market", s.handleMarketUI))
 
 	// Webhook endpoints
 	mux.HandleFunc("/webhooks/", s.rateLimit.Wrap(s.handleWebhookIncoming))
@@ -912,6 +930,36 @@ func (s *Server) runChannels(ctx context.Context) {
 		handler = s.sttIntegration.WrapInboundHandler(handler)
 	}
 	s.channels.Run(ctx, handler)
+	s.runStreamChannels(ctx)
+}
+
+func (s *Server) runStreamChannels(ctx context.Context) {
+	for _, adapter := range s.getStreamAdapters() {
+		if !adapter.Enabled() {
+			continue
+		}
+		go func(sa channel.StreamAdapter) {
+			handler := s.processChannelMessageStream
+			if s.sttIntegration != nil {
+				handler = s.sttIntegration.WrapStreamInboundHandler(handler)
+			}
+			_ = sa.RunStream(ctx, handler)
+		}(adapter)
+	}
+}
+
+func (s *Server) getStreamAdapters() []channel.StreamAdapter {
+	var adapters []channel.StreamAdapter
+	if s.telegram != nil && s.app.Config.Channels.Telegram.StreamReply {
+		adapters = append(adapters, s.telegram)
+	}
+	if s.discord != nil && s.app.Config.Channels.Discord.StreamReply {
+		adapters = append(adapters, s.discord)
+	}
+	if s.slack != nil && s.app.Config.Channels.Slack.StreamReply {
+		adapters = append(adapters, s.slack)
+	}
+	return adapters
 }
 
 func (s *Server) processChannelMessage(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
@@ -938,6 +986,30 @@ func (s *Server) processChannelMessage(ctx context.Context, sessionID string, me
 	return session.ID, response, nil
 }
 
+func (s *Server) processChannelMessageStream(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
+	source := strings.TrimSpace(meta["channel"])
+	if source == "" {
+		source = "telegram"
+	}
+	_, session, err := s.runOrCreateChannelSessionStream(ctx, source, sessionID, message, meta, onChunk)
+	if err != nil {
+		return "", err
+	}
+
+	if s.ttsIntegration != nil {
+		recipient := firstNonEmpty(strings.TrimSpace(meta["chat_id"]), strings.TrimSpace(meta["reply_target"]), strings.TrimSpace(meta["user_id"]), sessionID)
+		metadata := make(map[string]any, len(meta))
+		for k, v := range meta {
+			metadata[k] = v
+		}
+		if err := s.ttsIntegration.ProcessMessage(ctx, source, recipient, session.ID, metadata); err != nil {
+			s.appendEvent("tts.process.error", sessionID, map[string]any{"error": err.Error(), "channel": source})
+		}
+	}
+
+	return session.ID, nil
+}
+
 func (s *Server) runOrCreateChannelSession(ctx context.Context, source string, sessionID string, message string, meta map[string]string) (string, *Session, error) {
 	decision := channel.RouteDecision{}
 	routeSource := sessionID
@@ -945,7 +1017,7 @@ func (s *Server) runOrCreateChannelSession(ctx context.Context, source string, s
 		routeSource = strings.TrimSpace(meta["reply_target"])
 	}
 	if s.router != nil {
-		decision = s.router.Decide(channel.RouteRequest{Channel: source, Source: routeSource, Text: message})
+		decision = s.router.Decide(channel.RouteRequest{Channel: source, Source: routeSource, Text: message, ThreadID: meta["thread_id"], IsGroup: meta["is_group"] == "true", GroupID: meta["guild_id"]})
 	}
 	if strings.TrimSpace(sessionID) == "" {
 		agentName := s.app.Config.ResolveMainAgentName()
@@ -1049,6 +1121,133 @@ func (s *Server) runOrCreateChannelSession(ctx context.Context, source string, s
 	}
 	s.recordSessionToolActivities(updatedSession, targetApp.Agent.GetLastToolActivities())
 	completedPayload := map[string]any{"message": message, "response_length": len(response), "source": source}
+	for k, v := range meta {
+		if strings.TrimSpace(v) != "" {
+			completedPayload[k] = v
+		}
+	}
+	s.appendEvent("chat.completed", sessionID, completedPayload)
+	return response, updatedSession, nil
+}
+
+func (s *Server) runOrCreateChannelSessionStream(ctx context.Context, source string, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, *Session, error) {
+	decision := channel.RouteDecision{}
+	routeSource := sessionID
+	if strings.TrimSpace(meta["reply_target"]) != "" {
+		routeSource = strings.TrimSpace(meta["reply_target"])
+	}
+	if s.router != nil {
+		decision = s.router.Decide(channel.RouteRequest{Channel: source, Source: routeSource, Text: message, ThreadID: meta["thread_id"], IsGroup: meta["is_group"] == "true", GroupID: meta["guild_id"]})
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		agentName := s.app.Config.ResolveMainAgentName()
+		orgID, projectID, workspaceID := defaultResourceIDs(s.app.WorkingDir)
+		if decision.Agent != "" {
+			agentName = decision.Agent
+		}
+		if decision.Org != "" {
+			orgID = decision.Org
+		}
+		if decision.Project != "" {
+			projectID = decision.Project
+		}
+		if decision.Workspace != "" {
+			workspaceID = decision.Workspace
+		}
+		org, project, workspace, err := s.validateResourceSelection(orgID, projectID, workspaceID)
+		if err != nil {
+			return "", nil, err
+		}
+		title := strings.TrimSpace(decision.Title)
+		if title == "" {
+			title = titleCase.String(source) + " session"
+		}
+		createOpts := SessionCreateOptions{
+			Title:         title,
+			AgentName:     agentName,
+			Org:           org.ID,
+			Project:       project.ID,
+			Workspace:     workspace.ID,
+			SessionMode:   normalizeSingleAgentSessionMode(decision.SessionMode, "channel-dm"),
+			QueueMode:     decision.QueueMode,
+			ReplyBack:     decision.ReplyBack,
+			SourceChannel: source,
+			SourceID:      firstNonEmpty(strings.TrimSpace(meta["user_id"]), strings.TrimSpace(meta["reply_target"]), sessionID),
+		}
+		if createOpts.SessionMode == "" {
+			createOpts.SessionMode = "main"
+		}
+		session, err := s.sessions.CreateWithOptions(createOpts)
+		if err != nil {
+			return "", nil, err
+		}
+		sessionID = session.ID
+		payload := map[string]any{"title": session.Title, "source": source, "streaming": true}
+		for k, v := range meta {
+			if strings.TrimSpace(v) != "" {
+				payload[k] = v
+			}
+		}
+		s.appendEvent("session.created", sessionID, payload)
+	}
+	if _, err := s.sessions.EnqueueTurn(sessionID); err == nil {
+		s.appendEvent("session.queue.updated", sessionID, map[string]any{"queue_mode": decision.QueueMode, "source": source, "reply_target": meta["reply_target"]})
+	}
+	transportMeta := map[string]string{}
+	for _, key := range []string{"channel_id", "chat_id", "guild_id", "attachment_count"} {
+		if v := strings.TrimSpace(meta[key]); v != "" {
+			transportMeta[key] = v
+		}
+	}
+	if _, err := s.sessions.SetUserMapping(sessionID, meta["user_id"], firstNonEmpty(meta["username"], meta["user_name"]), meta["reply_target"], meta["thread_id"], transportMeta); err == nil {
+		s.appendEvent("session.user_mapped", sessionID, map[string]any{"source": source, "user_id": meta["user_id"], "user_name": firstNonEmpty(meta["username"], meta["user_name"]), "reply_target": meta["reply_target"]})
+	}
+	if _, err := s.sessions.SetPresence(sessionID, "typing", true); err == nil {
+		s.appendEvent("session.typing", sessionID, map[string]any{"typing": true, "source": source, "user_id": meta["user_id"]})
+	}
+	startedPayload := map[string]any{"message": message, "source": source, "streaming": true}
+	for k, v := range meta {
+		if strings.TrimSpace(v) != "" {
+			startedPayload[k] = v
+		}
+	}
+	startedEvent := NewEvent("chat.started", sessionID, startedPayload)
+	_ = s.store.AppendEvent(startedEvent)
+	s.bus.Publish(startedEvent)
+	session, ok := s.sessions.Get(sessionID)
+	if !ok {
+		return "", nil, fmt.Errorf("session not found: %s", sessionID)
+	}
+	targetApp, err := s.runtimePool.GetOrCreate(session.Agent, session.Org, session.Project, session.Workspace)
+	if err != nil {
+		return "", nil, err
+	}
+	targetApp.Agent.SetHistory(session.History)
+	execCtx := tools.WithBrowserSession(ctx, sessionID)
+	execCtx = tools.WithSandboxScope(execCtx, tools.SandboxScope{SessionID: sessionID, Channel: source})
+
+	var responseText strings.Builder
+	err = targetApp.Agent.RunStream(execCtx, message, func(chunk string) {
+		responseText.WriteString(chunk)
+		onChunk(chunk)
+	})
+	if err != nil {
+		return "", nil, err
+	}
+
+	response := responseText.String()
+	updatedSession, err := s.sessions.AddExchange(sessionID, message, response)
+	if err != nil {
+		return "", nil, err
+	}
+	if updatedSession.ReplyBack {
+		s.appendEvent("session.reply_back", sessionID, map[string]any{"enabled": true, "source": source, "reply_target": meta["reply_target"]})
+	}
+	if _, err := s.sessions.SetPresence(sessionID, "idle", false); err == nil {
+		s.appendEvent("session.presence", sessionID, map[string]any{"presence": "idle", "source": source, "user_id": meta["user_id"]})
+	}
+	s.recordSessionToolActivities(updatedSession, targetApp.Agent.GetLastToolActivities())
+	completedPayload := map[string]any{"message": message, "response_length": len(response), "source": source, "streaming": true}
 	for k, v := range meta {
 		if strings.TrimSpace(v) != "" {
 			completedPayload[k] = v
@@ -3810,4 +4009,433 @@ func printWorkerStatus(pids []int, ports []int, basePort int) {
 		fmt.Printf("  Worker %d: PID=%d, addr=%s\n", i, pid, addr)
 	}
 	fmt.Printf("Main Gateway: 127.0.0.1:%d (load balancer)\n", basePort)
+}
+
+func (s *Server) initMCP(ctx context.Context) {
+	s.mcpRegistry = mcp.NewRegistry()
+
+	cfg := s.app.Config.MCP
+	if !cfg.Enabled || len(cfg.Servers) == 0 {
+		return
+	}
+
+	for _, srvCfg := range cfg.Servers {
+		if !srvCfg.Enabled {
+			continue
+		}
+		if srvCfg.Command == "" {
+			continue
+		}
+		client := mcp.NewClient(srvCfg.Name, srvCfg.Command, srvCfg.Args, srvCfg.Env)
+		if err := s.mcpRegistry.Register(srvCfg.Name, client); err != nil {
+			fmt.Fprintf(os.Stderr, "MCP register %s: %v\n", srvCfg.Name, err)
+			continue
+		}
+	}
+
+	if errs := s.mcpRegistry.ConnectAll(ctx); len(errs) > 0 {
+		for _, err := range errs {
+			fmt.Fprintf(os.Stderr, "MCP connect: %v\n", err)
+		}
+	}
+
+	if s.mcpRegistry != nil {
+		if err := mcp.BridgeToToolRegistry(s.app.Tools, s.mcpRegistry); err != nil {
+			fmt.Fprintf(os.Stderr, "MCP bridge: %v\n", err)
+		}
+	}
+
+	s.mcpServer = mcp.NewServer("anyclaw", "1.0.0")
+	s.registerBuiltinMCPTools()
+}
+
+func (s *Server) initMarketStore() {
+	pluginDir := s.app.Config.Plugins.Dir
+	if pluginDir == "" {
+		pluginDir = "plugins"
+	}
+	marketDir := filepath.Join(pluginDir, ".market")
+	cacheDir := filepath.Join(pluginDir, ".cache")
+
+	os.MkdirAll(marketDir, 0755)
+	os.MkdirAll(cacheDir, 0755)
+
+	sources := []plugin.PluginSource{
+		{Name: "default", URL: "https://market.anyclaw.github.io", Type: "http"},
+	}
+
+	trustStore := plugin.NewTrustStore()
+	s.marketStore = plugin.NewStore(pluginDir, marketDir, cacheDir, sources, trustStore, s.plugins)
+}
+
+func (s *Server) registerBuiltinMCPTools() {
+	s.mcpServer.RegisterTool(mcp.ServerTool{
+		Name:        "chat",
+		Description: "Send a message to AnyClaw AI agent",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"message": map[string]any{"type": "string", "description": "User message"},
+			},
+			"required": []string{"message"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			msg, _ := args["message"].(string)
+			if msg == "" {
+				return nil, fmt.Errorf("message is required")
+			}
+			return "Chat endpoint available via HTTP POST /chat", nil
+		},
+	})
+
+	s.mcpServer.RegisterResource(mcp.ServerResource{
+		URI:         "status://gateway",
+		Name:        "Gateway Status",
+		Description: "Current gateway server status",
+		MimeType:    "application/json",
+		Handler: func(ctx context.Context) (any, error) {
+			return map[string]any{
+				"started_at": s.startedAt,
+				"uptime":     time.Since(s.startedAt).String(),
+			}, nil
+		},
+	})
+
+	s.mcpServer.RegisterPrompt(mcp.ServerPrompt{
+		Name:        "code_review",
+		Description: "Code review prompt template",
+		Arguments: []mcp.PromptArg{
+			{Name: "language", Description: "Programming language", Required: false},
+			{Name: "focus", Description: "Review focus (security, performance, style)", Required: false},
+		},
+		Handler: func(ctx context.Context, args map[string]string) ([]mcp.PromptMessage, error) {
+			lang := args["language"]
+			focus := args["focus"]
+			text := "Please review the following code"
+			if lang != "" {
+				text += " (" + lang + ")"
+			}
+			if focus != "" {
+				text += " with focus on " + focus
+			}
+			text += ":\n\n"
+			return []mcp.PromptMessage{
+				{Role: "user", Content: struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}{Type: "text", Text: text}},
+			}, nil
+		},
+	})
+}
+
+func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.mcpRegistry == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"servers": []any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"servers": s.mcpRegistry.Status()})
+}
+
+func (s *Server) handleMCPTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.mcpRegistry == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"tools": map[string]any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tools": s.mcpRegistry.AllTools()})
+}
+
+func (s *Server) handleMCPResources(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.mcpRegistry == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"resources": map[string]any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"resources": s.mcpRegistry.AllResources()})
+}
+
+func (s *Server) handleMCPPrompts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.mcpRegistry == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"prompts": map[string]any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"prompts": s.mcpRegistry.AllPrompts()})
+}
+
+func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Server   string         `json:"server"`
+		Tool     string         `json:"tool"`
+		Resource string         `json:"resource"`
+		Prompt   string         `json:"prompt"`
+		Args     map[string]any `json:"args"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	if s.mcpRegistry == nil {
+		http.Error(w, "MCP not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := r.Context()
+	var result any
+	var err error
+
+	if req.Tool != "" {
+		result, err = s.mcpRegistry.CallTool(ctx, req.Server, req.Tool, req.Args)
+	} else if req.Resource != "" {
+		result, err = s.mcpRegistry.ReadResource(ctx, req.Server, req.Resource)
+	} else if req.Prompt != "" {
+		strArgs := make(map[string]string)
+		for k, v := range req.Args {
+			strArgs[k] = fmt.Sprintf("%v", v)
+		}
+		result, err = s.mcpRegistry.GetPrompt(ctx, req.Server, req.Prompt, strArgs)
+	} else {
+		http.Error(w, "must specify tool, resource, or prompt", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"result": result})
+}
+
+func (s *Server) handleMCPServerAction(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/mcp/servers/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.Error(w, "server name required", http.StatusBadRequest)
+		return
+	}
+	serverName := parts[0]
+
+	if s.mcpRegistry == nil {
+		http.Error(w, "MCP not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	client, ok := s.mcpRegistry.Get(serverName)
+	if !ok {
+		http.Error(w, "server not found", http.StatusNotFound)
+		return
+	}
+
+	ctx := r.Context()
+	switch r.Method {
+	case http.MethodPost:
+		if len(parts) > 1 {
+			switch parts[1] {
+			case "connect":
+				if err := client.Connect(ctx); err != nil {
+					writeJSON(w, http.StatusOK, map[string]any{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"status": "connected"})
+				return
+			case "disconnect":
+				client.Close()
+				writeJSON(w, http.StatusOK, map[string]any{"status": "disconnected"})
+				return
+			}
+		}
+		http.Error(w, "unknown action", http.StatusBadRequest)
+	case http.MethodGet:
+		status := map[string]any{
+			"name":      serverName,
+			"connected": client.IsConnected(),
+		}
+		if client.IsConnected() {
+			status["tools"] = len(client.ListTools())
+			status["resources"] = len(client.ListResources())
+			status["prompts"] = len(client.ListPrompts())
+		}
+		writeJSON(w, http.StatusOK, status)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleMarketSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	filter := plugin.SearchFilter{
+		Query:     r.URL.Query().Get("q"),
+		Author:    r.URL.Query().Get("author"),
+		SortBy:    r.URL.Query().Get("sort"),
+		SortOrder: r.URL.Query().Get("order"),
+		Limit:     parseIntParam(r.URL.Query().Get("limit"), 50),
+		Offset:    parseIntParam(r.URL.Query().Get("offset"), 0),
+	}
+
+	if tags := r.URL.Query().Get("tags"); tags != "" {
+		filter.Tags = strings.Split(tags, ",")
+	}
+
+	ctx := r.Context()
+	results, err := s.marketStore.Search(ctx, filter)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"error": err.Error(), "plugins": []any{}})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"plugins": results,
+		"total":   len(results),
+	})
+}
+
+func (s *Server) handleMarketPlugins(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "plugin id required", http.StatusBadRequest)
+		return
+	}
+
+	listing, err := s.marketStore.GetPlugin(ctx, id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, listing)
+}
+
+func (s *Server) handleMarketPluginAction(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/market/plugins/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.Error(w, "plugin id required", http.StatusBadRequest)
+		return
+	}
+	pluginID := parts[0]
+
+	ctx := r.Context()
+	switch r.Method {
+	case http.MethodPost:
+		if len(parts) > 1 {
+			switch parts[1] {
+			case "install":
+				version := r.URL.Query().Get("version")
+				result, err := s.marketStore.Install(ctx, pluginID, version)
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, result)
+				return
+			case "update":
+				result, err := s.marketStore.Update(ctx, pluginID)
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, result)
+				return
+			case "uninstall":
+				result, err := s.marketStore.Uninstall(pluginID)
+				if err != nil {
+					writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, result)
+				return
+			}
+		}
+		http.Error(w, "unknown action", http.StatusBadRequest)
+	case http.MethodGet:
+		if len(parts) > 1 && parts[1] == "versions" {
+			versions, err := s.marketStore.GetVersions(ctx, pluginID)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
+			return
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleMarketInstalled(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	records := s.marketStore.ListInstalled()
+	writeJSON(w, http.StatusOK, map[string]any{"installed": records})
+}
+
+func (s *Server) handleMarketCategories(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	categories := []string{
+		"channel", "tool", "mcp", "skill", "app",
+		"model-provider", "speech", "context-engine",
+		"node", "surface", "ingress", "workflow-pack",
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"categories": categories})
+}
+
+func parseIntParam(s string, defaultVal int) int {
+	if s == "" {
+		return defaultVal
+	}
+	var n int
+	fmt.Sscanf(s, "%d", &n)
+	if n <= 0 {
+		return defaultVal
+	}
+	return n
+}
+
+func (s *Server) handleMarketUI(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile("ui/market/index.html")
+	if err != nil {
+		data, err = os.ReadFile(filepath.Join(s.app.Config.Gateway.ControlUI.Root, "market", "index.html"))
+	}
+	if err != nil {
+		http.Error(w, "market UI not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
 }

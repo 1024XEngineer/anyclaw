@@ -9,16 +9,34 @@ import (
 
 type Adapter = ch.Adapter
 type InboundHandler = ch.InboundHandler
+type StreamChunkHandler = ch.StreamChunkHandler
+type StreamAdapter = ch.StreamAdapter
 type Status = ch.Status
 type BaseAdapter = ch.BaseAdapter
 type Manager = ch.Manager
 type RouteRequest = ch.RouteRequest
 type RouteDecision = ch.RouteDecision
 type Router = ch.Router
+type ChannelCommands = ch.ChannelCommands
+type CommandHandler = ch.CommandHandler
+type MentionGate = ch.MentionGate
+type GroupSecurity = ch.GroupSecurity
+type ChannelPairing = ch.ChannelPairing
+type PairingInfo = ch.PairingInfo
+type PresenceManager = ch.PresenceManager
+type PresenceInfo = ch.PresenceInfo
+type ContactDirectory = ch.ContactDirectory
+type ContactInfo = ch.ContactInfo
 
 var NewBaseAdapter = ch.NewBaseAdapter
 var NewManager = ch.NewManager
 var NewRouter = ch.NewRouter
+var NewChannelCommands = ch.NewChannelCommands
+var NewMentionGate = ch.NewMentionGate
+var NewGroupSecurity = ch.NewGroupSecurity
+var NewChannelPairing = ch.NewChannelPairing
+var NewPresenceManager = ch.NewPresenceManager
+var NewContactDirectory = ch.NewContactDirectory
 
 var NewTelegramAdapter = ch.NewTelegramAdapter
 var NewSlackAdapter = ch.NewSlackAdapter

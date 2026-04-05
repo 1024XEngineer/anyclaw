@@ -66,6 +66,121 @@ func (i *STTIntegration) RegisterHook(hook STTIntegrationHook) {
 	i.hooks = append(i.hooks, hook)
 }
 
+type StreamChunkHandler func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error)
+
+func (i *STTIntegration) WrapStreamInboundHandler(handler StreamChunkHandler) StreamChunkHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
+		i.mu.RLock()
+		enabled := i.config.Enabled
+		autoSTT := i.config.AutoSTT
+		triggerPrefix := i.config.TriggerPrefix
+		channels := i.config.Channels
+		excludeChannels := i.config.ExcludeChannels
+		i.mu.RUnlock()
+
+		if !enabled {
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		channel := ""
+		if meta != nil {
+			if ch, ok := meta["channel"]; ok {
+				channel = ch
+			}
+		}
+
+		if len(channels) > 0 && !channels[channel] {
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		if excludeChannels[channel] {
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		messageType := ""
+		if meta != nil {
+			if mt, ok := meta["message_type"]; ok {
+				messageType = mt
+			}
+		}
+
+		isVoiceMessage := messageType == "voice" || messageType == "audio" || messageType == "voice_note" || messageType == "audio_file"
+
+		if !isVoiceMessage && strings.HasPrefix(message, triggerPrefix) {
+			cleanText := strings.TrimSpace(message[len(triggerPrefix):])
+			if cleanText == "" {
+				return handler(ctx, sessionID, message, meta, onChunk)
+			}
+			message = cleanText
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		if !isVoiceMessage && !autoSTT {
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		audioURL := ""
+		audioMIME := ""
+		sender := ""
+		if meta != nil {
+			if url, ok := meta["audio_url"]; ok {
+				audioURL = url
+			}
+			if mime, ok := meta["audio_mime"]; ok {
+				audioMIME = mime
+			}
+			if s, ok := meta["sender"]; ok {
+				sender = s
+			}
+		}
+
+		if audioURL == "" && message != "" {
+			audioURL = message
+			message = ""
+		}
+
+		if audioURL == "" {
+			if i.config.FallbackToVoice {
+				meta["stt_error"] = "no audio data"
+			}
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		req := &STTTranscribeRequest{
+			AudioURL:  audioURL,
+			AudioMIME: audioMIME,
+			Channel:   channel,
+			Sender:    sender,
+			Language:  i.config.DefaultLang,
+			Provider:  i.config.Provider,
+			Metadata:  map[string]any{},
+		}
+
+		result, err := i.pipeline.Transcribe(ctx, req)
+		if err != nil {
+			if i.config.FallbackToVoice {
+				meta["stt_error"] = err.Error()
+			}
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		transcribedText := result.Text
+		if transcribedText == "" {
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		if i.config.AppendTranscript && message != "" {
+			transcribedText = message + "\n\n[Transcript]: " + transcribedText
+		}
+
+		for _, hook := range i.hooks {
+			_ = hook.OnAfterSTT(ctx, &TranscriptResult{Text: transcribedText})
+		}
+
+		return handler(ctx, sessionID, transcribedText, meta, onChunk)
+	}
+}
+
 func (i *STTIntegration) WrapInboundHandler(handler InboundHandler) InboundHandler {
 	return func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
 		i.mu.RLock()

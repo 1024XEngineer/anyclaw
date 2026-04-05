@@ -8,6 +8,13 @@ import (
 
 type InboundHandler func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error)
 
+type StreamChunkHandler func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error)
+
+type StreamAdapter interface {
+	Adapter
+	RunStream(ctx context.Context, handle StreamChunkHandler) error
+}
+
 type Status struct {
 	Name         string    `json:"name"`
 	Enabled      bool      `json:"enabled"`

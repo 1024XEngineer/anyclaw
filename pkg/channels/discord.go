@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
@@ -232,6 +233,10 @@ func (a *DiscordAdapter) handleGatewayEvent(ctx context.Context, eventType strin
 				ContentType string `json:"content_type"`
 				Size        int    `json:"size"`
 			} `json:"attachments"`
+			MessageReference struct {
+				MessageID string `json:"message_id"`
+				ChannelID string `json:"channel_id"`
+			} `json:"message_reference"`
 		}
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			return err
@@ -260,7 +265,7 @@ func (a *DiscordAdapter) handleGatewayEvent(ctx context.Context, eventType strin
 				meta["caption"] = strings.TrimSpace(msg.Content)
 			}
 
-			decision := a.router.Decide(RouteRequest{Channel: "discord", Source: msg.ChannelID + ":" + msg.Author.ID, Text: "[voice message]"})
+			decision := a.router.Decide(RouteRequest{Channel: "discord", Source: msg.ChannelID + ":" + msg.Author.ID, Text: "[voice message]", ThreadID: msg.MessageReference.MessageID})
 			sessionID := a.sessions[decision.Key]
 			respSession, response, err := handle(ctx, sessionID, audioURL, meta)
 			if err != nil {
@@ -276,7 +281,7 @@ func (a *DiscordAdapter) handleGatewayEvent(ctx context.Context, eventType strin
 			return nil
 		}
 
-		decision := a.router.Decide(RouteRequest{Channel: "discord", Source: msg.ChannelID + ":" + msg.Author.ID, Text: msg.Content})
+		decision := a.router.Decide(RouteRequest{Channel: "discord", Source: msg.ChannelID + ":" + msg.Author.ID, Text: msg.Content, ThreadID: msg.MessageReference.MessageID})
 		sessionID := a.sessions[decision.Key]
 		respSession, response, err := handle(ctx, sessionID, msg.Content, meta)
 		if err != nil {
@@ -407,7 +412,7 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 				replyTarget = threadID
 			}
 
-			decision := a.router.Decide(RouteRequest{Channel: "discord", Source: source, Text: "[voice message]"})
+			decision := a.router.Decide(RouteRequest{Channel: "discord", Source: source, Text: "[voice message]", ThreadID: threadID})
 			sessionID := a.sessions[decision.Key]
 			if decision.SessionID != "" {
 				sessionID = decision.SessionID
@@ -441,12 +446,12 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 			continue
 		}
 
-		decision := a.router.Decide(RouteRequest{Channel: "discord", Source: source, Text: msg.Content})
+		threadID := strings.TrimSpace(msg.ParentID)
+		decision := a.router.Decide(RouteRequest{Channel: "discord", Source: source, Text: msg.Content, ThreadID: threadID})
 		sessionID := a.sessions[decision.Key]
 		if decision.SessionID != "" {
 			sessionID = decision.SessionID
 		}
-		threadID := strings.TrimSpace(msg.ParentID)
 		replyTarget := a.config.DefaultChannel
 		if threadID != "" {
 			replyTarget = threadID
@@ -519,4 +524,351 @@ func (a *DiscordAdapter) seen(id string) bool {
 	}
 	a.processed[id] = time.Now().UTC()
 	return false
+}
+
+func (a *DiscordAdapter) sendStreamingMessage(ctx context.Context, target string, threadID string, streamFn func(onChunk func(chunk string)) error) error {
+	streamInterval := time.Duration(a.config.StreamInterval) * time.Millisecond
+	if streamInterval <= 0 {
+		streamInterval = 500 * time.Millisecond
+	}
+
+	initialMsgID, err := a.sendMessageWithResult(ctx, target, threadID, "\u200B")
+	if err != nil {
+		return err
+	}
+	if initialMsgID == "" {
+		return streamFn(func(chunk string) {})
+	}
+
+	var accumulated strings.Builder
+	var mu sync.Mutex
+	lastEdit := time.Now()
+
+	onChunk := func(chunk string) {
+		mu.Lock()
+		accumulated.WriteString(chunk)
+		shouldEdit := time.Since(lastEdit) >= streamInterval
+		if shouldEdit {
+			lastEdit = time.Now()
+		}
+		mu.Unlock()
+
+		if shouldEdit {
+			mu.Lock()
+			text := accumulated.String()
+			mu.Unlock()
+			a.editMessage(ctx, target, initialMsgID, text)
+		}
+	}
+
+	if err := streamFn(onChunk); err != nil {
+		mu.Lock()
+		final := accumulated.String()
+		mu.Unlock()
+		a.editMessage(ctx, target, initialMsgID, final+"\n\n[Error: "+err.Error()+"]")
+		return err
+	}
+
+	mu.Lock()
+	final := accumulated.String()
+	mu.Unlock()
+	a.editMessage(ctx, target, initialMsgID, final)
+	return nil
+}
+
+func (a *DiscordAdapter) sendMessageWithResult(ctx context.Context, target string, threadID string, text string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		target = strings.TrimSpace(a.config.DefaultChannel)
+	}
+	bodyMap := map[string]any{"content": text}
+	if strings.TrimSpace(threadID) != "" && threadID != target {
+		bodyMap["message_reference"] = map[string]any{"message_id": threadID}
+	}
+	body, _ := json.Marshal(bodyMap)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/channels/%s/messages", a.apiBaseURL, target), bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bot "+a.config.BotToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("discord send failed: %s", resp.Status)
+	}
+
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	return result.ID, nil
+}
+
+func (a *DiscordAdapter) editMessage(ctx context.Context, target string, messageID string, text string) error {
+	if messageID == "" {
+		return nil
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		target = strings.TrimSpace(a.config.DefaultChannel)
+	}
+	truncated := text
+	if len([]rune(truncated)) > 2000 {
+		truncated = string([]rune(truncated)[:1997]) + "..."
+	}
+	body := map[string]any{"content": truncated}
+	payload, _ := json.Marshal(body)
+	url := fmt.Sprintf("%s/channels/%s/messages/%s", a.apiBaseURL, target, messageID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bot "+a.config.BotToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func (a *DiscordAdapter) RunStream(ctx context.Context, handle StreamChunkHandler) error {
+	a.base.setRunning(true)
+	defer a.base.setRunning(false)
+	if a.config.UseGatewayWS {
+		if err := a.runGatewayWSStream(ctx, handle); err == nil {
+			return nil
+		} else {
+			a.append("channel.discord.gateway.error", "", map[string]any{"error": err.Error()})
+		}
+	}
+	interval := time.Duration(a.config.PollEvery) * time.Second
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		if err := a.pollOnceStream(ctx, handle); err != nil {
+			a.base.setError(err)
+			a.append("channel.discord.error", "", map[string]any{"error": err.Error()})
+		} else {
+			a.base.setError(nil)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *DiscordAdapter) runGatewayWSStream(ctx context.Context, handle StreamChunkHandler) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://discord.com/api/gateway/bot", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bot "+a.config.BotToken)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var gateway struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&gateway); err != nil {
+		return err
+	}
+	if strings.TrimSpace(gateway.URL) == "" {
+		return fmt.Errorf("discord gateway URL missing")
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, gateway.URL+"?v=10&encoding=json", nil)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.WriteJSON(map[string]any{"op": 2, "d": map[string]any{"token": a.config.BotToken, "intents": 4609, "properties": map[string]string{"$os": "windows", "$browser": "anyclaw", "$device": "anyclaw"}}})
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		var packet struct {
+			Op int             `json:"op"`
+			T  string          `json:"t"`
+			D  json.RawMessage `json:"d"`
+		}
+		if err := conn.ReadJSON(&packet); err != nil {
+			return err
+		}
+		if packet.Op == 10 {
+			_ = conn.WriteJSON(map[string]any{"op": 1, "d": nil})
+			continue
+		}
+		if packet.T == "MESSAGE_CREATE" || packet.T == "THREAD_CREATE" {
+			_ = a.handleGatewayEventStream(ctx, packet.T, packet.D, handle)
+		}
+	}
+}
+
+func (a *DiscordAdapter) handleGatewayEventStream(ctx context.Context, eventType string, raw json.RawMessage, handle StreamChunkHandler) error {
+	if eventType == "MESSAGE_CREATE" {
+		var msg struct {
+			ID        string `json:"id"`
+			Content   string `json:"content"`
+			ChannelID string `json:"channel_id"`
+			GuildID   string `json:"guild_id"`
+			Author    struct {
+				ID       string `json:"id"`
+				Username string `json:"username"`
+				Bot      bool   `json:"bot"`
+			} `json:"author"`
+			MessageReference struct {
+				MessageID string `json:"message_id"`
+				ChannelID string `json:"channel_id"`
+			} `json:"message_reference"`
+		}
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			return err
+		}
+		if msg.Author.Bot || a.seen(msg.ID) {
+			return nil
+		}
+		if strings.TrimSpace(msg.Content) == "" {
+			return nil
+		}
+
+		meta := map[string]string{
+			"channel":      "discord",
+			"channel_id":   msg.ChannelID,
+			"guild_id":     msg.GuildID,
+			"user_id":      msg.Author.ID,
+			"username":     msg.Author.Username,
+			"reply_target": msg.ChannelID,
+			"message_id":   msg.ID,
+			"sender":       msg.Author.Username,
+		}
+
+		decision := a.router.Decide(RouteRequest{Channel: "discord", Source: msg.ChannelID + ":" + msg.Author.ID, Text: msg.Content, ThreadID: msg.MessageReference.MessageID})
+		sessionID := a.sessions[decision.Key]
+		if decision.SessionID != "" {
+			sessionID = decision.SessionID
+		}
+
+		err := a.sendStreamingMessage(ctx, msg.ChannelID, "", func(onChunk func(chunk string)) error {
+			_, err := handle(ctx, sessionID, msg.Content, meta, func(chunk string) error {
+				onChunk(chunk)
+				return nil
+			})
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		a.sessions[decision.Key] = sessionID
+		a.base.markActivity()
+		return nil
+	}
+	return nil
+}
+
+func (a *DiscordAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHandler) error {
+	url := fmt.Sprintf("%s/channels/%s/messages?limit=20", a.apiBaseURL, a.config.DefaultChannel)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bot "+a.config.BotToken)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("discord fetch failed: %s", resp.Status)
+	}
+
+	var messages []struct {
+		ID       string `json:"id"`
+		Content  string `json:"content"`
+		GuildID  string `json:"guild_id"`
+		ParentID string `json:"message_reference.message_id"`
+		Author   struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+			Bot      bool   `json:"bot"`
+		} `json:"author"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
+		return err
+	}
+
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.ID == "" || msg.ID == a.latestID || msg.Author.Bot || a.seen(msg.ID) {
+			continue
+		}
+		a.latestID = msg.ID
+		source := a.config.DefaultChannel + ":" + msg.Author.ID
+
+		if strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+
+		meta := map[string]string{
+			"channel":      "discord",
+			"channel_id":   a.config.DefaultChannel,
+			"guild_id":     msg.GuildID,
+			"user_id":      msg.Author.ID,
+			"username":     msg.Author.Username,
+			"reply_target": a.config.DefaultChannel,
+			"message_id":   msg.ID,
+			"sender":       msg.Author.Username,
+		}
+
+		threadID := strings.TrimSpace(msg.ParentID)
+		decision := a.router.Decide(RouteRequest{Channel: "discord", Source: source, Text: msg.Content, ThreadID: threadID})
+		sessionID := a.sessions[decision.Key]
+		if decision.SessionID != "" {
+			sessionID = decision.SessionID
+		}
+		replyTarget := a.config.DefaultChannel
+		if threadID != "" {
+			replyTarget = threadID
+		}
+
+		err := a.sendStreamingMessage(ctx, replyTarget, threadID, func(onChunk func(chunk string)) error {
+			_, err := handle(ctx, sessionID, msg.Content, meta, func(chunk string) error {
+				onChunk(chunk)
+				return nil
+			})
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		a.sessions[decision.Key] = sessionID
+		a.base.markActivity()
+		a.append("channel.discord.message", sessionID, map[string]any{
+			"channel":   a.config.DefaultChannel,
+			"user":      msg.Author.Username,
+			"user_id":   msg.Author.ID,
+			"text":      msg.Content,
+			"route":     decision.Key,
+			"agent":     decision.Agent,
+			"workspace": decision.Workspace,
+			"streaming": true,
+		})
+	}
+	return nil
 }

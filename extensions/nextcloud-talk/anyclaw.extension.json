@@ -1,0 +1,34 @@
+{
+  "id": "nextcloud-talk",
+  "name": "Nextcloud Talk Channel",
+  "version": "1.0.0",
+  "description": "Nextcloud Talk messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["nextcloud-talk"],
+  "entrypoint": "nextcloud_talk_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "server_url": {
+        "type": "string",
+        "description": "Nextcloud server URL (e.g. https://cloud.example.com)"
+      },
+      "username": {
+        "type": "string",
+        "description": "Nextcloud username"
+      },
+      "app_password": {
+        "type": "string",
+        "description": "Nextcloud app password",
+        "sensitive": true
+      },
+      "poll_interval": {
+        "type": "integer",
+        "description": "Poll interval in seconds",
+        "default": 10
+      }
+    },
+    "required": ["server_url", "username", "app_password"]
+  }
+}

@@ -8,9 +8,12 @@ import (
 )
 
 type RouteRequest struct {
-	Channel string
-	Source  string
-	Text    string
+	Channel  string
+	Source   string
+	Text     string
+	ThreadID string
+	IsGroup  bool
+	GroupID  string
 }
 
 type RouteDecision struct {
@@ -25,6 +28,8 @@ type RouteDecision struct {
 	Org         string `json:"org,omitempty"`
 	Project     string `json:"project,omitempty"`
 	Workspace   string `json:"workspace,omitempty"`
+	IsThread    bool   `json:"is_thread,omitempty"`
+	ThreadID    string `json:"thread_id,omitempty"`
 }
 
 type Router struct {
@@ -78,7 +83,15 @@ func buildDecision(req RouteRequest, mode string, titlePrefix string) RouteDecis
 		decision.SessionMode = "per-chat"
 		decision.Key = req.Channel + ":" + req.Source
 	}
+	if strings.TrimSpace(req.ThreadID) != "" {
+		decision.Key = decision.Key + ":thread:" + req.ThreadID
+		decision.IsThread = true
+		decision.ThreadID = req.ThreadID
+	}
 	baseTitle := req.Channel + " " + req.Source
+	if strings.TrimSpace(req.ThreadID) != "" {
+		baseTitle = baseTitle + " (thread)"
+	}
 	if strings.TrimSpace(titlePrefix) != "" {
 		baseTitle = strings.TrimSpace(titlePrefix) + " " + req.Source
 	}
