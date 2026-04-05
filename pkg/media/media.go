@@ -50,6 +50,7 @@ type Processor struct {
 	detector     *Detector
 	transcoder   *Transcoder
 	storage      StorageBackend
+	signer       *URLSigner
 }
 
 func NewProcessor(storagePath string) *Processor {
@@ -328,42 +329,6 @@ func (p *Processor) Delete(ctx context.Context, key string) error {
 	return storage.Delete(ctx, key)
 }
 
-func (p *Processor) Exists(ctx context.Context, key string) (bool, error) {
-	p.mu.RLock()
-	storage := p.storage
-	p.mu.RUnlock()
-
-	if storage == nil {
-		return false, fmt.Errorf("no storage backend configured")
-	}
-
-	return storage.Exists(ctx, key)
-}
-
-func (p *Processor) List(ctx context.Context, prefix string) ([]*StorageObject, error) {
-	p.mu.RLock()
-	storage := p.storage
-	p.mu.RUnlock()
-
-	if storage == nil {
-		return nil, fmt.Errorf("no storage backend configured")
-	}
-
-	return storage.List(ctx, prefix)
-}
-
-func (p *Processor) PresignURL(ctx context.Context, key string, expires time.Duration) (string, error) {
-	p.mu.RLock()
-	storage := p.storage
-	p.mu.RUnlock()
-
-	if storage == nil {
-		return "", fmt.Errorf("no storage backend configured")
-	}
-
-	return storage.URL(ctx, key, expires)
-}
-
 func (p *Processor) Compress(ctx context.Context, media *Media, opts ImageOptions) (*Media, error) {
 	p.mu.RLock()
 	transcoder := p.transcoder
@@ -480,6 +445,97 @@ func (p *Processor) Convert(ctx context.Context, media *Media, targetFormat Form
 	media.Metadata["format"] = string(targetFormat)
 
 	return media, nil
+}
+
+func (p *Processor) Exists(ctx context.Context, key string) (bool, error) {
+	p.mu.RLock()
+	storage := p.storage
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return false, fmt.Errorf("no storage backend configured")
+	}
+
+	return storage.Exists(ctx, key)
+}
+
+func (p *Processor) List(ctx context.Context, prefix string) ([]*StorageObject, error) {
+	p.mu.RLock()
+	storage := p.storage
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return nil, fmt.Errorf("no storage backend configured")
+	}
+
+	return storage.List(ctx, prefix)
+}
+
+func (p *Processor) PresignURL(ctx context.Context, key string, expires time.Duration) (string, error) {
+	p.mu.RLock()
+	storage := p.storage
+	signer := p.signer
+	p.mu.RUnlock()
+
+	if storage == nil {
+		return "", fmt.Errorf("no storage backend configured")
+	}
+
+	if signer != nil {
+		return signer.SignStorageObject(storage, key, expires)
+	}
+
+	return storage.URL(ctx, key, expires)
+}
+
+func (p *Processor) SetSigner(signer *URLSigner) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.signer = signer
+}
+
+func (p *Processor) Signer() *URLSigner {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.signer
+}
+
+func (p *Processor) VerifySignedURL(ctx context.Context, signedURL string) (*SignedURLResult, error) {
+	p.mu.RLock()
+	signer := p.signer
+	p.mu.RUnlock()
+
+	if signer == nil {
+		return nil, fmt.Errorf("no URL signer configured")
+	}
+
+	baseURL, expireTime, metadata, err := signer.VerifyURL(signedURL)
+	if err != nil {
+		return nil, err
+	}
+
+	remaining := expireTime.Sub(time.Now().UTC())
+
+	return &SignedURLResult{
+		URL:       baseURL,
+		ExpiresAt: expireTime,
+		Remaining: remaining,
+		Key:       "",
+		Metadata:  metadata,
+		IsRevoked: remaining < 0,
+	}, nil
+}
+
+func (p *Processor) RevokeSignedURL(ctx context.Context, signedURL string) error {
+	p.mu.RLock()
+	signer := p.signer
+	p.mu.RUnlock()
+
+	if signer == nil {
+		return fmt.Errorf("no URL signer configured")
+	}
+
+	return signer.RevokeURL(signedURL)
 }
 
 func (p *Processor) guessType(mimeType string) Type {

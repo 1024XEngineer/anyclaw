@@ -42,6 +42,9 @@ type MediaPipelineConfig struct {
 	VideoOptions     VideoOptions
 	Storage          StorageBackend
 	AutoSave         bool
+	Signer           *URLSigner
+	AutoSign         bool
+	SignExpiry       time.Duration
 }
 
 func DefaultMediaPipelineConfig() MediaPipelineConfig {
@@ -467,6 +470,89 @@ func (p *MediaPipeline) StorageURL(ctx context.Context, key string, expires time
 	return storage.URL(ctx, key, expires)
 }
 
+func (p *MediaPipeline) SignURL(ctx context.Context, key string, expires time.Duration) (string, error) {
+	signer := p.config.Signer
+	if signer == nil {
+		return "", fmt.Errorf("media-pipeline: no URL signer configured")
+	}
+
+	storage := p.config.Storage
+	if storage != nil {
+		return signer.SignStorageObject(storage, key, expires)
+	}
+
+	baseURL := key
+	return signer.SignURL(baseURL, key, expires, nil)
+}
+
+func (p *MediaPipeline) VerifySignedURL(ctx context.Context, signedURL string) (*SignedURLResult, error) {
+	signer := p.config.Signer
+	if signer == nil {
+		return nil, fmt.Errorf("media-pipeline: no URL signer configured")
+	}
+
+	baseURL, expireTime, metadata, err := signer.VerifyURL(signedURL)
+	if err != nil {
+		return nil, err
+	}
+
+	remaining := expireTime.Sub(time.Now().UTC())
+
+	return &SignedURLResult{
+		URL:       baseURL,
+		ExpiresAt: expireTime,
+		Remaining: remaining,
+		Metadata:  metadata,
+		IsRevoked: remaining < 0,
+	}, nil
+}
+
+func (p *MediaPipeline) RevokeSignedURL(ctx context.Context, signedURL string) error {
+	signer := p.config.Signer
+	if signer == nil {
+		return fmt.Errorf("media-pipeline: no URL signer configured")
+	}
+	return signer.RevokeURL(signedURL)
+}
+
+func (p *MediaPipeline) SignMediaURL(ctx context.Context, media *Media, expires time.Duration) (string, error) {
+	signer := p.config.Signer
+	if signer == nil {
+		return "", fmt.Errorf("media-pipeline: no URL signer configured")
+	}
+
+	storage := p.config.Storage
+	if storage != nil && media.Metadata["storage-key"] != "" {
+		key := media.Metadata["storage-key"].(string)
+		return signer.SignStorageObject(storage, key, expires)
+	}
+
+	key := media.ID
+	if media.Name != "" {
+		key = media.Name
+	}
+
+	metadata := map[string]string{
+		"m_type": string(media.Type),
+		"m_mime": media.MimeType,
+	}
+
+	baseURL := media.URL
+	if baseURL == "" {
+		baseURL = "https://media.example.com/" + key
+	}
+
+	return signer.SignURL(baseURL, key, expires, metadata)
+}
+
+func (p *MediaPipeline) CleanupRevokedURLs() int {
+	signer := p.config.Signer
+	if signer == nil {
+		return 0
+	}
+	return signer.CleanupRevoked()
+}
+
 func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int64, userAgent string, allowedTypes []string) (*Media, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -575,6 +661,21 @@ func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int6
 		media.URL = obj.URL
 		media.Metadata["storage-key"] = key
 		media.Metadata["storage-url"] = obj.URL
+
+		if p.config.AutoSign && p.config.Signer != nil {
+			signExpires := p.config.SignExpiry
+			if signExpires <= 0 {
+				signExpires = 24 * time.Hour
+			}
+
+			signedURL, err := p.config.Signer.SignStorageObject(storage, key, signExpires)
+			if err != nil {
+				return nil, fmt.Errorf("media-pipeline: auto-sign failed: %w", err)
+			}
+
+			media.Metadata["signed-url"] = signedURL
+			media.Metadata["signed-expires"] = time.Now().UTC().Add(signExpires).Format(time.RFC3339)
+		}
 	}
 
 	return media, nil
