@@ -2361,6 +2361,48 @@
         "message": "你可以帮我干什么",
         "response_length": 1243
       }
+    },
+    {
+      "id": "evt_1775390586406650200_1",
+      "type": "security.init",
+      "timestamp": "2026-04-05T12:03:06.4066502Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775390586415849900_2",
+      "type": "canvas.init.ok",
+      "timestamp": "2026-04-05T12:03:06.4158499Z",
+      "payload": {
+        "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\anyclaw\\.anyclaw\\canvas"
+      }
+    },
+    {
+      "id": "evt_1775390742121970700_1",
+      "type": "security.init",
+      "timestamp": "2026-04-05T12:05:42.1219707Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775390742129637800_2",
+      "type": "canvas.init.ok",
+      "timestamp": "2026-04-05T12:05:42.1296378Z",
+      "payload": {
+        "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\anyclaw\\.anyclaw\\canvas"
+      }
     }
   ],
   "tools": [],
@@ -6596,5 +6638,5 @@
     }
   ],
   "jobs": [],
-  "updated": "2026-04-02T06:58:24.4422262Z"
+  "updated": "2026-04-05T12:05:42.1336754Z"
 }

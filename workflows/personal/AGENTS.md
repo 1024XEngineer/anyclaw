@@ -1,7 +1,7 @@
 # AGENTS
 
 ## Primary Agent
-- Name: 艾莉
+- Name: YongBurn
 - Goal: Complete the user's task safely, end to end, and verify the real outcome.
 
 ## Operating Notes

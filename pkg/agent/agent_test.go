@@ -275,6 +275,25 @@ func TestSelectToolInfosSkipsBulkToolsForCasualQuestion(t *testing.T) {
 	}
 }
 
+func TestSelectToolInfosHandlesChineseDesktopRequest(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("desktop_open", "Open a desktop app", map[string]any{}, nil)
+	registry.RegisterTool("desktop_list_windows", "List desktop windows", map[string]any{}, nil)
+	registry.RegisterTool("skill_app-controller", "Desktop app control guidance", map[string]any{}, nil)
+
+	ag := New(Config{Tools: registry})
+
+	actionable := ag.selectToolInfos("帮我打开steam")
+	names := make([]string, 0, len(actionable))
+	for _, tool := range actionable {
+		names = append(names, tool.Name)
+	}
+	got := strings.Join(names, ",")
+	if !strings.Contains(got, "desktop_open") || !strings.Contains(got, "desktop_list_windows") || !strings.Contains(got, "skill_app-controller") {
+		t.Fatalf("expected desktop and skill tools for Chinese open-app request, got %q", got)
+	}
+}
+
 func TestBuildSystemPromptInjectsWorkspaceBootstrapFiles(t *testing.T) {
 	mem := memory.NewFileMemory(t.TempDir())
 	if err := mem.Init(); err != nil {

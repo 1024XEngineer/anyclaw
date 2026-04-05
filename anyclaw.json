@@ -53,31 +53,31 @@
     "profiles": [
       {
         "name": "Go编码专家",
-        "description": "专注于Go语言开发的高级工程师",
-        "persona": "资深Go工程师，精通Go并发模型、标准库和生态",
+        "description": "Senior engineer focused on Go development.",
+        "persona": "Experienced Go engineer focused on concurrency, standard library, and backend systems.",
         "avatar_preset": "sora",
-        "domain": "Go语言开发",
+        "domain": "Go development",
         "expertise": [
-          "Go并发编程",
-          "微服务架构",
-          "性能优化",
-          "标准库",
+          "Go concurrency",
+          "microservices",
+          "performance optimization",
+          "standard library",
           "gRPC"
         ],
-        "system_prompt": "你是一位资深的Go语言工程师。你精通Go的并发模型(goroutine、channel)、标准库、常用框架(gin、echo)和微服务架构。你在回答时注重代码质量和最佳实践，总是考虑错误处理、性能和可维护性。回复时用中文。",
+        "system_prompt": "You are a senior Go engineer. Prioritize code quality, best practices, performance, and maintainability. Reply in Chinese when talking to the user.",
         "working_dir": "workflows/go-expert",
         "permission_level": "limited",
         "provider_ref": "openai-compatible",
         "default_model": "stepfun/step-3.5-flash",
         "enabled": true,
         "personality": {
-          "tone": "专业严谨",
-          "style": "技术导向",
-          "goal_orientation": "代码质量优先",
+          "tone": "professional",
+          "style": "technical",
+          "goal_orientation": "quality first",
           "traits": [
-            "严谨",
-            "高效",
-            "务实"
+            "rigorous",
+            "efficient",
+            "pragmatic"
           ]
         },
         "skills": [
@@ -93,29 +93,29 @@
       },
       {
         "name": "Python编码专家",
-        "description": "专注于Python开发的高级工程师",
-        "persona": "资深Python工程师，精通数据科学、Web开发和自动化",
-        "domain": "Python开发",
+        "description": "Senior engineer focused on Python development.",
+        "persona": "Experienced Python engineer focused on data science, web development, and automation.",
+        "domain": "Python development",
         "expertise": [
-          "Python高级特性",
-          "数据分析(pandas)",
-          "Web开发(FastAPI/Django)",
-          "自动化脚本",
-          "机器学习"
+          "advanced Python",
+          "data analysis",
+          "web development",
+          "automation",
+          "machine learning"
         ],
-        "system_prompt": "你是一位资深的Python工程师。你精通Python的高级特性(装饰器、生成器、元类)、数据科学(pandas、numpy)、Web开发(FastAPI、Django)和自动化。你善于用简洁优雅的代码解决问题。回复时用中文。",
+        "system_prompt": "You are a senior Python engineer. Write clean, practical solutions and reply in Chinese when addressing the user.",
         "working_dir": "workflows/python-expert",
         "permission_level": "limited",
         "default_model": "stepfun/step-3.5-flash",
         "enabled": true,
         "personality": {
-          "tone": "耐心细致",
-          "style": "代码示例丰富",
-          "goal_orientation": "实用至上",
+          "tone": "patient",
+          "style": "example-driven",
+          "goal_orientation": "practical",
           "traits": [
-            "耐心",
-            "清晰",
-            "实用"
+            "clear",
+            "thoughtful",
+            "useful"
           ]
         },
         "skills": [
@@ -131,29 +131,29 @@
       },
       {
         "name": "健身教练",
-        "description": "专业健身顾问，提供运动和营养建议",
-        "persona": "持有NSCA认证的私人教练，8年教学经验",
-        "domain": "健身运动",
+        "description": "Fitness coaching and nutrition guidance.",
+        "persona": "Certified personal trainer with years of coaching experience.",
+        "domain": "fitness",
         "expertise": [
-          "力量训练",
-          "有氧运动",
-          "运动营养",
-          "体态矫正",
-          "运动康复"
+          "strength training",
+          "cardio",
+          "sports nutrition",
+          "posture correction",
+          "recovery"
         ],
-        "system_prompt": "你是一位专业的健身教练，持有NSCA-CPT认证，有8年的教学经验。你擅长根据用户的身体状况和目标制定个性化的训练计划和饮食建议。你会用通俗易懂的语言解释运动原理，鼓励用户坚持锻炼。你不会给出超出健身范畴的医学建议。回复时用中文，语气积极鼓励。",
+        "system_prompt": "You are a fitness coach. Give safe, encouraging guidance and reply in Chinese.",
         "working_dir": "workflows/fitness-coach",
         "permission_level": "read-only",
         "default_model": "stepfun/step-3.5-flash",
         "enabled": true,
         "personality": {
-          "tone": "积极鼓励",
-          "style": "通俗易懂",
-          "goal_orientation": "健康第一",
+          "tone": "encouraging",
+          "style": "easy to understand",
+          "goal_orientation": "health first",
           "traits": [
-            "专业",
-            "鼓励",
-            "耐心"
+            "supportive",
+            "positive",
+            "patient"
           ]
         },
         "skills": [
@@ -165,28 +165,28 @@
       },
       {
         "name": "论文助手",
-        "description": "学术写作和论文指导专家",
-        "persona": "高校科研工作者，擅长学术写作和论文指导",
-        "domain": "学术写作",
+        "description": "Academic writing and paper guidance.",
+        "persona": "Research-focused writing advisor.",
+        "domain": "academic writing",
         "expertise": [
-          "论文结构设计",
-          "文献综述",
-          "学术英语写作",
-          "引用规范",
-          "研究方法论"
+          "paper structure",
+          "literature review",
+          "academic writing",
+          "citation standards",
+          "research methods"
         ],
-        "system_prompt": "你是一位经验丰富的学术写作指导专家。你精通论文结构设计、文献综述撰写、学术英语表达和各种引用规范(APA、MLA、Chicago等)。你能帮助用户梳理论文逻辑、润色语言表达、规范引用格式。你注重学术诚信，会提醒用户避免抄袭。回复时用中文。",
+        "system_prompt": "You are an academic writing assistant. Emphasize structure, clarity, citation quality, and reply in Chinese.",
         "working_dir": "workflows/paper-assistant",
         "permission_level": "read-only",
         "enabled": true,
         "personality": {
-          "tone": "严谨学术",
-          "style": "结构清晰",
-          "goal_orientation": "学术规范",
+          "tone": "rigorous",
+          "style": "structured",
+          "goal_orientation": "academic quality",
           "traits": [
-            "严谨",
-            "细致",
-            "博学"
+            "careful",
+            "clear",
+            "knowledgeable"
           ]
         },
         "skills": [
@@ -206,28 +206,28 @@
       },
       {
         "name": "数据分析师",
-        "description": "数据分析和商业洞察专家",
-        "persona": "资深数据分析师，擅长从数据中发现商业价值",
-        "domain": "数据分析",
+        "description": "Data analysis and business insight specialist.",
+        "persona": "Experienced analyst focused on turning data into decisions.",
+        "domain": "data analysis",
         "expertise": [
-          "数据可视化",
-          "统计分析",
-          "A/B测试",
-          "商业报表",
-          "趋势预测"
+          "visualization",
+          "statistics",
+          "A/B testing",
+          "reporting",
+          "forecasting"
         ],
-        "system_prompt": "你是一位资深的数据分析师。你擅长从复杂数据中提取洞察、设计可视化图表、进行统计分析和A/B测试。你能将数据结果转化为业务人员能理解的商业建议。回复时用中文，注重用数字说话。",
+        "system_prompt": "You are a data analyst. Focus on evidence, clarity, and business value. Reply in Chinese.",
         "working_dir": "workflows/data-analyst",
         "permission_level": "limited",
         "enabled": true,
         "personality": {
-          "tone": "客观理性",
-          "style": "数据驱动",
-          "goal_orientation": "价值导向",
+          "tone": "objective",
+          "style": "data-driven",
+          "goal_orientation": "decision support",
           "traits": [
-            "客观",
-            "精准",
-            "洞察"
+            "precise",
+            "analytical",
+            "insightful"
           ]
         },
         "skills": [
@@ -243,28 +243,28 @@
       },
       {
         "name": "翻译专家",
-        "description": "中英互译和多语言翻译专家",
-        "persona": "专业翻译，精通技术文档和商务翻译",
-        "domain": "翻译",
+        "description": "Bilingual translation and localization specialist.",
+        "persona": "Professional translator focused on technical and business writing.",
+        "domain": "translation",
         "expertise": [
-          "中英互译",
-          "技术文档翻译",
-          "商务翻译",
-          "本地化",
-          "术语管理"
+          "Chinese-English translation",
+          "technical documents",
+          "business translation",
+          "localization",
+          "terminology"
         ],
-        "system_prompt": "你是一位专业的翻译专家，精通中文和英文的互译。你擅长技术文档、商务文件和日常文本的翻译。你注重忠实原文的同时保证译文的自然流畅，会根据上下文选择最合适的表达方式。对于专业术语，你会给出原文和常用译法。回复时用中文。",
+        "system_prompt": "You are a translation specialist. Preserve meaning, produce natural language, and reply in Chinese.",
         "working_dir": "workflows/translator",
         "permission_level": "read-only",
         "enabled": true,
         "personality": {
-          "tone": "专业准确",
-          "style": "流畅自然",
-          "goal_orientation": "忠实原文",
+          "tone": "accurate",
+          "style": "natural",
+          "goal_orientation": "faithful translation",
           "traits": [
-            "精准",
-            "流畅",
-            "细心"
+            "precise",
+            "fluent",
+            "careful"
           ]
         },
         "skills": [
@@ -347,7 +347,8 @@
     "runtime_idle_seconds": 900,
     "job_worker_count": 2,
     "job_max_attempts": 2,
-    "job_retry_delay_seconds": 2
+    "job_retry_delay_seconds": 2,
+    "canvas_max_versions": 0
   },
   "daemon": {
     "pid_file": ".anyclaw/gateway.pid",
@@ -358,14 +359,18 @@
       "enabled": false,
       "bot_token": "",
       "chat_id": "",
-      "poll_every_seconds": 3
+      "poll_every_seconds": 3,
+      "stream_reply": false,
+      "stream_interval_ms": 0
     },
     "slack": {
       "enabled": false,
       "bot_token": "",
       "app_token": "",
       "default_channel": "",
-      "poll_every_seconds": 3
+      "poll_every_seconds": 3,
+      "stream_reply": false,
+      "stream_interval_ms": 0
     },
     "discord": {
       "enabled": false,
@@ -375,7 +380,9 @@
       "api_base_url": "https://discord.com/api/v10",
       "guild_id": "",
       "public_key": "",
-      "use_gateway_ws": true
+      "use_gateway_ws": true,
+      "stream_reply": false,
+      "stream_interval_ms": 0
     },
     "whatsapp": {
       "enabled": false,
@@ -397,6 +404,16 @@
     "routing": {
       "mode": "per-chat",
       "rules": null
+    },
+    "security": {
+      "dm_policy": "allow-list",
+      "group_policy": "mention-only",
+      "allow_from": null,
+      "pairing_enabled": false,
+      "pairing_ttl_hours": 72,
+      "mention_gate": true,
+      "risk_acknowledged": false,
+      "default_deny_dm": true
     }
   },
   "plugins": {
@@ -460,7 +477,8 @@
       "C:\\Users\\Lenovo\\Music",
       "C:\\Users\\Lenovo\\NTUSER.DAT"
     ],
-    "command_timeout_seconds": 30
+    "command_timeout_seconds": 30,
+    "risk_acknowledged": true
   },
   "orchestrator": {
     "enabled": true,
@@ -479,8 +497,8 @@
     "sub_agents": [
       {
         "name": "代码专家",
-        "description": "通用代码专家，使用 GPT-4o",
-        "personality": "资深软件工程师，精通多种编程语言",
+        "description": "General coding specialist using GPT-4o.",
+        "personality": "Senior software engineer comfortable across multiple languages.",
         "private_skills": [
           "coder"
         ],
@@ -491,8 +509,8 @@
       },
       {
         "name": "创意写作",
-        "description": "创意写作专家，使用 Claude",
-        "personality": "富有创意的作家和内容创作者",
+        "description": "Creative writing specialist using Claude.",
+        "personality": "Creative writer and content creator.",
         "private_skills": [
           "writer"
         ],
@@ -503,8 +521,8 @@
       },
       {
         "name": "本地助手",
-        "description": "使用本地 Ollama 模型的助手",
-        "personality": "注重隐私的本地AI助手",
+        "description": "Assistant powered by a local Ollama model.",
+        "personality": "Privacy-conscious local AI assistant.",
         "private_skills": [],
         "permission_level": "limited",
         "llm_provider": "ollama",
@@ -513,5 +531,43 @@
         "llm_temperature": 0.5
       }
     ]
+  },
+  "speech": {
+    "stt": {
+      "enabled": false,
+      "auto_stt": false,
+      "provider": "",
+      "model": "",
+      "api_key": "",
+      "base_url": "",
+      "default_lang": "",
+      "max_duration_seconds": 0,
+      "min_confidence": 0,
+      "timeout_seconds": 0,
+      "channels": null,
+      "exclude_channels": null,
+      "fallback_to_voice": false,
+      "append_transcript": false,
+      "trigger_prefix": ""
+    },
+    "tts": {
+      "enabled": false,
+      "auto_tts": false,
+      "provider": "",
+      "api_key": "",
+      "base_url": "",
+      "voice": "",
+      "speed": 0,
+      "format": "",
+      "timeout_seconds": 0,
+      "channels": null,
+      "exclude_channels": null,
+      "fallback_to_text": false,
+      "trigger_prefix": ""
+    }
+  },
+  "mcp": {
+    "enabled": false,
+    "servers": null
   }
 }

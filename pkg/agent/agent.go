@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/anyclaw/anyclaw/pkg/clawbridge"
 	"github.com/anyclaw/anyclaw/pkg/clihub"
@@ -701,6 +702,9 @@ func shouldExposeToolsForInput(query string, toolList []tools.ToolInfo) bool {
 	if strings.Contains(query, `\`) || strings.Contains(query, "/") || strings.Contains(query, ".md") || strings.Contains(query, ".go") || strings.Contains(query, ".json") {
 		return true
 	}
+	if containsCJKActionIntent(query) {
+		return true
+	}
 
 	keywords := []string{
 		"open", "read", "write", "edit", "update", "change", "create", "delete", "remove", "search", "find",
@@ -715,6 +719,36 @@ func shouldExposeToolsForInput(query string, toolList []tools.ToolInfo) bool {
 			return true
 		}
 	}
+	return false
+}
+
+func containsCJKActionIntent(query string) bool {
+	if strings.TrimSpace(query) == "" {
+		return false
+	}
+
+	hasCJK := false
+	for _, r := range query {
+		if unicode.Is(unicode.Han, r) {
+			hasCJK = true
+			break
+		}
+	}
+	if !hasCJK {
+		return false
+	}
+
+	actionTerms := []string{
+		"打开", "启动", "运行", "执行", "搜索", "查找", "读取", "查看",
+		"编辑", "修改", "创建", "删除", "发送", "点击", "输入", "截图",
+		"浏览", "访问", "安装", "修复", "实现", "编写", "帮我", "请帮我",
+	}
+	for _, term := range actionTerms {
+		if strings.Contains(query, term) {
+			return true
+		}
+	}
+
 	return false
 }
 

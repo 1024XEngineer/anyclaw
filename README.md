@@ -19,6 +19,14 @@ go build -o anyclaw ./cmd/anyclaw
 ./anyclaw -i
 ```
 
+Windows:
+
+```powershell
+go build -o anyclaw.exe ./cmd/anyclaw
+.\anyclaw.exe --setup
+.\anyclaw.exe -i
+```
+
 ## Web UI workspace
 
 AnyClaw now includes a pnpm-based UI workspace similar to OpenClaw:
@@ -122,6 +130,14 @@ workflows/       workspace bootstrap files
 ## 中文显示说明
 
 在 Windows 环境下运行 AnyClaw 时，如果控制台显示中文乱码，请先设置 UTF-8 代码页：
+
+```bash
+chcp 65001
+```
+
+## Chinese Display On Windows
+
+If the Windows console shows garbled Chinese text while running AnyClaw, switch the terminal code page to UTF-8 first:
 
 ```bash
 chcp 65001

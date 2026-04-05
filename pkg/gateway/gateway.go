@@ -987,7 +987,6 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Cron jobs
 	cron.RegisterUIHandler(mux, cronScheduler, "/cron")
-	mux.HandleFunc("/cron/", s.wrap("/cron/", s.handleCronByID))
 
 	// Canvas
 	mux.HandleFunc("/canvas", s.handleCanvasUI)

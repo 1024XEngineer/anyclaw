@@ -26,6 +26,8 @@ import (
 
 const Version = "2026.3.13"
 
+const defaultAgentContextTokenFloor = 16384
+
 // BootPhase represents an initialization phase name.
 type BootPhase string
 
@@ -490,7 +492,7 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		Tools:            registry,
 		WorkDir:          workDir,
 		WorkingDir:       workingDir,
-		MaxContextTokens: app.Config.LLM.MaxTokens,
+		MaxContextTokens: deriveAgentContextTokenBudget(app.Config.LLM.MaxTokens),
 	})
 	app.Agent = ag
 	progress(BootEvent{Phase: PhaseAgent, Status: "ok", Message: fmt.Sprintf("permission=%s", app.Config.Agent.PermissionLevel), Dur: time.Since(t)})
@@ -517,6 +519,21 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	// ── Done ─────────────────────────────────────────────────────────
 	progress(BootEvent{Phase: PhaseReady, Status: "ok", Message: fmt.Sprintf("bootstrap complete in %s", time.Since(start).Round(time.Millisecond))})
 	return app, nil
+}
+
+func deriveAgentContextTokenBudget(llmMaxTokens int) int {
+	if llmMaxTokens <= 0 {
+		return defaultAgentContextTokenFloor
+	}
+
+	// `llm.max_tokens` is the completion budget sent to the provider, not the
+	// total context window. Keep a larger local guard so the system prompt and
+	// chat history do not get rejected before the first request.
+	budget := llmMaxTokens * 2
+	if budget < defaultAgentContextTokenFloor {
+		budget = defaultAgentContextTokenFloor
+	}
+	return budget
 }
 
 func sanitizeTargetName(input string) string {
