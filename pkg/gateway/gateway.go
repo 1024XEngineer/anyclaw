@@ -25,6 +25,7 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/discovery"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/mcp"
+	"github.com/anyclaw/anyclaw/pkg/observability"
 	"github.com/anyclaw/anyclaw/pkg/plugin"
 	"github.com/anyclaw/anyclaw/pkg/routing"
 	"github.com/anyclaw/anyclaw/pkg/runtime"
@@ -833,6 +834,18 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	s.startWorkers(ctx)
+
+	// Observability middleware
+	obs := newObservabilityMiddleware(runtime.Version)
+	obs.RegisterHealthChecks(s.app)
+
+	mux.HandleFunc("/health", obs.handleHealth)
+	mux.HandleFunc("/ready", obs.handleReady)
+	mux.HandleFunc("/live", obs.handleLive)
+	mux.HandleFunc("/metrics", obs.handleMetrics)
+	mux.HandleFunc("/metrics.json", obs.handleMetricsJSON)
+	observability.RegisterPprof(mux, "/debug/pprof/")
+
 	mux.HandleFunc("/healthz", s.wrap("/healthz", s.handleHealth))
 	mux.HandleFunc("/status", s.wrap("/status", requirePermission("status.read", s.handleStatus)))
 	mux.HandleFunc("/chat", s.wrap("/chat", requirePermission("chat.send", requireHierarchyAccess(func(r *http.Request) (string, string, string) {
