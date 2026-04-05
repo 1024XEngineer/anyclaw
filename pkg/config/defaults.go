@@ -38,9 +38,9 @@ func DefaultConfig() *Config {
 			AutoSave:   true,
 		},
 		Gateway: GatewayConfig{
-			Host:                 "127.0.0.1",
-			Port:                 18789,
-			Bind:                 "loopback",
+			Host: "127.0.0.1",
+			Port: 18789,
+			Bind: "loopback",
 			ControlUI: GatewayControlUIConfig{
 				BasePath: "/dashboard",
 			},
@@ -103,7 +103,7 @@ func DefaultConfig() *Config {
 			CommandTimeoutSeconds:    30,
 		},
 		Orchestrator: OrchestratorConfig{
-			Enabled:             false,
+			Enabled:             true,
 			MaxConcurrentAgents: 4,
 			MaxRetries:          2,
 			TimeoutSeconds:      300,

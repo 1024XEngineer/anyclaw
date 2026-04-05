@@ -37,10 +37,12 @@ type Orchestrator struct {
 	agentPool   *AgentPool
 	decomposer  *TaskDecomposer
 	queue       *TaskQueue
+	lifecycle   *AgentLifecycle
 	allSkills   *skills.SkillsManager
 	baseTools   *tools.Registry
 	memory      memory.MemoryBackend
 	llm         agent.LLMCaller
+	messageBus  *MessageBus
 	mu          sync.Mutex
 	status      OrchestratorStatus
 	history     []ExecutionLog
@@ -92,15 +94,17 @@ func NewOrchestrator(cfg OrchestratorConfig, llmClient agent.LLMCaller, allSkill
 	}
 
 	o := &Orchestrator{
-		config:    cfg,
-		agentPool: NewAgentPool(),
-		queue:     NewTaskQueue(),
-		allSkills: allSkills,
-		baseTools: baseTools,
-		memory:    mem,
-		llm:       llmClient,
-		status:    StatusIdle,
-		history:   make([]ExecutionLog, 0),
+		config:     cfg,
+		agentPool:  NewAgentPool(),
+		queue:      NewTaskQueue(),
+		lifecycle:  NewAgentLifecycle(5, 50),
+		allSkills:  allSkills,
+		baseTools:  baseTools,
+		memory:     mem,
+		llm:        llmClient,
+		messageBus: NewMessageBus(100),
+		status:     StatusIdle,
+		history:    make([]ExecutionLog, 0),
 	}
 
 	for _, opt := range opts {
@@ -126,6 +130,20 @@ func (o *Orchestrator) initAgents(defs []AgentDefinition) error {
 			continue
 		}
 		o.agentPool.Register(def.Name, sa)
+
+		ma, err := o.lifecycle.Spawn(def.Name, "", map[string]string{
+			"domain": def.Domain,
+			"role":   def.Persona,
+			"skills": strings.Join(def.PrivateSkills, ","),
+		})
+		if err == nil {
+			sa.SetLifecycleID(ma.ID)
+		}
+
+		sa.SetMessageBus(o.messageBus)
+
+		o.messageBus.Subscribe(def.Name)
+
 		o.log("info", fmt.Sprintf("Registered agent %q [domain=%s]", def.Name, def.Domain), def.Name, "")
 	}
 	return nil
@@ -229,12 +247,14 @@ func (o *Orchestrator) RunWithAgents(ctx context.Context, input string, selected
 	o.status = StatusRunning
 	o.mu.Unlock()
 
-	// Phase 3: Execute sub-tasks with dependency resolution
+	// Phase 3: Execute sub-tasks concurrently with dependency resolution
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, o.config.MaxConcurrentAgents)
+	var execMu sync.Mutex
+
 	for o.queue.HasPending() {
-		// Check for ready tasks
 		subTask := o.queue.DequeueReady()
 		if subTask == nil {
-			// No ready tasks - check if we're waiting on running tasks
 			if !o.queue.HasPending() {
 				break
 			}
@@ -242,7 +262,6 @@ func (o *Orchestrator) RunWithAgents(ctx context.Context, input string, selected
 			continue
 		}
 
-		// Get agent for this sub-task
 		sa, ok := o.agentPool.Get(subTask.AssignedAgent)
 		if !ok {
 			o.log("error", fmt.Sprintf("Agent %q not found for sub-task %q", subTask.AssignedAgent, subTask.Title), "", subTask.ID)
@@ -250,26 +269,64 @@ func (o *Orchestrator) RunWithAgents(ctx context.Context, input string, selected
 			continue
 		}
 
-		// Build input with dependency context
-		taskInput := o.buildTaskInput(subTask, input)
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(st *SubTask, agent *SubAgent) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		o.log("info", fmt.Sprintf("Executing: %s (agent: %s)", subTask.Title, sa.Name()), sa.Name(), subTask.ID)
+			taskInput := o.buildTaskInput(st, input)
 
-		// Run the agent
-		runStart := time.Now()
-		now := runStart
-		subTask.StartedAt = &now
-		output, runErr := sa.Run(ctx, taskInput)
-		duration := time.Since(runStart)
+			o.log("info", fmt.Sprintf("Executing: %s (agent: %s)", st.Title, agent.Name()), agent.Name(), st.ID)
 
-		if runErr != nil {
-			o.log("error", fmt.Sprintf("Agent %q failed on %q: %v", sa.Name(), subTask.Title, runErr), sa.Name(), subTask.ID)
-			o.queue.UpdateResult(subTask.ID, "", runErr.Error(), duration)
-		} else {
-			o.log("info", fmt.Sprintf("Completed: %s (in %v)", subTask.Title, duration.Round(time.Millisecond)), sa.Name(), subTask.ID)
-			o.queue.UpdateResult(subTask.ID, output, "", duration)
-		}
+			lifecycleID := agent.LifecycleID()
+			if lifecycleID != "" {
+				_ = o.lifecycle.Start(lifecycleID)
+			}
+
+			agent.BroadcastMessage("task_started", map[string]any{
+				"task_id":    st.ID,
+				"title":      st.Title,
+				"agent_name": agent.Name(),
+			})
+
+			runStart := time.Now()
+			now := runStart
+			st.StartedAt = &now
+			output, runErr := agent.Run(ctx, taskInput)
+			duration := time.Since(runStart)
+
+			execMu.Lock()
+			if runErr != nil {
+				o.log("error", fmt.Sprintf("Agent %q failed on %q: %v", agent.Name(), st.Title, runErr), agent.Name(), st.ID)
+				o.queue.UpdateResult(st.ID, "", runErr.Error(), duration)
+				if lifecycleID != "" {
+					_ = o.lifecycle.Fail(lifecycleID, runErr.Error())
+				}
+				agent.BroadcastMessage("task_failed", map[string]any{
+					"task_id":    st.ID,
+					"title":      st.Title,
+					"agent_name": agent.Name(),
+					"error":      runErr.Error(),
+				})
+			} else {
+				o.log("info", fmt.Sprintf("Completed: %s (in %v)", st.Title, duration.Round(time.Millisecond)), agent.Name(), st.ID)
+				o.queue.UpdateResult(st.ID, output, "", duration)
+				if lifecycleID != "" {
+					_ = o.lifecycle.Complete(lifecycleID, output)
+				}
+				agent.BroadcastMessage("task_completed", map[string]any{
+					"task_id":    st.ID,
+					"title":      st.Title,
+					"agent_name": agent.Name(),
+					"output_len": len(output),
+				})
+			}
+			execMu.Unlock()
+		}(subTask, sa)
 	}
+
+	wg.Wait()
 
 	// Phase 4: Aggregate results
 	allSubTasks := o.queue.GetAll()
@@ -452,4 +509,24 @@ func (p *plannerAdapter) Chat(ctx context.Context, messages []interface{}, tools
 
 func (p *plannerAdapter) Name() string {
 	return p.client.Name()
+}
+
+func (o *Orchestrator) AgentPool() *AgentPool {
+	return o.agentPool
+}
+
+func (o *Orchestrator) MessageBus() *MessageBus {
+	return o.messageBus
+}
+
+func (o *Orchestrator) Queue() *TaskQueue {
+	return o.queue
+}
+
+func (o *Orchestrator) Lifecycle() *AgentLifecycle {
+	return o.lifecycle
+}
+
+func (o *Orchestrator) RunTask(ctx context.Context, input string, agentNames []string) (string, error) {
+	return o.RunWithAgents(ctx, input, agentNames)
 }

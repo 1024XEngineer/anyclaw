@@ -17,6 +17,8 @@ import (
 type AgentDefinition struct {
 	Name              string   `json:"name"`
 	Description       string   `json:"description"`
+	Role              string   `json:"role,omitempty"`
+	ParentRef         string   `json:"parent_ref,omitempty"`
 	Persona           string   `json:"persona,omitempty"`
 	Domain            string   `json:"domain,omitempty"`
 	Expertise         []string `json:"expertise,omitempty"`
@@ -59,6 +61,8 @@ type SubAgent struct {
 	contextEngine   *isolation.IsolatedEngine
 	contextBoundary *isolation.ContextBoundary
 	contextScopeID  string
+	lifecycleID     string
+	messageBus      *MessageBus
 }
 
 type LLMConfig struct {
@@ -337,6 +341,14 @@ func (sa *SubAgent) Description() string {
 	return sa.definition.Description
 }
 
+func (sa *SubAgent) Role() string {
+	return sa.definition.Role
+}
+
+func (sa *SubAgent) ParentRef() string {
+	return sa.definition.ParentRef
+}
+
 func (sa *SubAgent) Domain() string {
 	return sa.definition.Domain
 }
@@ -399,9 +411,47 @@ func (sa *SubAgent) HasIsolatedContext() bool {
 	return sa.contextEngine != nil
 }
 
+func (sa *SubAgent) SetLifecycleID(id string) {
+	sa.lifecycleID = id
+}
+
+func (sa *SubAgent) LifecycleID() string {
+	return sa.lifecycleID
+}
+
+func (sa *SubAgent) SetMessageBus(mb *MessageBus) {
+	sa.messageBus = mb
+}
+
+func (sa *SubAgent) SendMessage(to string, msgType string, payload map[string]any) {
+	if sa.messageBus == nil {
+		return
+	}
+	sa.messageBus.Send(&AgentMessage{
+		From:    sa.Name(),
+		To:      to,
+		Type:    msgType,
+		Payload: payload,
+	})
+}
+
+func (sa *SubAgent) BroadcastMessage(msgType string, payload map[string]any) {
+	if sa.messageBus == nil {
+		return
+	}
+	sa.messageBus.Send(&AgentMessage{
+		From:      sa.Name(),
+		Broadcast: true,
+		Type:      msgType,
+		Payload:   payload,
+	})
+}
+
 type AgentInfo struct {
 	Name              string   `json:"name"`
 	Description       string   `json:"description"`
+	Role              string   `json:"role,omitempty"`
+	ParentRef         string   `json:"parent_ref,omitempty"`
 	Persona           string   `json:"persona,omitempty"`
 	Domain            string   `json:"domain,omitempty"`
 	Expertise         []string `json:"expertise,omitempty"`
@@ -502,6 +552,8 @@ func (p *AgentPool) ListInfos() []AgentInfo {
 		info := AgentInfo{
 			Name:              sa.Name(),
 			Description:       sa.Description(),
+			Role:              sa.Role(),
+			ParentRef:         sa.ParentRef(),
 			Persona:           sa.Persona(),
 			Domain:            sa.Domain(),
 			Expertise:         sa.Expertise(),

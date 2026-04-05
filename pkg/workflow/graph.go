@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/plugin"
@@ -681,6 +682,10 @@ func (e *WorkflowExecutor) executeNode(graph *Graph, ctx *ExecutionContext, node
 		outputs, err = e.executeConditionNode(node, inputs)
 	case "loop":
 		outputs, err = e.executeLoopNode(graph, ctx, node, inputs)
+	case "parallel":
+		outputs, err = e.executeParallelNode(graph, ctx, node, inputs)
+	case "join":
+		outputs, err = e.executeJoinNode(graph, ctx, node, inputs)
 	default:
 		err = fmt.Errorf("unsupported node type: %s", node.Type)
 	}
@@ -724,8 +729,8 @@ func (e *WorkflowExecutor) executeNode(graph *Graph, ctx *ExecutionContext, node
 	// 标记节点完成
 	ctx.MarkNodeCompleted(node.ID, outputs)
 
-	// 执行下一个节点
-	nextNodes := graph.GetNextNodes(node.ID)
+	// 执行下一个节点（支持条件边路由）
+	nextNodes := e.getNextNodesByEdgeType(graph, node, outputs)
 	for _, nextNodeID := range nextNodes {
 		if nextNode, ok := graph.GetNodeByID(nextNodeID); ok {
 			if err := e.executeNode(graph, ctx, nextNode); err != nil {
@@ -735,6 +740,53 @@ func (e *WorkflowExecutor) executeNode(graph *Graph, ctx *ExecutionContext, node
 	}
 
 	return nil
+}
+
+func (e *WorkflowExecutor) getNextNodesByEdgeType(graph *Graph, node *Node, outputs map[string]any) []string {
+	var nextNodes []string
+
+	for _, edge := range graph.Edges {
+		if edge.Source != node.ID {
+			continue
+		}
+
+		switch edge.Type {
+		case "default", "success":
+			nextNodes = append(nextNodes, edge.Target)
+		case "failure":
+			// Only follow failure edges if the node failed
+			if _, failed := outputs["error"]; failed {
+				nextNodes = append(nextNodes, edge.Target)
+			}
+		case "condition":
+			// Check if the edge condition is met
+			if edge.Condition != "" {
+				result, err := EvalCondition(edge.Condition, outputs)
+				if err == nil && result {
+					nextNodes = append(nextNodes, edge.Target)
+				}
+			} else {
+				// No condition on edge, follow if condition result is true
+				if result, ok := outputs["result"]; ok && toBool(result) {
+					nextNodes = append(nextNodes, edge.Target)
+				}
+			}
+		case "condition_false":
+			// Follow if condition result is false
+			if result, ok := outputs["result"]; ok && !toBool(result) {
+				nextNodes = append(nextNodes, edge.Target)
+			}
+		case "condition_true":
+			// Follow if condition result is true
+			if result, ok := outputs["result"]; ok && toBool(result) {
+				nextNodes = append(nextNodes, edge.Target)
+			}
+		default:
+			nextNodes = append(nextNodes, edge.Target)
+		}
+	}
+
+	return nextNodes
 }
 
 func (e *WorkflowExecutor) executeActionNode(node *Node, inputs map[string]any) (map[string]any, error) {
@@ -763,18 +815,226 @@ func (e *WorkflowExecutor) executeActionNode(node *Node, inputs map[string]any) 
 }
 
 func (e *WorkflowExecutor) executeConditionNode(node *Node, inputs map[string]any) (map[string]any, error) {
-	// TODO: 实现条件评估
-	// 评估条件表达式
+	if node.Condition == "" {
+		return nil, fmt.Errorf("condition node has no expression")
+	}
+
+	vars := make(map[string]any)
+	for k, v := range inputs {
+		vars[k] = v
+	}
+
+	result, err := EvalCondition(node.Condition, vars)
+	if err != nil {
+		return nil, fmt.Errorf("condition evaluation failed: %w", err)
+	}
+
 	return map[string]any{
-		"result": true,
+		"result": result,
 	}, nil
 }
 
 func (e *WorkflowExecutor) executeLoopNode(graph *Graph, ctx *ExecutionContext, node *Node, inputs map[string]any) (map[string]any, error) {
-	// TODO: 实现循环执行
-	// 解析循环表达式并执行循环体
+	if node.LoopVar == "" || node.LoopOver == "" {
+		return nil, fmt.Errorf("loop node requires loop_var and loop_over")
+	}
+
+	collectionVal, ok := inputs[node.LoopOver]
+	if !ok {
+		collectionVal = ctx.Variables[node.LoopOver]
+	}
+	if collectionVal == nil {
+		collectionVal = ctx.Inputs[node.LoopOver]
+	}
+
+	var items []any
+	switch v := collectionVal.(type) {
+	case []any:
+		items = v
+	case string:
+		if strings.HasPrefix(v, "[") {
+			if err := json.Unmarshal([]byte(v), &items); err != nil {
+				return nil, fmt.Errorf("failed to parse loop_over as JSON array: %w", err)
+			}
+		} else {
+			items = []any{v}
+		}
+	default:
+		items = []any{collectionVal}
+	}
+
+	if len(items) == 0 {
+		return map[string]any{
+			"iterations": 0,
+			"results":    []any{},
+		}, nil
+	}
+
+	var results []any
+	maxIterations := 1000
+	if len(items) > maxIterations {
+		items = items[:maxIterations]
+	}
+
+	for i, item := range items {
+		loopVars := make(map[string]any)
+		loopVars[node.LoopVar] = item
+		loopVars[node.LoopVar+"_index"] = i
+		loopVars[node.LoopVar+"_first"] = i == 0
+		loopVars[node.LoopVar+"_last"] = i == len(items)-1
+		loopVars[node.LoopVar+"_count"] = len(items)
+
+		for _, v := range loopVars {
+			ctx.Variables[fmt.Sprintf("%s_%d", node.LoopVar, i)] = v
+		}
+
+		childNodes := graph.GetNextNodes(node.ID)
+		for _, childID := range childNodes {
+			childNode, ok := graph.GetNodeByID(childID)
+			if !ok {
+				continue
+			}
+
+			childInputs := ctx.ResolveInputs(childNode, graph)
+			for k, v := range loopVars {
+				if _, exists := childInputs[k]; !exists {
+					childInputs[k] = v
+				}
+			}
+
+			ctx.MarkNodeStarted(childNode.ID, childInputs)
+			var outputs map[string]any
+			var err error
+
+			switch childNode.Type {
+			case "action":
+				outputs, err = e.executeActionNode(childNode, childInputs)
+			case "condition":
+				outputs, err = e.executeConditionNode(childNode, childInputs)
+			case "loop":
+				outputs, err = e.executeLoopNode(graph, ctx, childNode, childInputs)
+			default:
+				err = fmt.Errorf("unsupported node type in loop body: %s", childNode.Type)
+			}
+
+			if err != nil {
+				ctx.MarkNodeFailed(childNode.ID, &NodeError{
+					Code:    "loop_body_failed",
+					Message: err.Error(),
+				})
+				return map[string]any{
+					"iterations":      i,
+					"results":         results,
+					"failed_at_index": i,
+					"failed_at_node":  childNode.ID,
+					"failure_reason":  err.Error(),
+				}, fmt.Errorf("loop body failed at iteration %d, node %s: %w", i, childNode.ID, err)
+			}
+
+			ctx.MarkNodeCompleted(childNode.ID, outputs)
+			results = append(results, outputs)
+		}
+	}
+
 	return map[string]any{
-		"iterations": 0,
+		"iterations": len(items),
+		"results":    results,
+	}, nil
+}
+
+func (e *WorkflowExecutor) executeParallelNode(graph *Graph, ctx *ExecutionContext, node *Node, inputs map[string]any) (map[string]any, error) {
+	childNodes := graph.GetNextNodes(node.ID)
+	if len(childNodes) == 0 {
+		return map[string]any{"success": true, "message": "no child nodes to execute in parallel"}, nil
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	results := make(map[string]any)
+	var firstErr error
+
+	for _, childID := range childNodes {
+		childNode, ok := graph.GetNodeByID(childID)
+		if !ok {
+			continue
+		}
+
+		wg.Add(1)
+		go func(cn *Node) {
+			defer wg.Done()
+
+			childInputs := ctx.ResolveInputs(cn, graph)
+			ctx.MarkNodeStarted(cn.ID, childInputs)
+
+			var outputs map[string]any
+			var err error
+
+			switch cn.Type {
+			case "action":
+				outputs, err = e.executeActionNode(cn, childInputs)
+			case "condition":
+				outputs, err = e.executeConditionNode(cn, childInputs)
+			case "loop":
+				outputs, err = e.executeLoopNode(graph, ctx, cn, childInputs)
+			default:
+				err = fmt.Errorf("unsupported node type in parallel: %s", cn.Type)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				ctx.MarkNodeFailed(cn.ID, &NodeError{
+					Code:    "parallel_failed",
+					Message: err.Error(),
+				})
+				if firstErr == nil {
+					firstErr = err
+				}
+			} else {
+				ctx.MarkNodeCompleted(cn.ID, outputs)
+				results[cn.ID] = outputs
+			}
+		}(childNode)
+	}
+
+	wg.Wait()
+
+	if firstErr != nil {
+		return results, firstErr
+	}
+	return results, nil
+}
+
+func (e *WorkflowExecutor) executeJoinNode(graph *Graph, ctx *ExecutionContext, node *Node, inputs map[string]any) (map[string]any, error) {
+	parentNodes := graph.GetPreviousNodes(node.ID)
+	completedCount := 0
+	allResults := make(map[string]any)
+
+	for _, parentID := range parentNodes {
+		if state, ok := ctx.NodeStates[parentID]; ok && state.Status == NodeCompleted {
+			completedCount++
+			if state.Outputs != nil {
+				allResults[parentID] = state.Outputs
+			}
+		}
+	}
+
+	joinMode := "all"
+	if node.Inputs != nil {
+		if mode, ok := node.Inputs["join_mode"].(string); ok {
+			joinMode = mode
+		}
+	}
+
+	if joinMode == "all" && completedCount < len(parentNodes) {
+		return nil, fmt.Errorf("join node waiting for all %d parents, only %d completed", len(parentNodes), completedCount)
+	}
+
+	return map[string]any{
+		"completed_count": completedCount,
+		"total_parents":   len(parentNodes),
+		"results":         allResults,
 	}, nil
 }
 

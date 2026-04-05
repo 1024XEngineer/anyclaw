@@ -18,6 +18,7 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/agent"
 	"github.com/anyclaw/anyclaw/pkg/agentstore"
+	"github.com/anyclaw/anyclaw/pkg/canvas"
 	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/chat"
 	"github.com/anyclaw/anyclaw/pkg/config"
@@ -91,6 +92,8 @@ type Server struct {
 	channelPairing *channel.ChannelPairing
 	presenceMgr    *channel.PresenceManager
 	contactDir     *channel.ContactDirectory
+	canvasStore    *canvas.CanvasStore
+	canvasHub      *CanvasHub
 }
 
 var titleCase = cases.Title(language.English)
@@ -825,6 +828,7 @@ func (s *Server) Run(ctx context.Context) error {
 	s.initMCP(ctx)
 	s.initMarketStore()
 	s.initDiscovery(ctx)
+	s.initCanvas()
 	if err := s.ensureDefaultWorkspace(); err != nil {
 		return err
 	}
@@ -938,6 +942,17 @@ func (s *Server) Run(ctx context.Context) error {
 	// Cron jobs
 	mux.HandleFunc("/cron", s.wrap("/cron", requirePermission("cron.read", s.handleCronList)))
 	mux.HandleFunc("/cron/", s.wrap("/cron/", s.handleCronByID))
+
+	// Canvas
+	mux.HandleFunc("/canvas", s.handleCanvasUI)
+	mux.HandleFunc("/canvas/", s.handleCanvasUI)
+	mux.HandleFunc("/api/canvas", s.wrap("/api/canvas", s.handleCanvasList))
+	mux.HandleFunc("/api/canvas/", s.wrap("/api/canvas/", s.handleCanvasRoute))
+	mux.HandleFunc("/ws/canvas", s.handleCanvasWS)
+
+	// Static file hosting for canvas and a2ui
+	mux.HandleFunc("/__openclaw__/canvas/", s.handleCanvasStatic)
+	mux.HandleFunc("/__openclaw__/a2ui/", s.handleA2UIStatic)
 
 	mux.HandleFunc("/", s.handleRootAPI)
 
@@ -1464,6 +1479,9 @@ func (s *Server) handleRootAPI(w http.ResponseWriter, r *http.Request) {
 			"chat":       "/chat",
 			"webchat":    "/webchat",
 			"dashboard":  s.controlUIBasePath(),
+			"canvas":     "/canvas",
+			"canvas_api": "/api/canvas",
+			"canvas_ws":  "/ws/canvas",
 			"agents":     "/agents",
 			"tasks":      "/tasks",
 			"sessions":   "/sessions",
@@ -3326,10 +3344,6 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			resolvedParticipants = append(resolvedParticipants, resolvedName)
 		}
 		resolvedParticipants = normalizeParticipants(agentName, resolvedParticipants)
-		if req.IsGroup || strings.TrimSpace(req.GroupKey) != "" || strings.Contains(strings.ToLower(strings.TrimSpace(req.SessionMode)), "group") || len(resolvedParticipants) > 1 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group chat and multi-agent sessions have been removed; create a single-agent session instead"})
-			return
-		}
 		orgID, projectID, workspaceID := s.resolveResourceSelection(r)
 		org, project, workspace, err := s.validateResourceSelection(orgID, projectID, workspaceID)
 		if err != nil {
@@ -3634,12 +3648,8 @@ func (s *Server) handleV2Tasks(w http.ResponseWriter, r *http.Request) {
 		if mode == "" {
 			mode = taskModule.ModeSingle
 		}
-		if mode == taskModule.ModeMulti {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "multi-agent tasks have been removed; use single mode"})
-			return
-		}
-		if mode != taskModule.ModeSingle {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be 'single'"})
+		if mode != taskModule.ModeSingle && mode != taskModule.ModeMulti {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be 'single' or 'multi'"})
 			return
 		}
 

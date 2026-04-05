@@ -118,8 +118,8 @@ func (m *taskManager) CreateTask(req TaskRequest) (*TaskResponse, error) {
 		req.Mode = ModeSingle
 	}
 	req.CreatedAt = time.Now()
-	if req.Mode == ModeMulti {
-		return nil, fmt.Errorf("multi-agent mode has been removed")
+	if req.Mode == ModeMulti && m.orch == nil {
+		return nil, fmt.Errorf("orchestrator not available for multi-agent mode")
 	}
 
 	// Validate agent selection

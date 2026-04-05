@@ -118,6 +118,11 @@ var openClawWSMethods = []string{
 	"config.set",
 	"config.patch",
 	"config.schema",
+	"canvas.list",
+	"canvas.get",
+	"canvas.push",
+	"canvas.reset",
+	"canvas.versions",
 }
 
 var openClawWSUpgrader = websocket.Upgrader{
@@ -501,6 +506,68 @@ func (c *openClawWSConn) handleRequest(ctx context.Context, frame openClawWSFram
 			return err
 		}
 		return c.writeResponse(frame.ID, true, result, "")
+	case "canvas.list":
+		if c.server.canvasStore == nil {
+			return c.writeResponse(frame.ID, true, []any{}, "")
+		}
+		return c.writeResponse(frame.ID, true, c.server.canvasStore.List(), "")
+	case "canvas.get":
+		if c.server.canvasStore == nil {
+			return c.writeResponse(frame.ID, false, nil, "canvas not initialized")
+		}
+		id := mapString(frame.Params, "id")
+		if id == "" {
+			return c.writeResponse(frame.ID, false, nil, "id is required")
+		}
+		entry, ok := c.server.canvasStore.Get(id)
+		if !ok {
+			return c.writeResponse(frame.ID, false, nil, "canvas entry not found")
+		}
+		return c.writeResponse(frame.ID, true, entry, "")
+	case "canvas.push":
+		if c.server.canvasStore == nil {
+			return c.writeResponse(frame.ID, false, nil, "canvas not initialized")
+		}
+		content := mapString(frame.Params, "content")
+		if content == "" {
+			return c.writeResponse(frame.ID, false, nil, "content is required")
+		}
+		id := mapString(frame.Params, "id")
+		name := mapString(frame.Params, "name")
+		contentType := mapString(frame.Params, "type")
+		agent := mapString(frame.Params, "agent")
+		reset, _ := frame.Params["reset"].(bool)
+		if reset && id != "" {
+			_ = c.server.canvasStore.Reset(id)
+		}
+		entry, err := c.server.canvasStore.Push(id, name, content, contentType, agent)
+		if err != nil {
+			return c.writeResponse(frame.ID, false, nil, err.Error())
+		}
+		c.server.broadcastCanvasUpdate(entry)
+		return c.writeResponse(frame.ID, true, entry, "")
+	case "canvas.reset":
+		if c.server.canvasStore == nil {
+			return c.writeResponse(frame.ID, false, nil, "canvas not initialized")
+		}
+		id := mapString(frame.Params, "id")
+		if id == "" {
+			return c.writeResponse(frame.ID, false, nil, "id is required")
+		}
+		if err := c.server.canvasStore.Reset(id); err != nil {
+			return c.writeResponse(frame.ID, false, nil, err.Error())
+		}
+		return c.writeResponse(frame.ID, true, map[string]any{"ok": true, "id": id}, "")
+	case "canvas.versions":
+		if c.server.canvasStore == nil {
+			return c.writeResponse(frame.ID, false, nil, "canvas not initialized")
+		}
+		id := mapString(frame.Params, "id")
+		if id == "" {
+			return c.writeResponse(frame.ID, false, nil, "id is required")
+		}
+		limit := mapInt(frame.Params, "limit", 10)
+		return c.writeResponse(frame.ID, true, c.server.canvasStore.GetVersions(id, limit), "")
 	default:
 		return fmt.Errorf("unsupported method: %s", method)
 	}

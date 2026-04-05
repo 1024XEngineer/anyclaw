@@ -142,6 +142,7 @@ type GatewayConfig struct {
 	JobWorkerCount       int                    `json:"job_worker_count"`
 	JobMaxAttempts       int                    `json:"job_max_attempts"`
 	JobRetryDelaySeconds int                    `json:"job_retry_delay_seconds"`
+	CanvasMaxVersions    int                    `json:"canvas_max_versions"`
 }
 
 type GatewayControlUIConfig struct {
@@ -265,6 +266,8 @@ type OrchestratorConfig struct {
 type SubAgentConfig struct {
 	Name            string   `json:"name"`
 	Description     string   `json:"description"`
+	Role            string   `json:"role,omitempty"`
+	ParentRef       string   `json:"parent_ref,omitempty"`
 	Personality     string   `json:"personality,omitempty"`
 	PrivateSkills   []string `json:"private_skills"`
 	PermissionLevel string   `json:"permission_level"`

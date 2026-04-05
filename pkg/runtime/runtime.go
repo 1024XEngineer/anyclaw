@@ -496,8 +496,20 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	progress(BootEvent{Phase: PhaseAgent, Status: "ok", Message: fmt.Sprintf("permission=%s", app.Config.Agent.PermissionLevel), Dur: time.Since(t)})
 
 	// ── Phase 8.5: Orchestrator (multi-agent coordination) ──────────
+	t = time.Now()
 	if app.Config.Orchestrator.Enabled || len(app.Config.Orchestrator.AgentNames) > 0 || len(app.Config.Orchestrator.SubAgents) > 0 {
-		progress(BootEvent{Phase: PhaseOrchestrator, Status: "skip", Message: "multi-agent orchestrator removed; running in single-agent mode", Dur: 0})
+		orchCfg := buildOrchestratorConfig(app.Config, workDir, workingDir)
+		if len(orchCfg.AgentDefinitions) > 0 {
+			orch, err := orchestrator.NewOrchestrator(orchCfg, app.LLM, app.Skills, registry, app.Memory)
+			if err != nil {
+				progress(BootEvent{Phase: PhaseOrchestrator, Status: "warn", Message: fmt.Sprintf("orchestrator init failed: %v; running in single-agent mode", err), Dur: 0})
+			} else {
+				app.Orchestrator = orch
+				progress(BootEvent{Phase: PhaseOrchestrator, Status: "ok", Message: fmt.Sprintf("multi-agent orchestrator enabled (%d agents)", len(orchCfg.AgentDefinitions)), Dur: time.Since(t)})
+			}
+		} else {
+			progress(BootEvent{Phase: PhaseOrchestrator, Status: "warn", Message: "orchestrator enabled but no agent definitions found", Dur: 0})
+		}
 	} else {
 		progress(BootEvent{Phase: PhaseOrchestrator, Status: "skip", Message: "single-agent runtime", Dur: 0})
 	}
@@ -628,6 +640,8 @@ func resolveSubAgentDefinition(saCfg config.SubAgentConfig, global config.LLMCon
 	def := orchestrator.AgentDefinition{
 		Name:            saCfg.Name,
 		Description:     saCfg.Description,
+		Role:            saCfg.Role,
+		ParentRef:       saCfg.ParentRef,
 		Persona:         saCfg.Personality,
 		PrivateSkills:   saCfg.PrivateSkills,
 		PermissionLevel: saCfg.PermissionLevel,
@@ -662,6 +676,74 @@ func resolveSubAgentDefinition(saCfg config.SubAgentConfig, global config.LLMCon
 		def.LLMTemperature = copyFloat64Ptr(&global.Temperature)
 	}
 	return def
+}
+
+func buildOrchestratorConfig(cfg *config.Config, workDir string, workingDir string) orchestrator.OrchestratorConfig {
+	orchCfg := cfg.Orchestrator
+
+	timeout := time.Duration(orchCfg.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+
+	defs := make([]orchestrator.AgentDefinition, 0)
+
+	// Build definitions from agent_names (references to agent profiles)
+	for _, agentName := range orchCfg.AgentNames {
+		if strings.TrimSpace(agentName) == "" {
+			continue
+		}
+		profile, ok := cfg.FindAgentProfile(agentName)
+		if !ok {
+			continue
+		}
+		def := orchestrator.AgentDefinition{
+			Name:            profile.Name,
+			Description:     profile.Description,
+			Persona:         profile.Persona,
+			Domain:          profile.Domain,
+			Expertise:       profile.Expertise,
+			SystemPrompt:    profile.SystemPrompt,
+			PrivateSkills:   make([]string, len(profile.Skills)),
+			PermissionLevel: profile.PermissionLevel,
+			WorkingDir:      profile.WorkingDir,
+		}
+		for i, skill := range profile.Skills {
+			def.PrivateSkills[i] = skill.Name
+		}
+		if profile.ProviderRef != "" {
+			if provider, ok := cfg.FindProviderProfile(profile.ProviderRef); ok {
+				def.LLMProvider = provider.Provider
+				def.LLMModel = provider.DefaultModel
+				def.LLMAPIKey = provider.APIKey
+				def.LLMBaseURL = provider.BaseURL
+			}
+		}
+		if def.WorkingDir == "" {
+			def.WorkingDir = workingDir
+		}
+		defs = append(defs, def)
+	}
+
+	// Build definitions from sub_agents (explicit sub-agent configs)
+	for _, saCfg := range orchCfg.SubAgents {
+		if strings.TrimSpace(saCfg.Name) == "" {
+			continue
+		}
+		def := resolveSubAgentDefinition(saCfg, cfg.LLM)
+		if def.WorkingDir == "" {
+			def.WorkingDir = workingDir
+		}
+		defs = append(defs, def)
+	}
+
+	return orchestrator.OrchestratorConfig{
+		MaxConcurrentAgents: orchCfg.MaxConcurrentAgents,
+		MaxRetries:          orchCfg.MaxRetries,
+		Timeout:             timeout,
+		AgentDefinitions:    defs,
+		EnableDecomposition: orchCfg.EnableDecomposition,
+	}
 }
 
 func copyIntPtr(value *int) *int {
