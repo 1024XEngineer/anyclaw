@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/memory"
 )
 
@@ -58,6 +59,7 @@ type BuiltinOptions struct {
 	Sandbox                 *SandboxManager
 	MemoryBackend           MemoryBackend
 	QMDClient               QMDClient
+	LLMClient               llm.Client
 }
 
 // ToolFunc 工具函数

@@ -8,7 +8,9 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"math"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -16,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/anyclaw/anyclaw/pkg/llm"
 )
 
 type imageMatchResult struct {
@@ -1092,4 +1096,91 @@ func findOCRTextMatch(lines []ocrLineBox, words []ocrWordBox, query string, mode
 
 func matchesOCRText(actual string, expected string, mode string, ignoreCase bool) bool {
 	return verifyOCRText(actual, expected, mode, ignoreCase)
+}
+
+func ImageAnalyzeTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	path, _ := input["path"].(string)
+	url, _ := input["url"].(string)
+	prompt, _ := input["prompt"].(string)
+	if strings.TrimSpace(path) == "" && strings.TrimSpace(url) == "" {
+		return "", fmt.Errorf("image_analyze requires either path or url")
+	}
+
+	var imageData []byte
+	var mimeType string
+	var err error
+
+	if strings.TrimSpace(path) != "" {
+		imageData, err = os.ReadFile(strings.TrimSpace(path))
+		if err != nil {
+			return "", fmt.Errorf("read image: %w", err)
+		}
+		mimeType = mimeTypeFromPath(path)
+		if mimeType == "" {
+			mimeType = "image/jpeg"
+		}
+	} else {
+		resp, err := http.Get(strings.TrimSpace(url))
+		if err != nil {
+			return "", fmt.Errorf("fetch image: %w", err)
+		}
+		defer resp.Body.Close()
+		imageData, err = io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
+		if err != nil {
+			return "", fmt.Errorf("read image: %w", err)
+		}
+		mimeType = resp.Header.Get("Content-Type")
+		if mimeType == "" {
+			mimeType = "image/jpeg"
+		}
+	}
+
+	if prompt == "" {
+		prompt = "Describe this image in detail. Include objects, text, people, actions, colors, and overall scene."
+	}
+
+	client := opts.LLMClient
+	if client == nil {
+		return "", fmt.Errorf("image_analyze requires an LLM client with vision capabilities (use gpt-4o, claude-3, etc.)")
+	}
+
+	msg := llm.NewUserMessage(
+		llm.TextBlock(prompt),
+		llm.ImageBlockFromBase64(imageData, mimeType),
+	)
+
+	resp, err := client.Chat(ctx, []llm.Message{msg}, nil)
+	if err != nil {
+		return "", fmt.Errorf("image analysis: %w", err)
+	}
+
+	result := map[string]any{
+		"description": resp.Content,
+		"source":      path,
+		"prompt":      prompt,
+		"usage": map[string]int{
+			"input_tokens":  resp.Usage.InputTokens,
+			"output_tokens": resp.Usage.OutputTokens,
+		},
+	}
+	payload, _ := json.Marshal(result)
+	return string(payload), nil
+}
+
+func mimeTypeFromPath(path string) string {
+	ext := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(ext, ".jpg"), strings.HasSuffix(ext, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(ext, ".png"):
+		return "image/png"
+	case strings.HasSuffix(ext, ".gif"):
+		return "image/gif"
+	case strings.HasSuffix(ext, ".webp"):
+		return "image/webp"
+	case strings.HasSuffix(ext, ".bmp"):
+		return "image/bmp"
+	default:
+		return "image/jpeg"
+	}
 }

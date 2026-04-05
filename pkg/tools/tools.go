@@ -1290,6 +1290,24 @@ func RegisterDesktopTools(r *Registry, opts BuiltinOptions) {
 			})(ctx, input)
 		},
 	)
+
+	r.RegisterTool(
+		"image_analyze",
+		"Analyze an image using a multimodal LLM (GPT-4V, Claude Vision, etc.). Describe objects, text, scenes, and visual content.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":   map[string]string{"type": "string", "description": "Local image file path"},
+				"url":    map[string]string{"type": "string", "description": "Image URL to analyze"},
+				"prompt": map[string]string{"type": "string", "description": "Custom analysis prompt (optional)"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "image_analyze", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return ImageAnalyzeTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
 }
 
 func auditCall(opts BuiltinOptions, toolName string, input map[string]any, next ToolFunc) ToolFunc {

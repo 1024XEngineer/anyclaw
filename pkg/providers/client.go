@@ -29,11 +29,12 @@ type Client interface {
 }
 
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	Name       string     `json:"name,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Role          string         `json:"role"`
+	Content       string         `json:"content"`
+	Name          string         `json:"name,omitempty"`
+	ToolCallID    string         `json:"tool_call_id,omitempty"`
+	ToolCalls     []ToolCall     `json:"tool_calls,omitempty"`
+	contentBlocks []ContentBlock `json:"-"`
 }
 
 type Response struct {
@@ -207,9 +208,11 @@ func (c *client) StreamChat(ctx context.Context, messages []Message, tools []Too
 func (c *client) chatOpenAICompatible(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
 
+	serializedMessages := serializeMessagesOpenAI(messages)
+
 	payload := map[string]any{
 		"model":       c.model,
-		"messages":    messages,
+		"messages":    serializedMessages,
 		"max_tokens":  c.maxTokens,
 		"temperature": c.temperature,
 	}
@@ -275,9 +278,11 @@ func (c *client) chatOpenAICompatible(ctx context.Context, messages []Message, t
 func (c *client) streamOpenAICompatible(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
 
+	serializedMessages := serializeMessagesOpenAI(messages)
+
 	payload := map[string]any{
 		"model":       c.model,
-		"messages":    messages,
+		"messages":    serializedMessages,
 		"max_tokens":  c.maxTokens,
 		"temperature": c.temperature,
 		"stream":      true,
@@ -322,15 +327,7 @@ func (c *client) streamOpenAICompatible(ctx context.Context, messages []Message,
 func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
 	url := "https://api.anthropic.com/v1/messages"
 
-	systemPrompt := ""
-	filteredMessages := []Message{}
-	for _, msg := range messages {
-		if msg.Role == "system" {
-			systemPrompt += msg.Content + "\n"
-		} else {
-			filteredMessages = append(filteredMessages, msg)
-		}
-	}
+	filteredMessages, systemPrompt := serializeMessagesAnthropic(messages)
 
 	payload := map[string]any{
 		"model":       c.model,
@@ -390,15 +387,7 @@ func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools 
 func (c *client) chatAnthropic(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
 	url := "https://api.anthropic.com/v1/messages"
 
-	systemPrompt := ""
-	filteredMessages := []Message{}
-	for _, msg := range messages {
-		if msg.Role == "system" {
-			systemPrompt += msg.Content + "\n"
-		} else {
-			filteredMessages = append(filteredMessages, msg)
-		}
-	}
+	filteredMessages, systemPrompt := serializeMessagesAnthropic(messages)
 
 	payload := map[string]any{
 		"model":       c.model,
@@ -569,4 +558,127 @@ func (w *ClientWrapper) SetTemperature(temp float64) {
 
 func (w *ClientWrapper) SetBaseURL(url string) {
 	w.baseURL = url
+}
+
+func serializeMessagesOpenAI(messages []Message) []map[string]any {
+	result := make([]map[string]any, 0, len(messages))
+	for _, msg := range messages {
+		if msg.contentBlocks != nil && len(msg.contentBlocks) > 0 {
+			blocks := make([]map[string]any, 0, len(msg.contentBlocks))
+			for _, b := range msg.contentBlocks {
+				block := serializeContentBlockOpenAI(b)
+				if block != nil {
+					blocks = append(blocks, block)
+				}
+			}
+			if len(blocks) == 0 {
+				blocks = append(blocks, map[string]any{"type": "text", "text": msg.Content})
+			}
+			entry := map[string]any{
+				"role":    msg.Role,
+				"content": blocks,
+			}
+			if msg.Name != "" {
+				entry["name"] = msg.Name
+			}
+			if msg.ToolCallID != "" {
+				entry["tool_call_id"] = msg.ToolCallID
+			}
+			if len(msg.ToolCalls) > 0 {
+				entry["tool_calls"] = msg.ToolCalls
+			}
+			result = append(result, entry)
+		} else {
+			entry := map[string]any{
+				"role":    msg.Role,
+				"content": msg.Content,
+			}
+			if msg.Name != "" {
+				entry["name"] = msg.Name
+			}
+			if msg.ToolCallID != "" {
+				entry["tool_call_id"] = msg.ToolCallID
+			}
+			if len(msg.ToolCalls) > 0 {
+				entry["tool_calls"] = msg.ToolCalls
+			}
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+func serializeContentBlockOpenAI(b ContentBlock) map[string]any {
+	switch b.Type {
+	case ContentTypeText:
+		return map[string]any{"type": "text", "text": b.Text}
+	case ContentTypeImageURL:
+		img := map[string]any{"url": b.ImageURL.URL}
+		if b.ImageURL.Detail != "" {
+			img["detail"] = b.ImageURL.Detail
+		}
+		return map[string]any{"type": "image_url", "image_url": img}
+	case ContentTypeImage:
+		dataURL := fmt.Sprintf("data:%s;base64,%s", b.Image.Source.MediaType, b.Image.Source.Data)
+		img := map[string]any{"url": dataURL}
+		return map[string]any{"type": "image_url", "image_url": img}
+	default:
+		return nil
+	}
+}
+
+func serializeMessagesAnthropic(messages []Message) ([]map[string]any, string) {
+	systemPrompt := ""
+	result := make([]map[string]any, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role == "system" {
+			systemPrompt += msg.Content + "\n"
+			continue
+		}
+
+		if msg.contentBlocks != nil && len(msg.contentBlocks) > 0 {
+			blocks := make([]map[string]any, 0, len(msg.contentBlocks))
+			for _, b := range msg.contentBlocks {
+				block := serializeContentBlockAnthropic(b)
+				if block != nil {
+					blocks = append(blocks, block)
+				}
+			}
+			if len(blocks) == 0 && msg.Content != "" {
+				blocks = append(blocks, map[string]any{"type": "text", "text": msg.Content})
+			}
+			entry := map[string]any{
+				"role":    msg.Role,
+				"content": blocks,
+			}
+			result = append(result, entry)
+		} else {
+			entry := map[string]any{
+				"role":    msg.Role,
+				"content": msg.Content,
+			}
+			result = append(result, entry)
+		}
+	}
+	return result, strings.TrimSpace(systemPrompt)
+}
+
+func serializeContentBlockAnthropic(b ContentBlock) map[string]any {
+	switch b.Type {
+	case ContentTypeText:
+		return map[string]any{"type": "text", "text": b.Text}
+	case ContentTypeImageURL:
+		return map[string]any{"type": "image", "source": map[string]any{
+			"type": "url",
+			"url":  b.ImageURL.URL,
+		}}
+	case ContentTypeImage:
+		return map[string]any{"type": "image", "source": map[string]any{
+			"type":       "base64",
+			"media_type": b.Image.Source.MediaType,
+			"data":       b.Image.Source.Data,
+		}}
+	default:
+		return nil
+	}
 }
