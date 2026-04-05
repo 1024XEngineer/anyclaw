@@ -539,6 +539,18 @@ const dashboardBodyHTML = `<body>
                     <span class="nav-title">Config</span>
                     <span class="nav-copy">Current config snapshot and provider actions</span>
                 </button>
+                <button data-tab="nodes">
+                    <span class="nav-title">Nodes</span>
+                    <span class="nav-copy">Connected nodes, pairing, capabilities, devices</span>
+                </button>
+                <button data-tab="channels">
+                    <span class="nav-title">Channels</span>
+                    <span class="nav-copy">Telegram, Discord, Slack, WhatsApp, Signal</span>
+                </button>
+                <button data-tab="remote">
+                    <span class="nav-title">Remote</span>
+                    <span class="nav-copy">Tailscale, SSH tunnels, remote gateway</span>
+                </button>
             </nav>
 
             <div class="side-tools">
@@ -734,6 +746,92 @@ const dashboardBodyHTML = `<body>
                     </div>
                 </div>
             </section>
+
+            <section class="panel" data-panel="nodes">
+                <div class="split">
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>Node Pairing</h3>
+                            <span class="tag neutral" id="nodePairingStatus">Idle</span>
+                        </div>
+                        <p class="card-copy">Generate a pairing code for new nodes to connect.</p>
+                        <div class="actions">
+                            <button class="btn" id="generatePairingCode">Generate Code</button>
+                            <button class="btn secondary" id="revokePairing">Revoke Selected</button>
+                        </div>
+                        <div class="subtle" id="pairingCodeDisplay">No active pairing code.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>Connected Nodes</h3>
+                            <span class="tag neutral" id="nodeCount">0</span>
+                        </div>
+                        <div id="nodesList">
+                            <p class="muted">No nodes connected.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel" data-panel="channels">
+                <div class="split">
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>Channel Status</h3>
+                            <span class="tag neutral" id="channelCount">0</span>
+                        </div>
+                        <div id="channelsList">
+                            <p class="muted">No channels configured.</p>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>Security Policy</h3>
+                            <span class="tag neutral" id="securityStatus">Check</span>
+                        </div>
+                        <div id="securityInfo">
+                            <p class="muted">Run doctor to check security.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel" data-panel="remote">
+                <div class="split">
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>Remote Access</h3>
+                            <span class="tag neutral" id="remoteStatus">Idle</span>
+                        </div>
+                        <p class="card-copy">Configure remote access via Tailscale, SSH tunnel, or gateway.</p>
+                        <label>
+                            <span>Mode</span>
+                            <select id="remoteMode">
+                                <option value="gateway">Remote Gateway</option>
+                                <option value="tailscale">Tailscale</option>
+                                <option value="ssh">SSH Tunnel</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span>Endpoint URL</span>
+                            <input type="text" id="remoteEndpoint" placeholder="https://your-gateway.example.com">
+                        </label>
+                        <div class="actions">
+                            <button class="btn" id="connectRemote">Connect</button>
+                            <button class="btn secondary" id="disconnectRemote">Disconnect</button>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-head">
+                            <h3>Remote Nodes</h3>
+                            <span class="tag neutral" id="remoteNodeCount">0</span>
+                        </div>
+                        <div id="remoteNodesList">
+                            <p class="muted">No remote nodes connected.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
         </main>
     </div>
 `
@@ -744,7 +842,10 @@ const dashboardScriptAHTML = `<script>
             sessions: { title: 'Sessions', subtitle: 'Recent sessions, message previews, and workspace placement.' },
             logs: { title: 'Logs', subtitle: 'Audit entries, events, tool activity, and background jobs.' },
             skills: { title: 'Skills', subtitle: 'Loaded skills, plugins, and agent-to-provider bindings.' },
-            config: { title: 'Config', subtitle: 'Current config snapshot plus a few high-frequency actions.' }
+            config: { title: 'Config', subtitle: 'Current config snapshot plus a few high-frequency actions.' },
+            nodes: { title: 'Nodes', subtitle: 'Connected nodes, pairing status, capabilities, and device state.' },
+            channels: { title: 'Channels', subtitle: 'Telegram, Discord, Slack, WhatsApp, Signal connection status.' },
+            remote: { title: 'Remote', subtitle: 'Tailscale, SSH tunnels, and remote gateway connections.' }
         };
 
         var state = {
@@ -1263,6 +1364,69 @@ const dashboardScriptCHTML = `
             renderConfig(res[0], res[1]);
         }
 
+        async function loadNodesTab() {
+            var res = await safeRequest('/nodes');
+            renderNodes(res);
+        }
+
+        async function loadChannelsTab() {
+            var res = await safeRequest('/channels');
+            renderChannels(res);
+        }
+
+        async function loadRemoteTab() {
+            var res = await safeRequest('/remote/status');
+            renderRemote(res);
+        }
+
+        function renderNodes(nodesResp) {
+            if (!nodesResp.ok) {
+                setHTML('nodesList', renderError(nodesResp.error));
+                return;
+            }
+            var nodes = toArray(nodesResp.data);
+            setText('nodeCount', String(nodes.length));
+            setHTML('nodesList', nodes.length ? nodes.map(function(node) {
+                var statusClass = pick(node, ['state'], 'offline') === 'online' ? 'ok' : 'warn';
+                return '<div class="list-item">' +
+                    '<div><span class="item-title">' + escapeHTML(pick(node, ['name'], 'Node')) + '</span>' +
+                    '<span class="tag ' + statusClass + '">' + escapeHTML(pick(node, ['state'], 'offline')) + '</span></div>' +
+                    '<div class="meta"><span>Type: ' + escapeHTML(pick(node, ['type'], '--')) + '</span>' +
+                    '<span>Capabilities: ' + String(pick(node, ['capabilities'], []).length) + '</span></div></div>';
+            }).join('') : '<p class="muted">No nodes connected.</p>');
+        }
+
+        function renderChannels(channelsResp) {
+            if (!channelsResp.ok) {
+                setHTML('channelsList', renderError(channelsResp.error));
+                return;
+            }
+            var channels = toArray(channelsResp.data);
+            setText('channelCount', String(channels.length));
+            setHTML('channelsList', channels.length ? channels.map(function(ch) {
+                var statusClass = pick(ch, ['running'], false) && pick(ch, ['healthy'], false) ? 'ok' : 'warn';
+                return '<div class="list-item">' +
+                    '<div><span class="item-title">' + escapeHTML(pick(ch, ['name'], 'Channel')) + '</span>' +
+                    '<span class="tag ' + statusClass + '">' + (pick(ch, ['running'], false) ? 'Running' : 'Stopped') + '</span></div>' +
+                    '<div class="meta"><span>Enabled: ' + escapeHTML(String(pick(ch, ['enabled'], false))) + '</span></div></div>';
+            }).join('') : '<p class="muted">No channels configured.</p>');
+        }
+
+        function renderRemote(remoteResp) {
+            if (!remoteResp.ok) {
+                setText('remoteStatus', 'Error');
+                return;
+            }
+            var data = remoteResp.data || {};
+            setText('remoteStatus', String(pick(data, ['status'], 'idle')));
+            var nodes = toArray(pick(data, ['nodes'], []));
+            setText('remoteNodeCount', String(nodes.length));
+            setHTML('remoteNodesList', nodes.length ? nodes.map(function(n) {
+                return '<div class="list-item"><div><span class="item-title">' + escapeHTML(pick(n, ['name'], 'Node')) + '</span>' +
+                    '<span class="tag ' + (pick(n, ['online'], false) ? 'ok' : 'warn') + '">' + (pick(n, ['online'], false) ? 'Online' : 'Offline') + '</span></div></div>';
+            }).join('') : '<p class="muted">No remote nodes.</p>');
+        }
+
         async function refreshCurrentTab() {
             showNotice('', '');
             switch (state.tab) {
@@ -1277,6 +1441,15 @@ const dashboardScriptCHTML = `
                     return;
                 case 'config':
                     await loadConfigTab();
+                    return;
+                case 'nodes':
+                    await loadNodesTab();
+                    return;
+                case 'channels':
+                    await loadChannelsTab();
+                    return;
+                case 'remote':
+                    await loadRemoteTab();
                     return;
                 default:
                     await loadStatusTab();

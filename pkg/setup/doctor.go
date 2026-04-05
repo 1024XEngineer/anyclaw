@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/config"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/plugin"
@@ -29,12 +30,15 @@ const (
 )
 
 type CheckResult struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	Severity Severity `json:"severity"`
-	Message  string   `json:"message"`
-	Detail   string   `json:"detail,omitempty"`
-	Hint     string   `json:"hint,omitempty"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Severity    Severity `json:"severity"`
+	Message     string   `json:"message"`
+	Detail      string   `json:"detail,omitempty"`
+	Hint        string   `json:"hint,omitempty"`
+	Fixable     bool     `json:"fixable"`
+	FixAction   string   `json:"fix_action,omitempty"`
+	FixPriority int      `json:"fix_priority,omitempty"`
 }
 
 type Report struct {
@@ -47,6 +51,7 @@ type Report struct {
 type DoctorOptions struct {
 	CheckConnectivity bool
 	CreateMissingDirs bool
+	AutoFix           bool
 }
 
 func (r *Report) Add(check CheckResult) {
@@ -66,6 +71,96 @@ func (r *Report) WarningCount() int {
 
 func (r *Report) HasErrors() bool {
 	return r != nil && r.ErrorCount() > 0
+}
+
+type FixResult struct {
+	CheckID  string `json:"check_id"`
+	Fixed    bool   `json:"fixed"`
+	Action   string `json:"action"`
+	Error    string `json:"error,omitempty"`
+	NewValue string `json:"new_value,omitempty"`
+}
+
+func (r *Report) FixableCount() int {
+	count := 0
+	for _, check := range r.Checks {
+		if check.Fixable && (check.Severity == SeverityError || check.Severity == SeverityWarning) {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *Report) FixableChecks() []CheckResult {
+	var fixes []CheckResult
+	for _, check := range r.Checks {
+		if check.Fixable && (check.Severity == SeverityError || check.Severity == SeverityWarning) {
+			fixes = append(fixes, check)
+		}
+	}
+	return fixes
+}
+
+func (r *Report) FixAll(configPath string) ([]FixResult, error) {
+	fixes := make([]FixResult, 0)
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	for _, check := range r.FixableChecks() {
+		result := FixResult{CheckID: check.ID}
+
+		switch check.ID {
+		case "security-dm-allow-all-no-ack":
+			cfg.Security.RiskAcknowledged = true
+			result.Action = "set security.risk_acknowledged=true"
+			result.NewValue = "true"
+			result.Fixed = true
+
+		case "security-dm-policy-permissive":
+			cfg.Channels.Security.DMPolicy = "allow-list"
+			result.Action = "set channels.security.dm_policy=allow-list"
+			result.NewValue = "allow-list"
+			result.Fixed = true
+
+		case "security-mention-gate-disabled":
+			cfg.Channels.Security.MentionGate = true
+			result.Action = "set channels.security.mention_gate=true"
+			result.NewValue = "true"
+			result.Fixed = true
+
+		case "security-group-policy-permissive":
+			cfg.Channels.Security.GroupPolicy = "mention-only"
+			result.Action = "set channels.security.group_policy=mention-only"
+			result.NewValue = "mention-only"
+			result.Fixed = true
+
+		case "security-no-default-deny":
+			cfg.Channels.Security.DefaultDenyDM = true
+			result.Action = "set channels.security.default_deny_dm=true"
+			result.NewValue = "true"
+			result.Fixed = true
+
+		case "security-risk-not-acknowledged":
+			cfg.Security.RiskAcknowledged = true
+			result.Action = "set security.risk_acknowledged=true"
+			result.NewValue = "true"
+			result.Fixed = true
+
+		default:
+			result.Action = check.FixAction
+			result.Error = "manual fix required"
+		}
+		fixes = append(fixes, result)
+	}
+
+	if err := cfg.Save(configPath); err != nil {
+		return fixes, fmt.Errorf("failed to save config: %w", err)
+	}
+
+	return fixes, nil
 }
 
 func RunDoctor(ctx context.Context, configPath string, opts DoctorOptions) (*Report, *config.Config, error) {
@@ -141,6 +236,7 @@ func RunDoctor(ctx context.Context, configPath string, opts DoctorOptions) (*Rep
 	checkPlugins(report, cfg, pluginsDir)
 	checkGatewayPort(report, cfg)
 	checkDesktopDependencies(report, cfg)
+	checkSecurityPolicy(report, cfg)
 
 	if report.HasErrors() {
 		return report, cfg, fmt.Errorf("doctor found %d issue(s)", report.ErrorCount())
@@ -678,4 +774,48 @@ func trimDoctorDetail(value string) string {
 		return value[:240] + "..."
 	}
 	return value
+}
+
+func checkSecurityPolicy(report *Report, cfg *config.Config) {
+	policy := channel.ChannelPolicyFromConfig(cfg.Channels.Security)
+	audit := channel.AuditChannelPolicy(policy)
+
+	if audit.Passed {
+		report.Add(CheckResult{
+			ID:       "security-policy",
+			Title:    "Security policy",
+			Severity: SeverityInfo,
+			Message:  fmt.Sprintf("Security policy score: %d/%d - All checks passed", audit.Score, audit.MaxScore),
+			Fixable:  false,
+		})
+		return
+	}
+
+	report.Add(CheckResult{
+		ID:       "security-policy",
+		Title:    "Security policy",
+		Severity: SeverityWarning,
+		Message:  fmt.Sprintf("Security policy score: %d/%d - %d issue(s) found", audit.Score, audit.MaxScore, len(audit.Issues)),
+	})
+
+	for _, issue := range audit.Issues {
+		fixPriority := 0
+		switch issue.Severity {
+		case "critical":
+			fixPriority = 3
+		case "warning":
+			fixPriority = 2
+		default:
+			fixPriority = 1
+		}
+		report.Add(CheckResult{
+			ID:          "security-" + issue.ID,
+			Title:       issue.Title,
+			Severity:    Severity(issue.Severity),
+			Message:     issue.Message,
+			Fixable:     issue.Fixable,
+			FixAction:   issue.FixAction,
+			FixPriority: fixPriority,
+		})
+	}
 }

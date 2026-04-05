@@ -92,6 +92,7 @@ type Server struct {
 	groupSecurity  *channel.GroupSecurity
 	channelCmds    *channel.ChannelCommands
 	channelPairing *channel.ChannelPairing
+	channelPolicy  *channel.ChannelPolicy
 	presenceMgr    *channel.PresenceManager
 	contactDir     *channel.ContactDirectory
 	canvasStore    *canvas.CanvasStore
@@ -239,10 +240,31 @@ func (s *Server) initChannelAdvanced() {
 		botUserID = s.app.Config.Channels.Telegram.BotToken
 	}
 
-	s.mentionGate = channel.NewMentionGate(false, botUserID, nil)
+	secCfg := s.app.Config.Channels.Security
+	channelPolicy := channel.ChannelPolicyFromConfig(config.ChannelSecurityConfig{
+		DMPolicy:         secCfg.DMPolicy,
+		GroupPolicy:      secCfg.GroupPolicy,
+		AllowFrom:        secCfg.AllowFrom,
+		PairingEnabled:   secCfg.PairingEnabled,
+		PairingTTLHours:  secCfg.PairingTTLHours,
+		MentionGate:      secCfg.MentionGate,
+		RiskAcknowledged: s.app.Config.Security.RiskAcknowledged,
+		DefaultDenyDM:    secCfg.DefaultDenyDM,
+	})
+
+	s.mentionGate = channel.NewMentionGate(secCfg.MentionGate, botUserID, nil)
 	s.groupSecurity = channel.NewGroupSecurity()
 	s.channelCmds = channel.NewChannelCommands(botName)
 	s.channelPairing = channel.NewChannelPairing()
+	if secCfg.PairingEnabled {
+		s.channelPairing.SetEnabled(true)
+	}
+	for _, userID := range secCfg.AllowFrom {
+		if userID = strings.TrimSpace(userID); userID != "" {
+			channelPolicy.AddAllowedUser(userID)
+		}
+	}
+
 	s.presenceMgr = channel.NewPresenceManager(func(ch, userID string, presence channel.PresenceInfo) {
 		s.appendEvent("channel.presence", "", map[string]any{
 			"channel": ch,
@@ -251,6 +273,16 @@ func (s *Server) initChannelAdvanced() {
 		})
 	})
 	s.contactDir = channel.NewContactDirectory()
+
+	s.channelPolicy = channelPolicy
+	s.appendEvent("security.init", "", map[string]any{
+		"dm_policy":         secCfg.DMPolicy,
+		"group_policy":      secCfg.GroupPolicy,
+		"mention_gate":      secCfg.MentionGate,
+		"pairing_enabled":   secCfg.PairingEnabled,
+		"allow_from":        len(secCfg.AllowFrom),
+		"risk_acknowledged": s.app.Config.Security.RiskAcknowledged,
+	})
 }
 
 func (s *Server) initSTT() {
@@ -1464,6 +1496,192 @@ func (s *Server) status() Status {
 	}
 }
 
+type GatewayStatus struct {
+	Status    Status         `json:"status"`
+	Health    HealthStatus   `json:"health"`
+	Presence  PresenceStatus `json:"presence"`
+	Typing    TypingStatus   `json:"typing"`
+	Approvals ApprovalStatus `json:"approvals"`
+	Sessions  SessionStatus  `json:"sessions"`
+	Channels  ChannelStatus  `json:"channels"`
+	Security  SecurityStatus `json:"security"`
+	Runtime   RuntimeStatus  `json:"runtime"`
+	UpdatedAt string         `json:"updated_at"`
+}
+
+type HealthStatus struct {
+	OK            bool   `json:"ok"`
+	Uptime        string `json:"uptime"`
+	ChannelsUp    int    `json:"channels_up"`
+	ChannelsTotal int    `json:"channels_total"`
+	LLMConnected  bool   `json:"llm_connected"`
+	LastError     string `json:"last_error,omitempty"`
+}
+
+type PresenceStatus struct {
+	ActiveUsers int            `json:"active_users"`
+	ByChannel   map[string]int `json:"by_channel"`
+}
+
+type TypingStatus struct {
+	ActiveSessions int            `json:"active_sessions"`
+	ByChannel      map[string]int `json:"by_channel"`
+}
+
+type ApprovalStatus struct {
+	Pending  int `json:"pending"`
+	Approved int `json:"approved"`
+	Denied   int `json:"denied"`
+	Total    int `json:"total"`
+}
+
+type SessionStatus struct {
+	Total     int            `json:"total"`
+	Active    int            `json:"active"`
+	Idle      int            `json:"idle"`
+	Queued    int            `json:"queued"`
+	ByChannel map[string]int `json:"by_channel"`
+}
+
+type ChannelStatus struct {
+	Total  int                      `json:"total"`
+	ByName map[string]AdapterStatus `json:"by_name"`
+}
+
+type AdapterStatus struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	Running bool   `json:"running"`
+	Healthy bool   `json:"healthy"`
+	Error   string `json:"error,omitempty"`
+}
+
+type SecurityStatus struct {
+	DMPolicy         string `json:"dm_policy"`
+	GroupPolicy      string `json:"group_policy"`
+	MentionGate      bool   `json:"mention_gate"`
+	PairingEnabled   bool   `json:"pairing_enabled"`
+	RiskAcknowledged bool   `json:"risk_acknowledged"`
+	AllowFromCount   int    `json:"allow_from_count"`
+}
+
+type RuntimeStatus struct {
+	Pooled int `json:"pooled"`
+	Active int `json:"active"`
+	Idle   int `json:"idle"`
+	Max    int `json:"max"`
+}
+
+func (s *Server) GatewayStatus() GatewayStatus {
+	sessions := s.store.ListSessions()
+	activeUsers := make(map[string]bool)
+	typingSessions := 0
+	queuedSessions := 0
+	channelSessions := make(map[string]int)
+	for _, sess := range sessions {
+		if sess.UserID != "" {
+			activeUsers[sess.UserID] = true
+		}
+		if sess.Typing {
+			typingSessions++
+		}
+		if sess.Presence == "queued" {
+			queuedSessions++
+		}
+		if sess.SourceChannel != "" {
+			channelSessions[sess.SourceChannel]++
+		}
+	}
+
+	approvals := s.store.ListApprovals("")
+	pendingApprovals := 0
+	approvedApprovals := 0
+	deniedApprovals := 0
+	for _, a := range approvals {
+		switch a.Status {
+		case "pending":
+			pendingApprovals++
+		case "approved":
+			approvedApprovals++
+		case "denied":
+			deniedApprovals++
+		}
+	}
+
+	channelStatuses := s.channels.Statuses()
+	channelsUp := 0
+	channelByName := make(map[string]AdapterStatus)
+	for _, st := range channelStatuses {
+		if st.Running && st.Healthy {
+			channelsUp++
+		}
+		channelByName[st.Name] = AdapterStatus{
+			Name:    st.Name,
+			Enabled: st.Enabled,
+			Running: st.Running,
+			Healthy: st.Healthy,
+			Error:   st.LastError,
+		}
+	}
+
+	secCfg := s.app.Config.Channels.Security
+	securityStatus := SecurityStatus{
+		DMPolicy:         secCfg.DMPolicy,
+		GroupPolicy:      secCfg.GroupPolicy,
+		MentionGate:      secCfg.MentionGate,
+		PairingEnabled:   secCfg.PairingEnabled,
+		RiskAcknowledged: s.app.Config.Security.RiskAcknowledged,
+		AllowFromCount:   len(secCfg.AllowFrom),
+	}
+
+	poolStatus := s.runtimePool.Status()
+	runtimeStatus := RuntimeStatus{
+		Pooled: poolStatus.Pooled,
+		Active: poolStatus.Active,
+		Idle:   poolStatus.Idle,
+		Max:    poolStatus.Max,
+	}
+
+	return GatewayStatus{
+		Status: s.status(),
+		Health: HealthStatus{
+			OK:            true,
+			Uptime:        time.Since(s.startedAt).Round(time.Second).String(),
+			ChannelsUp:    channelsUp,
+			ChannelsTotal: len(channelStatuses),
+			LLMConnected:  s.app.LLM != nil,
+		},
+		Presence: PresenceStatus{
+			ActiveUsers: len(activeUsers),
+			ByChannel:   nil,
+		},
+		Typing: TypingStatus{
+			ActiveSessions: typingSessions,
+			ByChannel:      nil,
+		},
+		Approvals: ApprovalStatus{
+			Pending:  pendingApprovals,
+			Approved: approvedApprovals,
+			Denied:   deniedApprovals,
+			Total:    len(approvals),
+		},
+		Sessions: SessionStatus{
+			Total:     len(sessions),
+			Active:    len(sessions) - queuedSessions,
+			Idle:      0,
+			Queued:    queuedSessions,
+			ByChannel: channelSessions,
+		},
+		Channels: ChannelStatus{
+			Total:  len(channelStatuses),
+			ByName: channelByName,
+		},
+		Security:  securityStatus,
+		Runtime:   runtimeStatus,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
 func writeJSON(w http.ResponseWriter, statusCode int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
@@ -1618,6 +1836,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.appendAudit(UserFromContext(r.Context()), "status.read", "status", nil)
+
+	if r.URL.Query().Get("extended") == "true" {
+		writeJSON(w, http.StatusOK, s.GatewayStatus())
+		return
+	}
 	writeJSON(w, http.StatusOK, s.status())
 }
 

@@ -93,6 +93,25 @@ func applyOnboardingDefaults(cfg *config.Config) {
 	cfg.Skills.Dir = firstNonEmpty(cfg.Skills.Dir, "skills")
 	cfg.Plugins.Dir = firstNonEmpty(cfg.Plugins.Dir, "plugins")
 	cfg.Security.AuditLog = firstNonEmpty(cfg.Security.AuditLog, ".anyclaw/audit/audit.jsonl")
+	if cfg.Channels.Security.DMPolicy == "" {
+		cfg.Channels.Security.DMPolicy = "allow-list"
+	}
+	if cfg.Channels.Security.GroupPolicy == "" {
+		cfg.Channels.Security.GroupPolicy = "mention-only"
+	}
+	cfg.Channels.Security.MentionGate = true
+	cfg.Channels.Security.DefaultDenyDM = true
+	cfg.Channels.Security.PairingTTLHours = 72
+	cfg.Security.RateLimitRPM = firstNonEmptyInt(cfg.Security.RateLimitRPM, 120)
+}
+
+func firstNonEmptyInt(vals ...int) int {
+	for _, v := range vals {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Writer) error {
@@ -100,7 +119,7 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 	currentProvider := firstNonEmpty(cfg.LLM.Provider, "openai")
 	sameProvider := false
 
-	fmt.Fprintln(output, "Step 1/6: Choose provider")
+	fmt.Fprintln(output, "Step 1/7: Choose provider")
 	for idx, option := range ProviderOptions() {
 		fmt.Fprintf(output, "  %d. %s (%s)\n", idx+1, option.Label, option.ID)
 	}
@@ -175,6 +194,38 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 		cfg.LLM.APIKey = ""
 	}
 	EnsurePrimaryProviderProfile(cfg, selectedProvider, selectedModel, cfg.LLM.APIKey, cfg.LLM.BaseURL)
+
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Step 6/7: Channel security defaults")
+	fmt.Fprintln(output, "  DM policy: allow-list (only allowed users can DM)")
+	fmt.Fprintln(output, "  Group policy: mention-only (bot responds only when @mentioned)")
+	fmt.Fprintln(output, "  Mention gate: enabled")
+	fmt.Fprintln(output, "  Default deny DM: enabled")
+	secChoice, err := prompt(reader, output, "Accept security defaults? [Y/n]")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(strings.ToLower(secChoice)) != "n" {
+		cfg.Channels.Security.DMPolicy = "allow-list"
+		cfg.Channels.Security.GroupPolicy = "mention-only"
+		cfg.Channels.Security.MentionGate = true
+		cfg.Channels.Security.DefaultDenyDM = true
+		cfg.Channels.Security.PairingTTLHours = 72
+		cfg.Security.RiskAcknowledged = true
+	}
+
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Step 7/7: Risk acknowledgement")
+	fmt.Fprintln(output, "  AnyClaw can execute commands on your system.")
+	fmt.Fprintln(output, "  By acknowledging, you accept responsibility for agent actions.")
+	riskChoice, err := prompt(reader, output, "Acknowledge risks? [Y/n]")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(strings.ToLower(riskChoice)) != "n" {
+		cfg.Security.RiskAcknowledged = true
+	}
+
 	return nil
 }
 

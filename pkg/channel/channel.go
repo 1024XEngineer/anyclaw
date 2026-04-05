@@ -27,6 +27,11 @@ type PresenceManager = ch.PresenceManager
 type PresenceInfo = ch.PresenceInfo
 type ContactDirectory = ch.ContactDirectory
 type ContactInfo = ch.ContactInfo
+type ChannelPolicy = ch.ChannelPolicy
+type DMPolicy = ch.DMPolicy
+type GroupPolicy = ch.GroupPolicy
+type SecurityAuditResult = ch.SecurityAuditResult
+type SecurityAuditIssue = ch.SecurityAuditIssue
 
 var NewBaseAdapter = ch.NewBaseAdapter
 var NewManager = ch.NewManager
@@ -52,3 +57,6 @@ type SignalAdapter = ch.SignalAdapter
 
 var ReadBody = ch.ReadBody
 var AnalyzeRouting = ch.AnalyzeRouting
+var DefaultChannelPolicy = ch.DefaultChannelPolicy
+var ChannelPolicyFromConfig = ch.ChannelPolicyFromConfig
+var AuditChannelPolicy = ch.AuditChannelPolicy

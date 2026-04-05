@@ -182,6 +182,18 @@ type ChannelsConfig struct {
 	WhatsApp WhatsAppChannelConfig `json:"whatsapp"`
 	Signal   SignalChannelConfig   `json:"signal"`
 	Routing  RoutingConfig         `json:"routing"`
+	Security ChannelSecurityConfig `json:"security"`
+}
+
+type ChannelSecurityConfig struct {
+	DMPolicy         string   `json:"dm_policy"`
+	GroupPolicy      string   `json:"group_policy"`
+	AllowFrom        []string `json:"allow_from"`
+	PairingEnabled   bool     `json:"pairing_enabled"`
+	PairingTTLHours  int      `json:"pairing_ttl_hours"`
+	MentionGate      bool     `json:"mention_gate"`
+	RiskAcknowledged bool     `json:"risk_acknowledged"`
+	DefaultDenyDM    bool     `json:"default_deny_dm"`
 }
 
 type TelegramChannelConfig struct {
@@ -251,6 +263,8 @@ type SecurityConfig struct {
 	AllowedWritePaths        []string       `json:"allowed_write_paths,omitempty"`
 	AllowedEgressDomains     []string       `json:"allowed_egress_domains,omitempty"`
 	CommandTimeoutSeconds    int            `json:"command_timeout_seconds"`
+	RiskAcknowledged         bool           `json:"risk_acknowledged"`
+	SecurityAudit            []string       `json:"security_audit,omitempty"`
 }
 
 type OrchestratorConfig struct {

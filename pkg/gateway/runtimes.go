@@ -133,6 +133,24 @@ func (p *RuntimePool) Metrics() RuntimeMetrics {
 	return p.metrics
 }
 
+type PoolStatus struct {
+	Pooled int `json:"pooled"`
+	Active int `json:"active"`
+	Idle   int `json:"idle"`
+	Max    int `json:"max"`
+}
+
+func (p *RuntimePool) Status() PoolStatus {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return PoolStatus{
+		Pooled: len(p.runtimes),
+		Active: 0,
+		Idle:   len(p.runtimes),
+		Max:    p.maxInstances,
+	}
+}
+
 func (p *RuntimePool) cleanupLocked() {
 	if p.idleTTL <= 0 {
 		return
