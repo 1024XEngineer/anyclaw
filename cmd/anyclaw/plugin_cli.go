@@ -21,6 +21,7 @@ func runPluginCommand(args []string) error {
 	}
 	switch args[0] {
 	case "new":
+		return runPluginNew(args[1:])
 	case "list":
 		return runPluginList(args[1:])
 	case "info":
@@ -35,11 +36,15 @@ func runPluginCommand(args []string) error {
 		printPluginUsage()
 		return fmt.Errorf("unknown plugin command: %s", args[0])
 	}
+
+}
+
+func runPluginNew(args []string) error {
 	fs := flag.NewFlagSet("plugin new", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	kind := fs.String("kind", "tool", "plugin kind: tool|ingress|channel|app|node|surface")
 	name := fs.String("name", "", "plugin name")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if strings.TrimSpace(*name) == "" {
@@ -191,6 +196,13 @@ func scaffoldPlugin(name string, kind string) error {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0o644); err != nil {
+		return err
+	}
+	codexPluginDir := filepath.Join(pluginDir, ".codex-plugin")
+	if err := os.MkdirAll(codexPluginDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(codexPluginDir, "plugin.json"), data, 0o644); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(pluginDir, scriptNameForKind(kind)), []byte(pluginScript(kind)), 0o644); err != nil {

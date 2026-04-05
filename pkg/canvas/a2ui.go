@@ -18,11 +18,13 @@ type A2UIComponent struct {
 }
 
 type A2UIDocument struct {
-	Version    string          `json:"version"`
-	Title      string          `json:"title,omitempty"`
-	Theme      string          `json:"theme,omitempty"`
-	Components []A2UIComponent `json:"components"`
-	Metadata   map[string]any  `json:"metadata,omitempty"`
+	Version     string            `json:"version"`
+	Title       string            `json:"title,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Theme       string            `json:"theme,omitempty"`
+	ThemeVars   map[string]string `json:"theme_vars,omitempty"`
+	Components  []A2UIComponent   `json:"components"`
+	Metadata    map[string]any    `json:"metadata,omitempty"`
 }
 
 type A2UIRenderer struct {
@@ -50,12 +52,17 @@ func (r *A2UIRenderer) Render(doc *A2UIDocument) (string, error) {
 		title = doc.Title
 	}
 	sb.WriteString(fmt.Sprintf("<title>%s</title>\n", template.HTMLEscapeString(title)))
+	if strings.TrimSpace(doc.Description) != "" {
+		sb.WriteString(fmt.Sprintf("<meta name=\"description\" content=\"%s\">\n", template.HTMLEscapeString(doc.Description)))
+	}
 
 	sb.WriteString("<style>\n")
 	sb.WriteString(r.themeStyles[doc.Theme])
+	sb.WriteString(r.themeVariableStyles(doc))
 	sb.WriteString(r.componentStyles())
 	sb.WriteString("</style>\n")
-	sb.WriteString("</head>\n<body>\n")
+	sb.WriteString("</head>\n")
+	sb.WriteString(fmt.Sprintf("<body data-a2ui-theme=\"%s\">\n", template.HTMLEscapeString(firstNonEmptyTheme(doc.Theme, "light"))))
 
 	for _, comp := range doc.Components {
 		html, err := r.renderComponent(comp, "")
@@ -73,6 +80,10 @@ func (r *A2UIRenderer) renderComponent(comp A2UIComponent, indent string) (strin
 	switch comp.Type {
 	case "container", "div":
 		return r.renderContainer(comp, indent)
+	case "section":
+		return r.renderSection(comp, indent)
+	case "stack":
+		return r.renderStack(comp, indent)
 	case "text", "p", "span":
 		return r.renderText(comp, indent)
 	case "heading", "h1", "h2", "h3", "h4", "h5", "h6":
@@ -81,8 +92,12 @@ func (r *A2UIRenderer) renderComponent(comp A2UIComponent, indent string) (strin
 		return r.renderButton(comp, indent)
 	case "input":
 		return r.renderInput(comp, indent)
+	case "textarea":
+		return r.renderTextarea(comp, indent)
 	case "image", "img":
 		return r.renderImage(comp, indent)
+	case "link", "a":
+		return r.renderLink(comp, indent)
 	case "list", "ul", "ol":
 		return r.renderList(comp, indent)
 	case "card":
@@ -110,6 +125,57 @@ func (r *A2UIRenderer) renderContainer(comp A2UIComponent, indent string) (strin
 	attrs := r.buildAttributes(comp)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s<div%s>\n", indent, attrs))
+	childIndent := indent + "  "
+	for _, child := range comp.Children {
+		html, err := r.renderComponent(child, childIndent)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(html)
+	}
+	sb.WriteString(fmt.Sprintf("%s</div>\n", indent))
+	return sb.String(), nil
+}
+
+func (r *A2UIRenderer) renderSection(comp A2UIComponent, indent string) (string, error) {
+	attrs := r.buildAttributes(comp)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s<section class=\"a2ui-section\"%s>\n", indent, attrs))
+	childIndent := indent + "  "
+	if title, ok := comp.Props["title"].(string); ok && strings.TrimSpace(title) != "" {
+		sb.WriteString(fmt.Sprintf("%s  <h2>%s</h2>\n", indent, template.HTMLEscapeString(title)))
+	}
+	if description, ok := comp.Props["description"].(string); ok && strings.TrimSpace(description) != "" {
+		sb.WriteString(fmt.Sprintf("%s  <p class=\"a2ui-section-description\">%s</p>\n", indent, template.HTMLEscapeString(description)))
+	}
+	for _, child := range comp.Children {
+		html, err := r.renderComponent(child, childIndent)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(html)
+	}
+	sb.WriteString(fmt.Sprintf("%s</section>\n", indent))
+	return sb.String(), nil
+}
+
+func (r *A2UIRenderer) renderStack(comp A2UIComponent, indent string) (string, error) {
+	attrs := r.buildAttributes(comp)
+	direction := "column"
+	if value, ok := comp.Props["direction"].(string); ok && strings.TrimSpace(value) != "" {
+		direction = value
+	}
+	gap := "12px"
+	if value, ok := comp.Props["gap"].(string); ok && strings.TrimSpace(value) != "" {
+		gap = value
+	}
+	align := "stretch"
+	if value, ok := comp.Props["align"].(string); ok && strings.TrimSpace(value) != "" {
+		align = value
+	}
+	style := fmt.Sprintf(" style=\"display:flex;flex-direction:%s;gap:%s;align-items:%s;\"", template.HTMLEscapeString(direction), template.HTMLEscapeString(gap), template.HTMLEscapeString(align))
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s<div class=\"a2ui-stack\"%s%s>\n", indent, style, attrs))
 	childIndent := indent + "  "
 	for _, child := range comp.Children {
 		html, err := r.renderComponent(child, childIndent)
@@ -168,6 +234,20 @@ func (r *A2UIRenderer) renderInput(comp A2UIComponent, indent string) (string, e
 	return fmt.Sprintf("%s<input type=\"%s\"%s%s>\n", indent, inputType, placeholder, attrs), nil
 }
 
+func (r *A2UIRenderer) renderTextarea(comp A2UIComponent, indent string) (string, error) {
+	attrs := r.buildAttributes(comp)
+	rows := "4"
+	if value, ok := comp.Props["rows"].(string); ok && strings.TrimSpace(value) != "" {
+		rows = value
+	}
+	placeholder := ""
+	if p, ok := comp.Props["placeholder"].(string); ok {
+		placeholder = fmt.Sprintf(" placeholder=\"%s\"", template.HTMLEscapeString(p))
+	}
+	content := template.HTMLEscapeString(comp.Content)
+	return fmt.Sprintf("%s<textarea rows=\"%s\"%s%s>%s</textarea>\n", indent, rows, placeholder, attrs, content), nil
+}
+
 func (r *A2UIRenderer) renderImage(comp A2UIComponent, indent string) (string, error) {
 	attrs := r.buildAttributes(comp)
 	src := ""
@@ -179,6 +259,19 @@ func (r *A2UIRenderer) renderImage(comp A2UIComponent, indent string) (string, e
 		alt = template.HTMLEscapeString(a)
 	}
 	return fmt.Sprintf("%s<img src=\"%s\" alt=\"%s\"%s>\n", indent, src, alt, attrs), nil
+}
+
+func (r *A2UIRenderer) renderLink(comp A2UIComponent, indent string) (string, error) {
+	attrs := r.buildAttributes(comp)
+	href := "#"
+	if value, ok := comp.Props["href"].(string); ok && strings.TrimSpace(value) != "" {
+		href = value
+	}
+	content := template.HTMLEscapeString(comp.Content)
+	if content == "" {
+		content = template.HTMLEscapeString(href)
+	}
+	return fmt.Sprintf("%s<a href=\"%s\"%s>%s</a>\n", indent, template.HTMLEscapeString(href), attrs, content), nil
 }
 
 func (r *A2UIRenderer) renderList(comp A2UIComponent, indent string) (string, error) {
@@ -348,6 +441,13 @@ func (r *A2UIRenderer) buildAttributes(comp A2UIComponent) string {
 
 func (r *A2UIRenderer) componentStyles() string {
 	return `
+.a2ui-section {
+  margin-bottom: 24px;
+}
+.a2ui-section-description {
+  color: #5b5249;
+  margin-top: -8px;
+}
 .a2ui-card {
   background: #fff;
   border-radius: 12px;
@@ -441,6 +541,22 @@ input {
   width: 100%;
   max-width: 400px;
 }
+textarea {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #d1d5db;
+  font: inherit;
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+}
+a {
+  color: #0f766e;
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
 `
 }
 
@@ -451,6 +567,34 @@ func defaultThemeStyles() map[string]string {
 		"dark":    "body { background: #1a1a2e; color: #e0e0e0; } .a2ui-card { background: #16213e; } .a2ui-table th { background: #0f3460; } .a2ui-table td { border-color: #1a1a2e; }",
 		"minimal": "body { background: #fff; color: #333; padding: 16px; } .a2ui-card { box-shadow: none; border: 1px solid #eee; }",
 	}
+}
+
+func (r *A2UIRenderer) themeVariableStyles(doc *A2UIDocument) string {
+	if doc == nil || len(doc.ThemeVars) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(":root{")
+	for key, value := range doc.ThemeVars {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("--%s:%s;", template.HTMLEscapeString(key), template.HTMLEscapeString(value)))
+	}
+	sb.WriteString("}\n")
+	return sb.String()
+}
+
+func firstNonEmptyTheme(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func ParseA2UI(content string) (*A2UIDocument, error) {

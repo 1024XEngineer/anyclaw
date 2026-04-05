@@ -83,10 +83,16 @@ func (s *SkillsManager) Load() error {
 		s.dir = "skills"
 	}
 
+	for name, definition := range BuiltinSkillDefinitions() {
+		s.skills[name] = skillFromDefinition(definition, "builtin://"+name)
+	}
+
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Printf("Warning: skills directory not found: %s (skipping)\n", s.dir)
+			if len(s.skills) == 0 {
+				fmt.Printf("Warning: skills directory not found: %s (skipping)\n", s.dir)
+			}
 			return nil
 		}
 		return fmt.Errorf("skills directory not found: %w", err)
@@ -108,6 +114,47 @@ func (s *SkillsManager) Load() error {
 	}
 
 	return nil
+}
+
+func skillFromDefinition(definition skillFileDefinition, virtualPath string) *Skill {
+	skill := &Skill{
+		Name:           definition.Name,
+		Description:    definition.Description,
+		Version:        definition.Version,
+		Prompts:        map[string]string{},
+		Metadata:       map[string]string{},
+		Permissions:    append([]string(nil), definition.Permissions...),
+		Entrypoint:     definition.Entrypoint,
+		Source:         definition.Source,
+		Registry:       definition.Registry,
+		Homepage:       definition.Homepage,
+		InstallCommand: definition.InstallCommand,
+	}
+	for key, value := range definition.Prompts {
+		skill.Prompts[key] = value
+	}
+	if skill.Name == "" {
+		skill.Name = strings.TrimPrefix(strings.TrimSpace(skill.Entrypoint), "builtin://")
+	}
+	if skill.Entrypoint == "" {
+		skill.Entrypoint = "builtin://" + skill.Name
+	}
+	if skill.Source == "" {
+		skill.Source = "builtin"
+	}
+	if skill.Registry == "" {
+		skill.Registry = "builtin"
+	}
+	if skill.InstallCommand == "" && skill.Name != "" {
+		skill.InstallCommand = "anyclaw skill install " + skill.Name
+	}
+	if virtualPath == "" {
+		virtualPath = "builtin://" + skill.Name
+	}
+	skill.Metadata["path"] = virtualPath
+	skill.Metadata["source"] = skill.Source
+	skill.Metadata["registry"] = skill.Registry
+	return skill
 }
 
 func (s *SkillsManager) loadSkill(path string) (*Skill, error) {

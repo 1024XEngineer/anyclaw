@@ -143,3 +143,24 @@ func TestRunPluginToggleUpdatesEnabledList(t *testing.T) {
 		t.Fatalf("expected plugin to be disabled, got %#v", updated.Plugins.Enabled)
 	}
 }
+
+func TestRunPluginCommandNewScaffoldsCodexManifest(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	tempDir := t.TempDir()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir tempDir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(wd)
+	}()
+
+	if err := runPluginCommand([]string{"new", "--name", "demo-tool", "--kind", "tool"}); err != nil {
+		t.Fatalf("runPluginCommand new: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join("plugins", "demo-tool", ".codex-plugin", "plugin.json")); err != nil {
+		t.Fatalf("expected codex plugin manifest: %v", err)
+	}
+}

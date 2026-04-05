@@ -3,6 +3,7 @@ package canvas
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -206,11 +207,21 @@ func TestA2UIParseAndRender(t *testing.T) {
 	content := `{
 		"version": "1.0",
 		"title": "Test Page",
+		"description": "Demo description",
 		"theme": "light",
+		"theme_vars": {
+			"accent": "#0f766e"
+		},
 		"components": [
 			{"type": "heading", "content": "Hello World", "props": {"level": 1}},
 			{"type": "text", "content": "This is a test."},
-			{"type": "button", "content": "Click Me"}
+			{"type": "button", "content": "Click Me"},
+			{"type": "section", "props": {"title": "Details", "description": "More context"}, "children": [
+				{"type": "stack", "props": {"gap": "8px"}, "children": [
+					{"type": "textarea", "props": {"rows": "6", "placeholder": "Write here"}, "content": "Draft"},
+					{"type": "link", "content": "AnyClaw", "props": {"href": "https://github.com/anyclaw/anyclaw"}}
+				]}
+			]}
 		]
 	}`
 
@@ -221,8 +232,8 @@ func TestA2UIParseAndRender(t *testing.T) {
 	if doc.Title != "Test Page" {
 		t.Fatalf("expected title 'Test Page', got %s", doc.Title)
 	}
-	if len(doc.Components) != 3 {
-		t.Fatalf("expected 3 components, got %d", len(doc.Components))
+	if len(doc.Components) != 4 {
+		t.Fatalf("expected 4 components, got %d", len(doc.Components))
 	}
 
 	renderer := NewA2UIRenderer()
@@ -232,6 +243,15 @@ func TestA2UIParseAndRender(t *testing.T) {
 	}
 	if len(html) == 0 {
 		t.Fatal("rendered HTML is empty")
+	}
+	if !containsAll(html, []string{
+		`meta name="description" content="Demo description"`,
+		`--accent:#0f766e`,
+		`<section class="a2ui-section"`,
+		`<textarea rows="6" placeholder="Write here">Draft</textarea>`,
+		`<a href="https://github.com/anyclaw/anyclaw">AnyClaw</a>`,
+	}) {
+		t.Fatalf("rendered HTML missing expected upgraded A2UI content:\n%s", html)
 	}
 }
 
@@ -270,4 +290,13 @@ func TestPathTraversalProtection(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("expected empty entries dir, got %d files", len(entries))
 	}
+}
+
+func containsAll(value string, snippets []string) bool {
+	for _, snippet := range snippets {
+		if !strings.Contains(value, snippet) {
+			return false
+		}
+	}
+	return true
 }

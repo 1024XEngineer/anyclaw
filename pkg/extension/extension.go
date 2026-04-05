@@ -17,7 +17,8 @@ type Manifest struct {
 	Name         string         `json:"name"`
 	Version      string         `json:"version"`
 	Description  string         `json:"description"`
-	Kind         string         `json:"kind"`                    // "channel", "tool", "provider", "memory", "hook"
+	Kind         string         `json:"kind"` // "channel", "tool", "provider", "memory", "hook"
+	Builtin      bool           `json:"builtin,omitempty"`
 	Channels     []string       `json:"channels,omitempty"`      // Channel IDs this extension provides
 	Providers    []string       `json:"providers,omitempty"`     // LLM provider IDs
 	Skills       []string       `json:"skills,omitempty"`        // Skill IDs bundled
@@ -51,15 +52,16 @@ func NewRegistry(extensionsDir string) *Registry {
 
 // Discover scans the extensions directory for available extensions.
 func (r *Registry) Discover() ([]Manifest, error) {
+	manifests := append([]Manifest(nil), builtinExtensionManifests()...)
+
 	entries, err := os.ReadDir(r.extensionsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return manifests, nil
 		}
 		return nil, fmt.Errorf("failed to read extensions dir: %w", err)
 	}
 
-	var manifests []Manifest
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -176,6 +178,14 @@ func (r *Registry) LoadAll() error {
 	}
 
 	for _, m := range manifests {
+		if m.Builtin {
+			r.Register(&Extension{
+				Manifest: m,
+				Path:     "builtin://extensions/" + m.ID,
+				Enabled:  true,
+			})
+			continue
+		}
 		extPath := filepath.Join(r.extensionsDir, m.ID)
 		ext, err := LoadExtension(extPath)
 		if err != nil {

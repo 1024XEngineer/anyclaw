@@ -77,7 +77,28 @@ type PluginAPI struct {
 	ctx *PluginContext
 }
 
+func NewPluginContext(name string, version string, workingDir string, gatewayAddr string, cfg map[string]any) *PluginContext {
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	return &PluginContext{
+		Name:        name,
+		Version:     version,
+		WorkingDir:  workingDir,
+		Config:      cfg,
+		GatewayAddr: gatewayAddr,
+		tools:       make(map[string]Tool),
+		channels:    make(map[string]Channel),
+		handlers:    make(map[string]EventHandler),
+		httpRoutes:  make(map[string]HTTPRoute),
+		nodes:       make(map[string]Node),
+	}
+}
+
 func NewPluginAPI(ctx *PluginContext) *PluginAPI {
+	if ctx == nil {
+		ctx = NewPluginContext("", "", "", "", nil)
+	}
 	return &PluginAPI{ctx: ctx}
 }
 
@@ -171,6 +192,50 @@ func (p *PluginAPI) GetGatewayAddr() string {
 	return p.ctx.GatewayAddr
 }
 
+func (p *PluginAPI) ListTools() []Tool {
+	p.ctx.mu.RLock()
+	defer p.ctx.mu.RUnlock()
+
+	items := make([]Tool, 0, len(p.ctx.tools))
+	for _, tool := range p.ctx.tools {
+		items = append(items, tool)
+	}
+	return items
+}
+
+func (p *PluginAPI) ListChannels() []Channel {
+	p.ctx.mu.RLock()
+	defer p.ctx.mu.RUnlock()
+
+	items := make([]Channel, 0, len(p.ctx.channels))
+	for _, ch := range p.ctx.channels {
+		items = append(items, ch)
+	}
+	return items
+}
+
+func (p *PluginAPI) ListHTTPRoutes() []HTTPRoute {
+	p.ctx.mu.RLock()
+	defer p.ctx.mu.RUnlock()
+
+	items := make([]HTTPRoute, 0, len(p.ctx.httpRoutes))
+	for _, route := range p.ctx.httpRoutes {
+		items = append(items, route)
+	}
+	return items
+}
+
+func (p *PluginAPI) ListNodes() []Node {
+	p.ctx.mu.RLock()
+	defer p.ctx.mu.RUnlock()
+
+	items := make([]Node, 0, len(p.ctx.nodes))
+	for _, node := range p.ctx.nodes {
+		items = append(items, node)
+	}
+	return items
+}
+
 type PluginManifest struct {
 	Name        string   `json:"name"`
 	Version     string   `json:"version"`
@@ -178,6 +243,19 @@ type PluginManifest struct {
 	Kind        []string `json:"kind"`
 	Entrypoint  string   `json:"entrypoint,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
+}
+
+func (m PluginManifest) Validate() error {
+	if m.Name == "" {
+		return fmt.Errorf("plugin manifest: name is required")
+	}
+	if m.Version == "" {
+		return fmt.Errorf("plugin manifest: version is required")
+	}
+	if len(m.Kind) == 0 {
+		return fmt.Errorf("plugin manifest: at least one kind is required")
+	}
+	return nil
 }
 
 type PluginInitFunc func(api *PluginAPI) error
