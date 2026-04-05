@@ -2403,42 +2403,52 @@
       "payload": {
         "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\anyclaw\\.anyclaw\\canvas"
       }
+    },
+    {
+      "id": "evt_1775401971611248600_1",
+      "type": "security.init",
+      "timestamp": "2026-04-05T15:12:51.6112486Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775401971620447700_2",
+      "type": "canvas.init.ok",
+      "timestamp": "2026-04-05T15:12:51.6204477Z",
+      "payload": {
+        "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\anyclaw\\.anyclaw\\canvas"
+      }
+    },
+    {
+      "id": "evt_1775402096778630000_1",
+      "type": "security.init",
+      "timestamp": "2026-04-05T15:14:56.77863Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775402096786467000_2",
+      "type": "canvas.init.ok",
+      "timestamp": "2026-04-05T15:14:56.786467Z",
+      "payload": {
+        "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\anyclaw\\.anyclaw\\canvas"
+      }
     }
   ],
   "tools": [],
   "audit": [
-    {
-      "id": "aud_1774626850005562300_31",
-      "actor": "local-admin",
-      "role": "admin",
-      "action": "status.read",
-      "target": "status",
-      "timestamp": "2026-03-27T15:54:10.0055623Z"
-    },
-    {
-      "id": "aud_1774626941896100800_32",
-      "actor": "local-admin",
-      "role": "admin",
-      "action": "providers.write",
-      "target": "openai-compatible",
-      "timestamp": "2026-03-27T15:55:41.8961008Z"
-    },
-    {
-      "id": "aud_1774626941902084000_33",
-      "actor": "local-admin",
-      "role": "admin",
-      "action": "resources.read",
-      "target": "resources",
-      "timestamp": "2026-03-27T15:55:41.902084Z"
-    },
-    {
-      "id": "aud_1774626941902084000_34",
-      "actor": "local-admin",
-      "role": "admin",
-      "action": "assistants.read",
-      "target": "assistants",
-      "timestamp": "2026-03-27T15:55:41.902084Z"
-    },
     {
       "id": "aud_1774626941904655000_35",
       "actor": "local-admin",
@@ -6610,6 +6620,38 @@
       "action": "status.read",
       "target": "status",
       "timestamp": "2026-04-01T03:16:36.1435493Z"
+    },
+    {
+      "id": "aud_1775401971768676600_3",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-04-05T15:12:51.7686766Z"
+    },
+    {
+      "id": "aud_1775401979538454200_4",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-04-05T15:12:59.5384542Z"
+    },
+    {
+      "id": "aud_1775402096933275200_3",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-04-05T15:14:56.9332752Z"
+    },
+    {
+      "id": "aud_1775402110920610200_4",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-04-05T15:15:10.9206102Z"
     }
   ],
   "orgs": [
@@ -6638,5 +6680,5 @@
     }
   ],
   "jobs": [],
-  "updated": "2026-04-05T12:05:42.1336754Z"
+  "updated": "2026-04-05T15:15:10.9206102Z"
 }

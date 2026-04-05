@@ -15,6 +15,11 @@ type IntentPreprocessor struct {
 	shellName string
 }
 
+const (
+	intentCapabilityThreshold  = 0.15
+	intentAutoExecuteThreshold = 0.45
+)
+
 func NewIntentPreprocessor(root string, execFunc func([]string, string) (string, error)) (*IntentPreprocessor, error) {
 	registry, err := clihub.LoadCapabilityRegistry(root)
 	if err != nil {
@@ -46,34 +51,24 @@ func (p *IntentPreprocessor) Preprocess(userInput string, args []string) *Prepro
 		return nil
 	}
 
-	cap := &matches[0]
-
-	confidence := 1.0
-	for _, match := range matches {
-		score := 0
-		queryLower := strings.ToLower(query)
-
-		if strings.Contains(queryLower, strings.ToLower(match.Harness)) {
-			score += 3
-		}
-		if strings.Contains(queryLower, strings.ToLower(match.Command)) {
-			score += 3
-		}
-		if strings.Contains(queryLower, strings.ToLower(match.Group)) {
-			score += 2
-		}
-
-		if score > 0 && float64(score)/float64(len(queryLower)) > 0.1 {
-			confidence = float64(score) / float64(len(queryLower))
-			cap = &match
+	var (
+		cap        *clihub.Capability
+		confidence float64
+	)
+	for i := range matches {
+		match := &matches[i]
+		score := intentMatchConfidence(query, match)
+		if score > confidence {
+			confidence = score
+			cap = match
 		}
 	}
 
-	if cap == nil {
+	if cap == nil || confidence < intentCapabilityThreshold {
 		return nil
 	}
 
-	description := fmt.Sprintf("Auto-executing %s/%s", cap.Harness, cap.Command)
+	description := fmt.Sprintf("Auto-routing %s to %s/%s", query, cap.Harness, cap.Command)
 
 	return &PreprocessResult{
 		Handled:     true,
@@ -87,6 +82,9 @@ func (p *IntentPreprocessor) Execute(result *PreprocessResult, additionalArgs []
 	if result == nil || result.Capability == nil {
 		return "", fmt.Errorf("no result to execute")
 	}
+	if p.execFunc == nil {
+		return "", fmt.Errorf("intent execution function is not configured")
+	}
 
 	cap := result.Capability
 
@@ -95,17 +93,11 @@ func (p *IntentPreprocessor) Execute(result *PreprocessResult, additionalArgs []
 		return "", err
 	}
 
-	fullArgs := append(cmdArgs, cap.Command)
+	fullArgs := append([]string{}, cmdArgs...)
+	fullArgs = append(fullArgs, cap.Command, "--json")
 	fullArgs = append(fullArgs, additionalArgs...)
-	fullArgs = append([]string{"--json"}, fullArgs...)
 
-	quoted := make([]string, 0, len(fullArgs))
-	for _, arg := range fullArgs {
-		quoted = append(quoted, "'"+strings.ReplaceAll(arg, "'", `'"'"'`)+"'")
-	}
-	command := strings.Join(quoted, " ")
-
-	return p.execFunc([]string{command}, cwd)
+	return p.execFunc(fullArgs, cwd)
 }
 
 func (p *IntentPreprocessor) GetCapability(name string) *clihub.Capability {
@@ -144,7 +136,7 @@ func (a *AgentWithIntent) RunWithIntent(ctx context.Context, userInput string, a
 	}
 
 	result := a.intent.Preprocess(userInput, autoArgs)
-	if result == nil || !result.Handled || result.Confidence < 0.15 {
+	if result == nil || !result.Handled || result.Confidence < intentAutoExecuteThreshold {
 		return a.Agent.Run(ctx, userInput)
 	}
 
@@ -161,5 +153,57 @@ func (a *AgentWithIntent) RunWithIntent(ctx context.Context, userInput string, a
 
 func (a *AgentWithIntent) CanHandleIntent(query string) bool {
 	result := a.intent.Preprocess(query, nil)
-	return result != nil && result.Handled && result.Confidence >= 0.15
+	return result != nil && result.Handled && result.Confidence >= intentCapabilityThreshold
+}
+
+func intentMatchConfidence(query string, cap *clihub.Capability) float64 {
+	if cap == nil {
+		return 0
+	}
+
+	normalizedQuery := normalizeIntentText(query)
+	if normalizedQuery == "" {
+		return 0
+	}
+
+	score := 0.0
+	if containsIntentFragment(normalizedQuery, cap.Harness) {
+		score += 3
+	}
+	if containsIntentFragment(normalizedQuery, cap.Command) {
+		score += 3
+	}
+	if containsIntentFragment(normalizedQuery, cap.Group) {
+		score += 2
+	}
+	if containsIntentFragment(normalizedQuery, cap.Category) {
+		score += 1
+	}
+
+	keywordHits := 0
+	for _, kw := range cap.Keywords {
+		if containsIntentFragment(normalizedQuery, kw) {
+			keywordHits++
+			if keywordHits >= 3 {
+				break
+			}
+		}
+	}
+	score += float64(keywordHits)
+
+	confidence := score / 10.0
+	if confidence > 1 {
+		return 1
+	}
+	return confidence
+}
+
+func normalizeIntentText(input string) string {
+	replacer := strings.NewReplacer("_", " ", "-", " ", "/", " ", `\`, " ", ".", " ", ":", " ")
+	return strings.ToLower(strings.TrimSpace(replacer.Replace(input)))
+}
+
+func containsIntentFragment(query string, value string) bool {
+	value = normalizeIntentText(value)
+	return value != "" && strings.Contains(query, value)
 }

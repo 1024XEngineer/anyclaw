@@ -1,16 +1,351 @@
 {
+  "agent": {
+    "active_profile": "",
+    "description": "通用AI助手",
+    "name": "艾莉",
+    "permission_level": "full",
+    "profiles": [
+      {
+        "avatar_preset": "sora",
+        "default_model": "qwen-max",
+        "description": "Senior engineer focused on Go development.",
+        "domain": "Go development",
+        "enabled": true,
+        "expertise": [
+          "Go concurrency",
+          "microservices",
+          "performance optimization",
+          "standard library",
+          "gRPC"
+        ],
+        "name": "Go编码专家",
+        "permission_level": "limited",
+        "persona": "Experienced Go engineer focused on concurrency, standard library, and backend systems.",
+        "personality": {
+          "goal_orientation": "quality first",
+          "style": "technical",
+          "tone": "professional",
+          "traits": [
+            "rigorous",
+            "efficient",
+            "pragmatic"
+          ]
+        },
+        "provider_ref": "primary-qwen",
+        "skills": [
+          {
+            "enabled": true,
+            "name": "coder"
+          },
+          {
+            "enabled": true,
+            "name": "find-skills"
+          }
+        ],
+        "system_prompt": "You are a senior Go engineer. Prioritize code quality, best practices, performance, and maintainability. Reply in Chinese when talking to the user.",
+        "working_dir": "workflows/go-expert"
+      },
+      {
+        "default_model": "qwen-max",
+        "description": "Senior engineer focused on Python development.",
+        "domain": "Python development",
+        "enabled": true,
+        "expertise": [
+          "advanced Python",
+          "data analysis",
+          "web development",
+          "automation",
+          "machine learning"
+        ],
+        "name": "Python编码专家",
+        "permission_level": "limited",
+        "persona": "Experienced Python engineer focused on data science, web development, and automation.",
+        "personality": {
+          "goal_orientation": "practical",
+          "style": "example-driven",
+          "tone": "patient",
+          "traits": [
+            "clear",
+            "thoughtful",
+            "useful"
+          ]
+        },
+        "skills": [
+          {
+            "enabled": true,
+            "name": "coder"
+          },
+          {
+            "enabled": true,
+            "name": "analyst"
+          }
+        ],
+        "system_prompt": "You are a senior Python engineer. Write clean, practical solutions and reply in Chinese when addressing the user.",
+        "working_dir": "workflows/python-expert"
+      },
+      {
+        "default_model": "qwen-max",
+        "description": "Fitness coaching and nutrition guidance.",
+        "domain": "fitness",
+        "enabled": true,
+        "expertise": [
+          "strength training",
+          "cardio",
+          "sports nutrition",
+          "posture correction",
+          "recovery"
+        ],
+        "name": "健身教练",
+        "permission_level": "read-only",
+        "persona": "Certified personal trainer with years of coaching experience.",
+        "personality": {
+          "goal_orientation": "health first",
+          "style": "easy to understand",
+          "tone": "encouraging",
+          "traits": [
+            "supportive",
+            "positive",
+            "patient"
+          ]
+        },
+        "skills": [
+          {
+            "enabled": true,
+            "name": "researcher"
+          }
+        ],
+        "system_prompt": "You are a fitness coach. Give safe, encouraging guidance and reply in Chinese.",
+        "working_dir": "workflows/fitness-coach"
+      },
+      {
+        "description": "Academic writing and paper guidance.",
+        "domain": "academic writing",
+        "enabled": true,
+        "expertise": [
+          "paper structure",
+          "literature review",
+          "academic writing",
+          "citation standards",
+          "research methods"
+        ],
+        "name": "论文助手",
+        "permission_level": "read-only",
+        "persona": "Research-focused writing advisor.",
+        "personality": {
+          "goal_orientation": "academic quality",
+          "style": "structured",
+          "tone": "rigorous",
+          "traits": [
+            "careful",
+            "clear",
+            "knowledgeable"
+          ]
+        },
+        "skills": [
+          {
+            "enabled": true,
+            "name": "writer"
+          },
+          {
+            "enabled": true,
+            "name": "researcher"
+          },
+          {
+            "enabled": true,
+            "name": "translator"
+          }
+        ],
+        "system_prompt": "You are an academic writing assistant. Emphasize structure, clarity, citation quality, and reply in Chinese.",
+        "working_dir": "workflows/paper-assistant"
+      },
+      {
+        "description": "Data analysis and business insight specialist.",
+        "domain": "data analysis",
+        "enabled": true,
+        "expertise": [
+          "visualization",
+          "statistics",
+          "A/B testing",
+          "reporting",
+          "forecasting"
+        ],
+        "name": "数据分析师",
+        "permission_level": "limited",
+        "persona": "Experienced analyst focused on turning data into decisions.",
+        "personality": {
+          "goal_orientation": "decision support",
+          "style": "data-driven",
+          "tone": "objective",
+          "traits": [
+            "precise",
+            "analytical",
+            "insightful"
+          ]
+        },
+        "skills": [
+          {
+            "enabled": true,
+            "name": "analyst"
+          },
+          {
+            "enabled": true,
+            "name": "coder"
+          }
+        ],
+        "system_prompt": "You are a data analyst. Focus on evidence, clarity, and business value. Reply in Chinese.",
+        "working_dir": "workflows/data-analyst"
+      },
+      {
+        "description": "Bilingual translation and localization specialist.",
+        "domain": "translation",
+        "enabled": true,
+        "expertise": [
+          "Chinese-English translation",
+          "technical documents",
+          "business translation",
+          "localization",
+          "terminology"
+        ],
+        "name": "翻译专家",
+        "permission_level": "read-only",
+        "persona": "Professional translator focused on technical and business writing.",
+        "personality": {
+          "goal_orientation": "faithful translation",
+          "style": "natural",
+          "tone": "accurate",
+          "traits": [
+            "precise",
+            "fluent",
+            "careful"
+          ]
+        },
+        "skills": [
+          {
+            "enabled": true,
+            "name": "translator"
+          },
+          {
+            "enabled": true,
+            "name": "writer"
+          }
+        ],
+        "system_prompt": "You are a translation specialist. Preserve meaning, produce natural language, and reply in Chinese.",
+        "working_dir": "workflows/translator"
+      }
+    ],
+    "require_confirmation_for_dangerous": false,
+    "skills": [
+      {
+        "enabled": true,
+        "name": "vision-agent"
+      },
+      {
+        "enabled": true,
+        "name": "app-controller"
+      },
+      {
+        "enabled": true,
+        "name": "voice-assistant"
+      }
+    ],
+    "work_dir": ".anyclaw",
+    "working_dir": "workflows/personal"
+  },
+  "channels": {
+    "discord": {
+      "api_base_url": "https://discord.com/api/v10",
+      "bot_token": "",
+      "default_channel": "",
+      "enabled": false,
+      "guild_id": "",
+      "poll_every_seconds": 3,
+      "public_key": "",
+      "stream_interval_ms": 0,
+      "stream_reply": false,
+      "use_gateway_ws": true
+    },
+    "routing": {
+      "mode": "per-chat",
+      "rules": null
+    },
+    "security": {
+      "allow_from": null,
+      "default_deny_dm": true,
+      "dm_policy": "allow-list",
+      "group_policy": "mention-only",
+      "mention_gate": true,
+      "pairing_enabled": false,
+      "pairing_ttl_hours": 72,
+      "risk_acknowledged": false
+    },
+    "signal": {
+      "base_url": "http://127.0.0.1:8080",
+      "bearer_token": "",
+      "default_recipient": "",
+      "enabled": false,
+      "number": "",
+      "poll_every_seconds": 3
+    },
+    "slack": {
+      "app_token": "",
+      "bot_token": "",
+      "default_channel": "",
+      "enabled": false,
+      "poll_every_seconds": 3,
+      "stream_interval_ms": 0,
+      "stream_reply": false
+    },
+    "telegram": {
+      "bot_token": "",
+      "chat_id": "",
+      "enabled": false,
+      "poll_every_seconds": 3,
+      "stream_interval_ms": 0,
+      "stream_reply": false
+    },
+    "whatsapp": {
+      "access_token": "",
+      "api_version": "v20.0",
+      "app_secret": "",
+      "default_recipient": "",
+      "enabled": false,
+      "phone_number_id": "",
+      "verify_token": ""
+    }
+  },
+  "daemon": {
+    "log_file": ".anyclaw/gateway.log",
+    "pid_file": ".anyclaw/gateway.pid"
+  },
+  "gateway": {
+    "bind": "loopback",
+    "canvas_max_versions": 0,
+    "control_ui": {
+      "base_path": "/dashboard",
+      "root": ""
+    },
+    "host": "127.0.0.1",
+    "job_max_attempts": 2,
+    "job_retry_delay_seconds": 2,
+    "job_worker_count": 2,
+    "port": 18789,
+    "runtime_idle_seconds": 900,
+    "runtime_max_instances": 16,
+    "worker_count": 0
+  },
   "llm": {
-    "provider": "qwen",
-    "model": "qwen-max",
     "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "default_provider_ref": "primary-qwen",
-    "max_tokens": 4096,
-    "temperature": 0.7,
-    "proxy": "",
     "extra": null,
+    "max_tokens": 4096,
+    "model": "qwen-max",
+    "provider": "qwen",
+    "proxy": "",
     "routing": {
       "enabled": true,
+      "fast_model": "qwen-turbo",
+      "fast_provider": "qwen",
       "reasoning_keywords": [
         "计划",
         "复杂",
@@ -23,431 +358,138 @@
         "script",
         "code"
       ],
-      "reasoning_provider": "qwen",
       "reasoning_model": "qwen-plus",
-      "fast_provider": "qwen",
-      "fast_model": "qwen-turbo"
-    }
+      "reasoning_provider": "qwen"
+    },
+    "temperature": 0.7
   },
-  "agent": {
-    "name": "艾莉",
-    "description": "通用AI助手",
-    "work_dir": ".anyclaw",
-    "working_dir": "workflows/personal",
-    "permission_level": "full",
-    "require_confirmation_for_dangerous": false,
-    "skills": [
+  "mcp": {
+    "enabled": false,
+    "servers": null
+  },
+  "memory": {
+    "auto_save": true,
+    "dir": "memory",
+    "format": "markdown",
+    "max_history": 100
+  },
+  "orchestrator": {
+    "agent_names": [
+      "Go编码专家",
+      "Python编码专家",
+      "健身教练",
+      "论文助手",
+      "数据分析师",
+      "翻译专家"
+    ],
+    "enable_decomposition": true,
+    "enabled": true,
+    "max_concurrent_agents": 4,
+    "max_retries": 2,
+    "sub_agents": [
       {
-        "name": "vision-agent",
-        "enabled": true
+        "description": "General coding specialist using GPT-4o.",
+        "llm_model": "gpt-4o",
+        "llm_provider": "openai",
+        "llm_temperature": 0.3,
+        "name": "代码专家",
+        "permission_level": "full",
+        "personality": "Senior software engineer comfortable across multiple languages.",
+        "private_skills": [
+          "coder"
+        ]
       },
       {
-        "name": "app-controller",
-        "enabled": true
+        "description": "Creative writing specialist using Claude.",
+        "llm_model": "claude-sonnet-4-7",
+        "llm_provider": "anthropic",
+        "llm_temperature": 0.9,
+        "name": "创意写作",
+        "permission_level": "read-only",
+        "personality": "Creative writer and content creator.",
+        "private_skills": [
+          "writer"
+        ]
       },
       {
-        "name": "voice-assistant",
-        "enabled": true
+        "description": "Assistant powered by a local Ollama model.",
+        "llm_base_url": "http://localhost:11434",
+        "llm_model": "llama3.2",
+        "llm_provider": "ollama",
+        "llm_temperature": 0.5,
+        "name": "本地助手",
+        "permission_level": "limited",
+        "personality": "Privacy-conscious local AI assistant.",
+        "private_skills": []
       }
     ],
-    "profiles": [
-      {
-        "name": "Go编码专家",
-        "description": "Senior engineer focused on Go development.",
-        "persona": "Experienced Go engineer focused on concurrency, standard library, and backend systems.",
-        "avatar_preset": "sora",
-        "domain": "Go development",
-        "expertise": [
-          "Go concurrency",
-          "microservices",
-          "performance optimization",
-          "standard library",
-          "gRPC"
-        ],
-        "system_prompt": "You are a senior Go engineer. Prioritize code quality, best practices, performance, and maintainability. Reply in Chinese when talking to the user.",
-        "working_dir": "workflows/go-expert",
-        "permission_level": "limited",
-        "provider_ref": "openai-compatible",
-        "default_model": "stepfun/step-3.5-flash",
-        "enabled": true,
-        "personality": {
-          "tone": "professional",
-          "style": "technical",
-          "goal_orientation": "quality first",
-          "traits": [
-            "rigorous",
-            "efficient",
-            "pragmatic"
-          ]
-        },
-        "skills": [
-          {
-            "name": "coder",
-            "enabled": true
-          },
-          {
-            "name": "find-skills",
-            "enabled": true
-          }
-        ]
-      },
-      {
-        "name": "Python编码专家",
-        "description": "Senior engineer focused on Python development.",
-        "persona": "Experienced Python engineer focused on data science, web development, and automation.",
-        "domain": "Python development",
-        "expertise": [
-          "advanced Python",
-          "data analysis",
-          "web development",
-          "automation",
-          "machine learning"
-        ],
-        "system_prompt": "You are a senior Python engineer. Write clean, practical solutions and reply in Chinese when addressing the user.",
-        "working_dir": "workflows/python-expert",
-        "permission_level": "limited",
-        "default_model": "stepfun/step-3.5-flash",
-        "enabled": true,
-        "personality": {
-          "tone": "patient",
-          "style": "example-driven",
-          "goal_orientation": "practical",
-          "traits": [
-            "clear",
-            "thoughtful",
-            "useful"
-          ]
-        },
-        "skills": [
-          {
-            "name": "coder",
-            "enabled": true
-          },
-          {
-            "name": "analyst",
-            "enabled": true
-          }
-        ]
-      },
-      {
-        "name": "健身教练",
-        "description": "Fitness coaching and nutrition guidance.",
-        "persona": "Certified personal trainer with years of coaching experience.",
-        "domain": "fitness",
-        "expertise": [
-          "strength training",
-          "cardio",
-          "sports nutrition",
-          "posture correction",
-          "recovery"
-        ],
-        "system_prompt": "You are a fitness coach. Give safe, encouraging guidance and reply in Chinese.",
-        "working_dir": "workflows/fitness-coach",
-        "permission_level": "read-only",
-        "default_model": "stepfun/step-3.5-flash",
-        "enabled": true,
-        "personality": {
-          "tone": "encouraging",
-          "style": "easy to understand",
-          "goal_orientation": "health first",
-          "traits": [
-            "supportive",
-            "positive",
-            "patient"
-          ]
-        },
-        "skills": [
-          {
-            "name": "researcher",
-            "enabled": true
-          }
-        ]
-      },
-      {
-        "name": "论文助手",
-        "description": "Academic writing and paper guidance.",
-        "persona": "Research-focused writing advisor.",
-        "domain": "academic writing",
-        "expertise": [
-          "paper structure",
-          "literature review",
-          "academic writing",
-          "citation standards",
-          "research methods"
-        ],
-        "system_prompt": "You are an academic writing assistant. Emphasize structure, clarity, citation quality, and reply in Chinese.",
-        "working_dir": "workflows/paper-assistant",
-        "permission_level": "read-only",
-        "enabled": true,
-        "personality": {
-          "tone": "rigorous",
-          "style": "structured",
-          "goal_orientation": "academic quality",
-          "traits": [
-            "careful",
-            "clear",
-            "knowledgeable"
-          ]
-        },
-        "skills": [
-          {
-            "name": "writer",
-            "enabled": true
-          },
-          {
-            "name": "researcher",
-            "enabled": true
-          },
-          {
-            "name": "translator",
-            "enabled": true
-          }
-        ]
-      },
-      {
-        "name": "数据分析师",
-        "description": "Data analysis and business insight specialist.",
-        "persona": "Experienced analyst focused on turning data into decisions.",
-        "domain": "data analysis",
-        "expertise": [
-          "visualization",
-          "statistics",
-          "A/B testing",
-          "reporting",
-          "forecasting"
-        ],
-        "system_prompt": "You are a data analyst. Focus on evidence, clarity, and business value. Reply in Chinese.",
-        "working_dir": "workflows/data-analyst",
-        "permission_level": "limited",
-        "enabled": true,
-        "personality": {
-          "tone": "objective",
-          "style": "data-driven",
-          "goal_orientation": "decision support",
-          "traits": [
-            "precise",
-            "analytical",
-            "insightful"
-          ]
-        },
-        "skills": [
-          {
-            "name": "analyst",
-            "enabled": true
-          },
-          {
-            "name": "coder",
-            "enabled": true
-          }
-        ]
-      },
-      {
-        "name": "翻译专家",
-        "description": "Bilingual translation and localization specialist.",
-        "persona": "Professional translator focused on technical and business writing.",
-        "domain": "translation",
-        "expertise": [
-          "Chinese-English translation",
-          "technical documents",
-          "business translation",
-          "localization",
-          "terminology"
-        ],
-        "system_prompt": "You are a translation specialist. Preserve meaning, produce natural language, and reply in Chinese.",
-        "working_dir": "workflows/translator",
-        "permission_level": "read-only",
-        "enabled": true,
-        "personality": {
-          "tone": "accurate",
-          "style": "natural",
-          "goal_orientation": "faithful translation",
-          "traits": [
-            "precise",
-            "fluent",
-            "careful"
-          ]
-        },
-        "skills": [
-          {
-            "name": "translator",
-            "enabled": true
-          },
-          {
-            "name": "writer",
-            "enabled": true
-          }
-        ]
-      }
-    ],
-    "active_profile": ""
+    "timeout_seconds": 300
+  },
+  "plugins": {
+    "allow_exec": true,
+    "dir": "plugins",
+    "enabled": null,
+    "exec_timeout_seconds": 10,
+    "require_trust": true,
+    "trusted_signers": [
+      "dev-local"
+    ]
   },
   "providers": [
     {
-      "id": "qwen",
-      "name": "通义千问",
-      "type": "qwen",
-      "provider": "qwen",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "api_key": "sk-661230f4148d431db548386cf5e3e40a",
-      "default_model": "qwen-max",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "capabilities": [
         "chat",
         "reasoning"
       ],
-      "enabled": true
+      "default_model": "qwen-max",
+      "enabled": true,
+      "id": "qwen",
+      "name": "通义千问",
+      "provider": "qwen",
+      "type": "qwen"
     },
     {
-      "id": "openai-compatible",
-      "name": "七牛云",
-      "type": "openai",
-      "provider": "openai",
-      "base_url": "https://api.qnaigc.com/v1",
       "api_key": "sk-6a785c3e20fba40e9fd3dbbbe4f86dc44760ce9b4a288bef8d2fec50c9086448",
-      "default_model": "stepfun/step-3.5-flash",
+      "base_url": "https://api.qnaigc.com/v1",
       "capabilities": [
         "chat",
         "reasoning",
         "custom-endpoint"
       ],
-      "enabled": true
+      "default_model": "stepfun/step-3.5-flash",
+      "enabled": true,
+      "id": "openai-compatible",
+      "name": "七牛云",
+      "provider": "openai",
+      "type": "openai"
     },
     {
+      "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "default_model": "qwen-max",
+      "enabled": true,
       "id": "primary-qwen",
       "name": "Primary Qwen",
-      "type": "qwen",
       "provider": "qwen",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
-      "default_model": "qwen-max",
-      "enabled": true
+      "type": "qwen"
     }
   ],
-  "skills": {
-    "dir": "D:/anyclaw/anyclaw/anyclaw/anyclaw3/anyclaw/skills",
-    "auto_load": true,
-    "include": null,
-    "exclude": null
-  },
-  "memory": {
-    "dir": "memory",
-    "max_history": 100,
-    "format": "markdown",
-    "auto_save": true
-  },
-  "gateway": {
-    "host": "127.0.0.1",
-    "port": 18789,
-    "bind": "loopback",
-    "control_ui": {
-      "base_path": "/dashboard",
-      "root": ""
-    },
-    "worker_count": 0,
-    "runtime_max_instances": 16,
-    "runtime_idle_seconds": 900,
-    "job_worker_count": 2,
-    "job_max_attempts": 2,
-    "job_retry_delay_seconds": 2,
-    "canvas_max_versions": 0
-  },
-  "daemon": {
-    "pid_file": ".anyclaw/gateway.pid",
-    "log_file": ".anyclaw/gateway.log"
-  },
-  "channels": {
-    "telegram": {
-      "enabled": false,
-      "bot_token": "",
-      "chat_id": "",
-      "poll_every_seconds": 3,
-      "stream_reply": false,
-      "stream_interval_ms": 0
-    },
-    "slack": {
-      "enabled": false,
-      "bot_token": "",
-      "app_token": "",
-      "default_channel": "",
-      "poll_every_seconds": 3,
-      "stream_reply": false,
-      "stream_interval_ms": 0
-    },
-    "discord": {
-      "enabled": false,
-      "bot_token": "",
-      "default_channel": "",
-      "poll_every_seconds": 3,
-      "api_base_url": "https://discord.com/api/v10",
-      "guild_id": "",
-      "public_key": "",
-      "use_gateway_ws": true,
-      "stream_reply": false,
-      "stream_interval_ms": 0
-    },
-    "whatsapp": {
-      "enabled": false,
-      "access_token": "",
-      "phone_number_id": "",
-      "verify_token": "",
-      "default_recipient": "",
-      "api_version": "v20.0",
-      "app_secret": ""
-    },
-    "signal": {
-      "enabled": false,
-      "base_url": "http://127.0.0.1:8080",
-      "number": "",
-      "default_recipient": "",
-      "poll_every_seconds": 3,
-      "bearer_token": ""
-    },
-    "routing": {
-      "mode": "per-chat",
-      "rules": null
-    },
-    "security": {
-      "dm_policy": "allow-list",
-      "group_policy": "mention-only",
-      "allow_from": null,
-      "pairing_enabled": false,
-      "pairing_ttl_hours": 72,
-      "mention_gate": true,
-      "risk_acknowledged": false,
-      "default_deny_dm": true
-    }
-  },
-  "plugins": {
-    "dir": "plugins",
-    "enabled": null,
-    "allow_exec": true,
-    "exec_timeout_seconds": 10,
-    "trusted_signers": [
-      "dev-local"
-    ],
-    "require_trust": true
-  },
   "sandbox": {
-    "enabled": true,
-    "execution_mode": "host-reviewed",
     "backend": "local",
     "base_dir": ".anyclaw/sandboxes",
+    "default_channel": "",
     "docker_image": "alpine:3.20",
     "docker_network": "none",
-    "reuse_per_scope": true,
-    "default_channel": ""
+    "enabled": true,
+    "execution_mode": "host-reviewed",
+    "reuse_per_scope": true
   },
   "security": {
     "api_token": "",
-    "public_paths": [
-      "/healthz"
-    ],
-    "protect_events": false,
-    "webhook_secret": "",
-    "trusted_cidrs": null,
-    "rate_limit_rpm": 120,
-    "users": null,
-    "roles": null,
     "audit_log": ".anyclaw/audit/audit.jsonl",
+    "command_timeout_seconds": 30,
     "dangerous_command_patterns": [
       "rm -rf",
       "del /f",
@@ -461,6 +503,7 @@
       "icacls",
       "git reset --hard"
     ],
+    "protect_events": false,
     "protected_paths": [
       "C:\\WINDOWS",
       "C:\\Windows",
@@ -477,97 +520,54 @@
       "C:\\Users\\Lenovo\\Music",
       "C:\\Users\\Lenovo\\NTUSER.DAT"
     ],
-    "command_timeout_seconds": 30,
-    "risk_acknowledged": true
-  },
-  "orchestrator": {
-    "enabled": true,
-    "max_concurrent_agents": 4,
-    "max_retries": 2,
-    "timeout_seconds": 300,
-    "enable_decomposition": true,
-    "agent_names": [
-      "Go编码专家",
-      "Python编码专家",
-      "健身教练",
-      "论文助手",
-      "数据分析师",
-      "翻译专家"
+    "public_paths": [
+      "/healthz"
     ],
-    "sub_agents": [
-      {
-        "name": "代码专家",
-        "description": "General coding specialist using GPT-4o.",
-        "personality": "Senior software engineer comfortable across multiple languages.",
-        "private_skills": [
-          "coder"
-        ],
-        "permission_level": "full",
-        "llm_provider": "openai",
-        "llm_model": "gpt-4o",
-        "llm_temperature": 0.3
-      },
-      {
-        "name": "创意写作",
-        "description": "Creative writing specialist using Claude.",
-        "personality": "Creative writer and content creator.",
-        "private_skills": [
-          "writer"
-        ],
-        "permission_level": "read-only",
-        "llm_provider": "anthropic",
-        "llm_model": "claude-sonnet-4-7",
-        "llm_temperature": 0.9
-      },
-      {
-        "name": "本地助手",
-        "description": "Assistant powered by a local Ollama model.",
-        "personality": "Privacy-conscious local AI assistant.",
-        "private_skills": [],
-        "permission_level": "limited",
-        "llm_provider": "ollama",
-        "llm_model": "llama3.2",
-        "llm_base_url": "http://localhost:11434",
-        "llm_temperature": 0.5
-      }
-    ]
+    "rate_limit_rpm": 120,
+    "risk_acknowledged": true,
+    "roles": null,
+    "trusted_cidrs": null,
+    "users": null,
+    "webhook_secret": ""
+  },
+  "skills": {
+    "auto_load": true,
+    "dir": "D:/anyclaw/anyclaw/anyclaw/anyclaw3/anyclaw/skills",
+    "exclude": null,
+    "include": null
   },
   "speech": {
     "stt": {
-      "enabled": false,
-      "auto_stt": false,
-      "provider": "",
-      "model": "",
       "api_key": "",
+      "append_transcript": false,
+      "auto_stt": false,
       "base_url": "",
-      "default_lang": "",
-      "max_duration_seconds": 0,
-      "min_confidence": 0,
-      "timeout_seconds": 0,
       "channels": null,
+      "default_lang": "",
+      "enabled": false,
       "exclude_channels": null,
       "fallback_to_voice": false,
-      "append_transcript": false,
+      "max_duration_seconds": 0,
+      "min_confidence": 0,
+      "model": "",
+      "provider": "",
+      "timeout_seconds": 0,
       "trigger_prefix": ""
     },
     "tts": {
-      "enabled": false,
-      "auto_tts": false,
-      "provider": "",
       "api_key": "",
+      "auto_tts": false,
       "base_url": "",
-      "voice": "",
-      "speed": 0,
-      "format": "",
-      "timeout_seconds": 0,
       "channels": null,
+      "enabled": false,
       "exclude_channels": null,
       "fallback_to_text": false,
-      "trigger_prefix": ""
+      "format": "",
+      "provider": "",
+      "speed": 0,
+      "timeout_seconds": 0,
+      "trigger_prefix": "",
+      "voice": ""
     }
-  },
-  "mcp": {
-    "enabled": false,
-    "servers": null
   }
 }

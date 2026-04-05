@@ -145,12 +145,25 @@ func (b *SystemPromptBuilder) buildCLIHub(data PromptData) string {
 		"## CLI Hub",
 		fmt.Sprintf("A local CLI-Anything catalog is available at: %s", data.CLIHub.Root),
 		fmt.Sprintf("- Catalog size: %d harness entries across %d categories.", data.CLIHub.EntriesCount, len(data.CLIHub.Categories)),
+		fmt.Sprintf("- Runnable harnesses visible from this runtime: %d.", data.CLIHub.RunnableCount),
 		fmt.Sprintf("- Installed harnesses visible from this runtime: %d.", data.CLIHub.InstalledCount),
 		"- When a task maps well to a known harness, prefer clihub_catalog to inspect options and clihub_exec to run the harness instead of composing raw shell manually.",
 		"- CLI-Anything harnesses are designed for agent use: structured commands, JSON output, stateful workflows, and real backend integration.",
 	}
+	if data.CLIHub.CapabilitiesCount > 0 {
+		lines = append(lines, fmt.Sprintf("- Auto-routable capabilities indexed: %d.", data.CLIHub.CapabilitiesCount))
+	}
+	if hasTool(data.Tools, "intent_route") {
+		lines = append(lines, "- For concrete software actions stated in natural language, prefer intent_route first so the agent can auto-pick the right harness and execute it directly.")
+	}
+	if hasTool(data.Tools, "intent_list_capabilities") {
+		lines = append(lines, "- If the intent is ambiguous, call intent_list_capabilities with the user's wording to inspect the best matching capabilities before falling back to clihub_exec.")
+	}
 	if len(data.CLIHub.Categories) > 0 {
 		lines = append(lines, "- Strong categories in this catalog: "+strings.Join(data.CLIHub.Categories, ", ")+".")
+	}
+	if len(data.CLIHub.Runnable) > 0 {
+		lines = append(lines, "- Harnesses ready right now (installed or local source): "+strings.Join(data.CLIHub.Runnable, ", ")+".")
 	}
 	if len(data.CLIHub.Installed) > 0 {
 		lines = append(lines, "- Installed harnesses ready right now: "+strings.Join(data.CLIHub.Installed, ", ")+".")
@@ -158,6 +171,9 @@ func (b *SystemPromptBuilder) buildCLIHub(data PromptData) string {
 	if len(data.CLIHub.SkillCommands) > 0 {
 		lines = append(lines, "- Available direct skill commands: "+strings.Join(data.CLIHub.SkillCommands, ", ")+".")
 		lines = append(lines, "- Use these direct skill tools instead of clihub_exec when available.")
+	}
+	if len(data.CLIHub.IntentExamples) > 0 {
+		lines = append(lines, "- Example routed capabilities from this catalog: "+strings.Join(data.CLIHub.IntentExamples, ", ")+".")
 	}
 
 	return strings.Join(lines, "\n")
@@ -396,12 +412,16 @@ type ToolInfo struct {
 }
 
 type CLIHubInfo struct {
-	Root           string
-	EntriesCount   int
-	InstalledCount int
-	Categories     []string
-	Installed      []string
-	SkillCommands  []string
+	Root              string
+	EntriesCount      int
+	RunnableCount     int
+	InstalledCount    int
+	CapabilitiesCount int
+	Categories        []string
+	Runnable          []string
+	Installed         []string
+	SkillCommands     []string
+	IntentExamples    []string
 }
 
 type ClawBridgeInfo struct {

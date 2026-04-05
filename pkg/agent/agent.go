@@ -121,23 +121,11 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	}
 	defer a.releaseContextExecution(exec)
 
-	if a.intentPreprocessor != nil {
-		result := a.intentPreprocessor.Preprocess(userInput, nil)
-		if result != nil && result.Handled && result.Confidence >= 0.15 {
-			execResult, err := a.intentPreprocessor.Execute(result, nil)
-			if err != nil {
-				a.appendHistoryMessage(ctx, "user", userInput)
-				a.appendHistoryMessage(ctx, "assistant", fmt.Sprintf("[Auto-Intent Failed] %v", err))
-			} else {
-				a.appendHistoryMessage(ctx, "user", userInput)
-				a.appendHistoryMessage(ctx, "assistant", execResult)
-			}
-			return execResult, err
-		}
-	}
-
 	if bootstrapResult, handled, err := a.handleBootstrapRitual(ctx, userInput); handled {
 		return bootstrapResult, err
+	}
+	if execResult, handled, err := a.tryAutoRouteCLIHubIntent(ctx, userInput); handled {
+		return execResult, err
 	}
 	selectedTools := a.selectToolInfos(userInput)
 	a.appendHistoryMessage(ctx, "user", userInput)
@@ -175,6 +163,25 @@ func (a *Agent) RunStream(ctx context.Context, userInput string, onChunk func(st
 		return err
 	}
 	defer a.releaseContextExecution(exec)
+
+	if bootstrapResult, handled, err := a.handleBootstrapRitual(ctx, userInput); handled {
+		if err != nil {
+			return err
+		}
+		if onChunk != nil {
+			onChunk(bootstrapResult)
+		}
+		return nil
+	}
+	if execResult, handled, err := a.tryAutoRouteCLIHubIntent(ctx, userInput); handled {
+		if err != nil {
+			return err
+		}
+		if onChunk != nil {
+			onChunk(execResult)
+		}
+		return nil
+	}
 
 	selectedTools := a.selectToolInfos(userInput)
 	a.appendHistoryMessage(ctx, "user", userInput)
@@ -516,10 +523,16 @@ func (a *Agent) buildSystemPromptForToolInfos(toolList []tools.ToolInfo) (string
 			cliHubInfo = &prompt.CLIHubInfo{
 				Root:           summary.Root,
 				EntriesCount:   summary.EntriesCount,
+				RunnableCount:  summary.RunnableCount,
 				InstalledCount: summary.InstalledCount,
 				Categories:     categoryNames(summary.Categories, 6),
+				Runnable:       cliHubEntryNames(summary.Runnable, 8),
 				Installed:      cliHubEntryNames(summary.Installed, 6),
 				SkillCommands:  skillCommands,
+			}
+			if reg, err := clihub.LoadCapabilityRegistry(summary.Root); err == nil {
+				cliHubInfo.CapabilitiesCount = reg.Count()
+				cliHubInfo.IntentExamples = cliHubCapabilityExamples(reg.All(), 6)
 			}
 		}
 	}
@@ -646,7 +659,7 @@ func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
 	}
 
 	query := normalizeToolSelectionText(userInput)
-	if !shouldExposeToolsForInput(query, allTools) {
+	if !shouldExposeToolsForInput(query, allTools) && !a.shouldExposeCLIHubIntentTools(userInput) {
 		return nil
 	}
 
@@ -689,6 +702,44 @@ func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
 	return selected
 }
 
+func (a *Agent) shouldExposeCLIHubIntentTools(userInput string) bool {
+	if a.intentPreprocessor == nil {
+		return false
+	}
+	result := a.intentPreprocessor.Preprocess(userInput, nil)
+	return result != nil && result.Handled && result.Capability != nil && result.Confidence >= intentCapabilityThreshold
+}
+
+func (a *Agent) tryAutoRouteCLIHubIntent(ctx context.Context, userInput string) (string, bool, error) {
+	if a.intentPreprocessor == nil || a.tools == nil {
+		return "", false, nil
+	}
+	if _, ok := a.tools.Get("intent_route"); !ok {
+		return "", false, nil
+	}
+
+	result := a.intentPreprocessor.Preprocess(userInput, nil)
+	if result == nil || !result.Handled || result.Capability == nil || result.Confidence < intentAutoExecuteThreshold {
+		return "", false, nil
+	}
+
+	args := map[string]any{
+		"intent": strings.TrimSpace(userInput),
+		"json":   true,
+	}
+	execResult, err := a.tools.Call(ctx, "intent_route", args)
+	if err != nil {
+		a.recordToolActivity(ToolActivity{ToolName: "intent_route", Args: args, Error: err.Error()})
+		return "", false, nil
+	}
+
+	a.recordToolActivity(ToolActivity{ToolName: "intent_route", Args: args, Result: execResult})
+	a.appendHistoryMessage(ctx, "user", userInput)
+	a.appendHistoryMessage(ctx, "assistant", execResult)
+	a.recordConversation(userInput, execResult)
+	return execResult, true, nil
+}
+
 func shouldExposeToolsForInput(query string, toolList []tools.ToolInfo) bool {
 	if strings.TrimSpace(query) == "" {
 		return false
@@ -703,6 +754,9 @@ func shouldExposeToolsForInput(query string, toolList []tools.ToolInfo) bool {
 		return true
 	}
 	if containsCJKActionIntent(query) {
+		return true
+	}
+	if containsNaturalActionIntent(query) {
 		return true
 	}
 
@@ -749,6 +803,23 @@ func containsCJKActionIntent(query string) bool {
 		}
 	}
 
+	return false
+}
+
+func containsNaturalActionIntent(query string) bool {
+	if strings.TrimSpace(query) == "" {
+		return false
+	}
+
+	keywords := []string{
+		"export", "render", "timeline", "project", "model", "spreadsheet", "presentation",
+		"导出", "渲染", "时间线", "项目", "模型", "表格", "演示文稿", "视频", "音频",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(query, keyword) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -894,6 +965,21 @@ func cliHubEntryNames(items []clihub.EntryStatus, limit int) []string {
 		names = append(names, item.Name)
 	}
 	return names
+}
+
+func cliHubCapabilityExamples(items []clihub.Capability, limit int) []string {
+	if limit > 0 && limit < len(items) {
+		items = items[:limit]
+	}
+	examples := make([]string, 0, len(items))
+	for _, item := range items {
+		parts := compactStrings(item.Harness, item.Group, item.Command)
+		if len(parts) == 0 {
+			continue
+		}
+		examples = append(examples, strings.Join(parts, " "))
+	}
+	return examples
 }
 
 func firstNonEmpty(values ...string) string {

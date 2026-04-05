@@ -47,6 +47,9 @@ func TestSearchAndFindIncludeSourceAndSkillPaths(t *testing.T) {
 	if results[0].SourcePath == "" || results[0].SkillPath == "" || results[0].DevModule == "" {
 		t.Fatalf("expected local source metadata, got %#v", results[0])
 	}
+	if !results[0].Runnable || StatusLabel(results[0]) != "source" {
+		t.Fatalf("expected shotcut to be runnable from source, got %#v", results[0])
+	}
 
 	entry, ok := Find(cat, "shotcut")
 	if !ok || entry.Name != "shotcut" {
@@ -70,6 +73,28 @@ func TestSummaryForCountsCategories(t *testing.T) {
 	}
 	if len(summary.Categories) == 0 || summary.Categories[0].Name != "office" {
 		t.Fatalf("unexpected categories: %#v", summary.Categories)
+	}
+	if summary.RunnableCount != 1 || len(summary.Runnable) != 1 || summary.Runnable[0].Name != "shotcut" {
+		t.Fatalf("unexpected runnable summary: %#v", summary)
+	}
+	if summary.InstalledCount != 0 {
+		t.Fatalf("expected no installed entries in fixture, got %#v", summary)
+	}
+}
+
+func TestDevModuleFallsBackToCLIFile(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "shotcut", "agent-harness")
+	moduleDir := filepath.Join(source, "cli_anything", "shotcut")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "shotcut_cli.py"), []byte("print('ok')"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	got := devModule(source)
+	if got != "cli_anything.shotcut.shotcut_cli" {
+		t.Fatalf("devModule = %q, want %q", got, "cli_anything.shotcut.shotcut_cli")
 	}
 }
 

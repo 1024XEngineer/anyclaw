@@ -50,6 +50,8 @@ type Catalog struct {
 type EntryStatus struct {
 	Entry
 	Installed      bool   `json:"installed"`
+	Runnable       bool   `json:"runnable"`
+	RunMode        string `json:"run_mode,omitempty"`
 	ExecutablePath string `json:"executable_path,omitempty"`
 	SourcePath     string `json:"source_path,omitempty"`
 	DevModule      string `json:"dev_module,omitempty"`
@@ -61,6 +63,8 @@ type Summary struct {
 	Updated        string        `json:"updated"`
 	EntriesCount   int           `json:"entries_count"`
 	Categories     []CategoryHit `json:"categories"`
+	RunnableCount  int           `json:"runnable_count"`
+	Runnable       []EntryStatus `json:"runnable,omitempty"`
 	InstalledCount int           `json:"installed_count"`
 	Installed      []EntryStatus `json:"installed,omitempty"`
 }
@@ -138,12 +142,15 @@ func SummaryFor(cat *Catalog, limit int) Summary {
 	if cat == nil {
 		return Summary{}
 	}
+	runnable := Runnable(cat)
 	installed := Installed(cat)
 	return Summary{
 		Root:           cat.Root,
 		Updated:        cat.Updated,
 		EntriesCount:   len(cat.Entries),
 		Categories:     categoryCounts(cat.Entries),
+		RunnableCount:  len(runnable),
+		Runnable:       limitStatuses(runnable, limit),
 		InstalledCount: len(installed),
 		Installed:      limitStatuses(installed, limit),
 	}
@@ -171,6 +178,9 @@ func Search(cat *Catalog, query string, category string, installedOnly bool, lim
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].Installed != matches[j].Installed {
 			return matches[i].Installed
+		}
+		if matches[i].Runnable != matches[j].Runnable {
+			return matches[i].Runnable
 		}
 		return strings.ToLower(matches[i].Name) < strings.ToLower(matches[j].Name)
 	})
@@ -207,6 +217,37 @@ func Installed(cat *Catalog) []EntryStatus {
 	return out
 }
 
+func Runnable(cat *Catalog) []EntryStatus {
+	if cat == nil {
+		return nil
+	}
+	items := statusList(cat)
+	out := make([]EntryStatus, 0, len(items))
+	for _, item := range items {
+		if item.Runnable {
+			out = append(out, item)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Installed != out[j].Installed {
+			return out[i].Installed
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
+}
+
+func StatusLabel(item EntryStatus) string {
+	switch {
+	case item.Installed:
+		return "installed"
+	case item.Runnable:
+		return "source"
+	default:
+		return "catalog"
+	}
+}
+
 func HumanSummary(cat *Catalog) string {
 	summary := SummaryFor(cat, 6)
 	if summary.EntriesCount == 0 {
@@ -216,6 +257,7 @@ func HumanSummary(cat *Catalog) string {
 		fmt.Sprintf("CLI Hub root: %s", summary.Root),
 		fmt.Sprintf("catalog updated: %s", firstNonEmpty(summary.Updated, "unknown")),
 		fmt.Sprintf("catalog entries: %d", summary.EntriesCount),
+		fmt.Sprintf("runnable harnesses: %d", summary.RunnableCount),
 		fmt.Sprintf("installed harnesses: %d", summary.InstalledCount),
 	}
 	if len(summary.Categories) > 0 {
@@ -227,6 +269,17 @@ func HumanSummary(cat *Catalog) string {
 			names = append(names, item.Name)
 		}
 		lines = append(lines, "installed tools: "+strings.Join(names, ", "))
+	}
+	if len(summary.Runnable) > 0 {
+		names := make([]string, 0, len(summary.Runnable))
+		for _, item := range summary.Runnable {
+			label := item.Name
+			if !item.Installed {
+				label += " (source)"
+			}
+			names = append(names, label)
+		}
+		lines = append(lines, "runnable tools: "+strings.Join(names, ", "))
 	}
 	lines = append(lines, "native use: search the catalog first, then prefer clihub_exec over raw shell when a matching harness exists.")
 	return strings.Join(lines, "\n")
@@ -244,6 +297,8 @@ func statusForEntry(root string, entry Entry) EntryStatus {
 	status := EntryStatus{Entry: entry}
 	if path, err := exec.LookPath(strings.TrimSpace(entry.EntryPoint)); err == nil {
 		status.Installed = true
+		status.Runnable = true
+		status.RunMode = "installed"
 		status.ExecutablePath = path
 	}
 	if source := sourcePath(root, entry); source != "" {
@@ -254,6 +309,10 @@ func statusForEntry(root string, entry Entry) EntryStatus {
 	}
 	if module := devModule(status.SourcePath); module != "" {
 		status.DevModule = module
+	}
+	if !status.Runnable && status.SourcePath != "" && status.DevModule != "" {
+		status.Runnable = true
+		status.RunMode = "source"
 	}
 	return status
 }
@@ -295,9 +354,16 @@ func devModule(source string) string {
 		if !entry.IsDir() {
 			continue
 		}
-		mainFile := filepath.Join(base, entry.Name(), "__main__.py")
-		if _, err := os.Stat(mainFile); err == nil {
-			return "cli_anything." + entry.Name()
+		moduleBase := "cli_anything." + entry.Name()
+		if _, err := os.Stat(filepath.Join(base, entry.Name(), "__main__.py")); err == nil {
+			return moduleBase
+		}
+		if _, err := os.Stat(filepath.Join(base, entry.Name(), entry.Name()+"_cli.py")); err == nil {
+			return moduleBase + "." + entry.Name() + "_cli"
+		}
+		if matches, err := filepath.Glob(filepath.Join(base, entry.Name(), "*_cli.py")); err == nil && len(matches) > 0 {
+			name := strings.TrimSuffix(filepath.Base(matches[0]), ".py")
+			return moduleBase + "." + name
 		}
 	}
 	return ""

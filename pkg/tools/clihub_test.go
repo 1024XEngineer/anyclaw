@@ -59,7 +59,7 @@ func TestBuildCLIHubCommandInjectsJSONAndUsesDevModuleFallback(t *testing.T) {
 	if shellName == "" {
 		t.Fatalf("expected shell name to be set")
 	}
-	if !strings.Contains(command, "--json") || !strings.Contains(command, "cli_anything.shotcut") || !strings.Contains(command, "python") {
+	if !strings.Contains(command, "--json") || !strings.Contains(command, "cli_anything.shotcut") || !(strings.Contains(command, "python") || strings.Contains(command, "py")) {
 		t.Fatalf("unexpected command: %s", command)
 	}
 }

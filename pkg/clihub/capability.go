@@ -383,7 +383,11 @@ func LoadCapabilityRegistryFromFile(path string) ([]Capability, error) {
 
 func ResolveCapabilityPath(root string, capability Capability) ([]string, string, error) {
 	if capability.DevModule != "" && capability.SourcePath != "" {
-		return []string{"python", "-m", capability.DevModule}, capability.SourcePath, nil
+		args, err := pythonModuleArgs(capability.DevModule)
+		if err != nil {
+			return nil, "", err
+		}
+		return args, capability.SourcePath, nil
 	}
 	return nil, "", fmt.Errorf("capability %s/%s not runnable", capability.Harness, capability.Command)
 }

@@ -72,6 +72,10 @@ anyclaw status --all
 anyclaw health --verbose
 anyclaw channels status
 anyclaw models status
+anyclaw clihub list
+anyclaw clihub capabilities shotcut
+anyclaw clihub install shotcut
+anyclaw clihub exec libreoffice -- document new -o report.json --type writer
 anyclaw apps list
 anyclaw cron list
 anyclaw skill list

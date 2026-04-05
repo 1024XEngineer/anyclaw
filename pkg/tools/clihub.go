@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 
 	"github.com/anyclaw/anyclaw/pkg/clihub"
@@ -140,108 +137,55 @@ func RegisterCLIHubTools(r *Registry, opts BuiltinOptions) {
 }
 
 func buildCLIHubCommand(status clihub.EntryStatus, args []string, jsonMode bool, requestedCwd string, opts BuiltinOptions, execOpts CLIHubExecOptions) (string, string, string, error) {
-	baseArgs, cwd, err := resolveCLIHubInvocation(status, requestedCwd, execOpts)
+	resolved, err := clihub.ResolveCommand(status, args, clihub.ExecOptions{
+		JSON:              jsonMode,
+		AutoInstall:       execOpts.AutoInstall,
+		PreferLocalSrc:    execOpts.PreferLocalSrc,
+		RetryAfterInstall: execOpts.RetryAfterInstall,
+		RequestedCwd:      requestedCwd,
+	})
 	if err != nil {
 		return "", "", "", err
 	}
 
-	if jsonMode && shouldInjectCLIHubJSON(args) {
-		args = append([]string{"--json"}, args...)
-	}
-	fullArgs := append(baseArgs, args...)
-	shellName := defaultCLIHubShell()
-	command := joinArgsForShell(fullArgs, shellName)
-	if err := reviewCommandExecution(command, cwd, opts); err != nil {
+	command := resolved.ShellCommand()
+	if err := reviewCommandExecution(command, resolved.Cwd, opts); err != nil {
 		return "", "", "", err
 	}
-	return command, cwd, shellName, nil
+	return command, resolved.Cwd, resolved.Shell, nil
 }
 
 func resolveCLIHubInvocation(status clihub.EntryStatus, requestedCwd string, execOpts CLIHubExecOptions) ([]string, string, error) {
-	if status.Installed && strings.TrimSpace(status.ExecutablePath) != "" {
-		cwd := strings.TrimSpace(requestedCwd)
-		return []string{status.ExecutablePath}, cwd, nil
-	}
-
-	hasLocalSrc := strings.TrimSpace(status.DevModule) != "" && strings.TrimSpace(status.SourcePath) != ""
-
-	if hasLocalSrc && (execOpts.PreferLocalSrc || !status.Installed) {
-		return []string{"python", "-m", status.DevModule}, status.SourcePath, nil
-	}
-
-	if !status.Installed && execOpts.AutoInstall && strings.TrimSpace(status.InstallCmd) != "" {
-		err := runCLIHubInstall(status.InstallCmd, status.Name)
-		if err != nil {
-			if execOpts.RetryAfterInstall && hasLocalSrc {
-				return []string{"python", "-m", status.DevModule}, status.SourcePath, nil
-			}
-			return nil, "", fmt.Errorf("auto-install failed for %s: %w", status.Name, err)
-		}
-
-		if path, err := exec.LookPath(strings.TrimSpace(status.EntryPoint)); err == nil {
-			cwd := strings.TrimSpace(requestedCwd)
-			return []string{path}, cwd, nil
-		}
-
-		if hasLocalSrc {
-			return []string{"python", "-m", status.DevModule}, status.SourcePath, nil
-		}
-
-		return nil, "", fmt.Errorf("auto-install succeeded but %s not found in PATH", status.EntryPoint)
-	}
-
-	if hasLocalSrc {
-		return []string{"python", "-m", status.DevModule}, status.SourcePath, nil
-	}
-
-	if strings.TrimSpace(status.InstallCmd) != "" {
-		return nil, "", fmt.Errorf("CLI Hub entry %s is not runnable yet; install it first: %s", status.Name, status.InstallCmd)
-	}
-	return nil, "", fmt.Errorf("CLI Hub entry %s is not runnable yet", status.Name)
+	return clihub.ResolveInvocation(status, requestedCwd, clihub.ExecOptions{
+		AutoInstall:       execOpts.AutoInstall,
+		PreferLocalSrc:    execOpts.PreferLocalSrc,
+		RetryAfterInstall: execOpts.RetryAfterInstall,
+	})
 }
 
 func runCLIHubInstall(installCmd string, name string) error {
-	cmd := exec.Command("sh", "-c", installCmd)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("install command failed: %w", err)
-	}
-	return nil
+	return clihub.RunInstall(clihub.EntryStatus{
+		Entry: clihub.Entry{
+			Name:       name,
+			InstallCmd: installCmd,
+		},
+	})
 }
 
 func shouldInjectCLIHubJSON(args []string) bool {
-	for _, arg := range args {
-		trimmed := strings.TrimSpace(strings.ToLower(arg))
-		if trimmed == "--json" || trimmed == "--help" || trimmed == "-h" || trimmed == "--version" {
-			return false
-		}
-	}
-	return true
+	return clihub.ShouldInjectJSON(args)
 }
 
 func defaultCLIHubShell() string {
-	if runtime.GOOS == "windows" {
-		return "powershell"
-	}
-	return "sh"
+	return clihub.DefaultShell()
 }
 
 func joinArgsForShell(args []string, shellName string) string {
-	quoted := make([]string, 0, len(args))
-	for _, arg := range args {
-		quoted = append(quoted, quoteArgForShell(arg, shellName))
-	}
-	return strings.Join(quoted, " ")
+	return clihub.JoinArgsForShell(args, shellName)
 }
 
 func quoteArgForShell(value string, shellName string) string {
-	switch strings.ToLower(strings.TrimSpace(shellName)) {
-	case "powershell", "pwsh":
-		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
-	default:
-		return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
-	}
+	return clihub.QuoteArgForShell(value, shellName)
 }
 
 func stringSliceFromAny(value any) ([]string, error) {

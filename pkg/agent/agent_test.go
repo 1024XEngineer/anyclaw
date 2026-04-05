@@ -294,6 +294,33 @@ func TestSelectToolInfosHandlesChineseDesktopRequest(t *testing.T) {
 	}
 }
 
+func TestSelectToolInfosExposesCLIHubIntentToolsForNaturalLanguage(t *testing.T) {
+	hubRoot := filepath.Join(t.TempDir(), "CLI-Anything-0.2.0")
+	if err := writeCLIHubFixture(hubRoot); err != nil {
+		t.Fatalf("writeCLIHubFixture: %v", err)
+	}
+
+	registry := tools.NewRegistry()
+	registry.RegisterTool("intent_route", "Auto-route a CLI Hub request", map[string]any{}, nil)
+	registry.RegisterTool("intent_list_capabilities", "List matching CLI Hub capabilities", map[string]any{}, nil)
+	registry.RegisterTool("clihub_exec", "Execute a CLI Hub harness", map[string]any{}, nil)
+
+	ag := New(Config{
+		Tools:      registry,
+		CLIHubRoot: hubRoot,
+	})
+
+	selected := ag.selectToolInfos("帮我用 shotcut 新建一个项目")
+	names := make([]string, 0, len(selected))
+	for _, tool := range selected {
+		names = append(names, tool.Name)
+	}
+	got := strings.Join(names, ",")
+	if !strings.Contains(got, "intent_route") || !strings.Contains(got, "intent_list_capabilities") || !strings.Contains(got, "clihub_exec") {
+		t.Fatalf("expected CLI Hub intent tools to be exposed, got %q", got)
+	}
+}
+
 func TestBuildSystemPromptInjectsWorkspaceBootstrapFiles(t *testing.T) {
 	mem := memory.NewFileMemory(t.TempDir())
 	if err := mem.Init(); err != nil {
@@ -377,6 +404,43 @@ func TestBuildSystemPromptInjectsCLIHubContext(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptHighlightsIntentRoutingWhenAvailable(t *testing.T) {
+	hubRoot := filepath.Join(t.TempDir(), "CLI-Anything-0.2.0")
+	if err := writeCLIHubFixture(hubRoot); err != nil {
+		t.Fatalf("writeCLIHubFixture: %v", err)
+	}
+	t.Setenv("ANYCLAW_CLI_ANYTHING_ROOT", hubRoot)
+
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+	registry := tools.NewRegistry()
+	registry.RegisterTool("intent_route", "Route a natural-language request", map[string]any{}, nil)
+	registry.RegisterTool("intent_list_capabilities", "List matching capabilities", map[string]any{}, nil)
+	registry.RegisterTool("clihub_exec", "Execute local CLI Hub entries", map[string]any{}, nil)
+
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		Memory:      mem,
+		Skills:      skills.NewSkillsManager(""),
+		Tools:       registry,
+		WorkingDir:  filepath.Join(t.TempDir(), "workspace"),
+	})
+
+	systemPrompt, err := ag.buildSystemPrompt()
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if !strings.Contains(systemPrompt, "prefer intent_route first") {
+		t.Fatalf("expected intent_route guidance in prompt, got %q", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "intent_list_capabilities") {
+		t.Fatalf("expected intent_list_capabilities guidance in prompt, got %q", systemPrompt)
+	}
+}
+
 func TestBuildSystemPromptInjectsClawBridgeContext(t *testing.T) {
 	bridgeRoot := filepath.Join(t.TempDir(), "claw-code-main")
 	if err := writeAgentBridgeFixture(bridgeRoot); err != nil {
@@ -418,6 +482,103 @@ func TestBuildSystemPromptInjectsClawBridgeContext(t *testing.T) {
 	}
 	if !strings.Contains(systemPrompt, "agents (2)") || !strings.Contains(systemPrompt, "AgentTool (2)") {
 		t.Fatalf("expected command and tool family summaries in prompt, got %q", systemPrompt)
+	}
+}
+
+func TestAgentRunAutoRoutesCLIHubIntentBeforeLLM(t *testing.T) {
+	hubRoot := filepath.Join(t.TempDir(), "CLI-Anything-0.2.0")
+	if err := writeCLIHubFixture(hubRoot); err != nil {
+		t.Fatalf("writeCLIHubFixture: %v", err)
+	}
+
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+
+	llmStub := &stubAgentLLM{responses: []*llm.Response{{Content: "llm fallback"}}}
+	registry := tools.NewRegistry()
+	var called bool
+	var captured map[string]any
+	registry.RegisterTool("intent_route", "Route a natural-language request", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		called = true
+		captured = input
+		return `{"status":"ok","command":"shotcut render"}`, nil
+	})
+
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		LLM:         llmStub,
+		Memory:      mem,
+		Skills:      skills.NewSkillsManager(""),
+		Tools:       registry,
+		CLIHubRoot:  hubRoot,
+	})
+
+	query := "export the current shotcut project"
+	result, err := ag.Run(context.Background(), query)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result != `{"status":"ok","command":"shotcut render"}` {
+		t.Fatalf("unexpected result: %q", result)
+	}
+	if !called {
+		t.Fatal("expected intent_route to be called")
+	}
+	if captured["intent"] != query || captured["json"] != true {
+		t.Fatalf("unexpected intent_route input: %#v", captured)
+	}
+	if len(llmStub.messages) != 0 {
+		t.Fatalf("expected llm to be skipped, got %d calls", len(llmStub.messages))
+	}
+	activities := ag.GetLastToolActivities()
+	if len(activities) != 1 || activities[0].ToolName != "intent_route" {
+		t.Fatalf("expected intent_route activity, got %#v", activities)
+	}
+}
+
+func TestAgentRunFallsBackToLLMWhenAutoRouteFails(t *testing.T) {
+	hubRoot := filepath.Join(t.TempDir(), "CLI-Anything-0.2.0")
+	if err := writeCLIHubFixture(hubRoot); err != nil {
+		t.Fatalf("writeCLIHubFixture: %v", err)
+	}
+
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+
+	llmStub := &stubAgentLLM{responses: []*llm.Response{{Content: "fallback after route failure"}}}
+	registry := tools.NewRegistry()
+	registry.RegisterTool("intent_route", "Route a natural-language request", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		return "", fmt.Errorf("boom")
+	})
+
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		LLM:         llmStub,
+		Memory:      mem,
+		Skills:      skills.NewSkillsManager(""),
+		Tools:       registry,
+		CLIHubRoot:  hubRoot,
+	})
+
+	result, err := ag.Run(context.Background(), "export the current shotcut project")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result != "fallback after route failure" {
+		t.Fatalf("unexpected result: %q", result)
+	}
+	if len(llmStub.messages) != 1 {
+		t.Fatalf("expected llm fallback after route failure, got %d calls", len(llmStub.messages))
+	}
+	activities := ag.GetLastToolActivities()
+	if len(activities) == 0 || activities[0].ToolName != "intent_route" || activities[0].Error == "" {
+		t.Fatalf("expected failed intent_route activity, got %#v", activities)
 	}
 }
 
@@ -577,10 +738,30 @@ func writeAgentJSON(path string, value any) error {
 }
 
 func writeCLIHubFixture(root string) error {
-	if err := os.MkdirAll(filepath.Join(root, "shotcut", "agent-harness", "cli_anything", "shotcut"), 0o755); err != nil {
+	shotcutRoot := filepath.Join(root, "shotcut", "agent-harness", "cli_anything", "shotcut")
+	if err := os.MkdirAll(filepath.Join(shotcutRoot, "skills"), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(root, "shotcut", "agent-harness", "cli_anything", "shotcut", "__main__.py"), []byte("print('ok')"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(shotcutRoot, "__main__.py"), []byte("print('ok')"), 0o644); err != nil {
+		return err
+	}
+	skill := `---
+name: Shotcut CLI
+description: Video editing harness
+---
+
+## Project Group
+| Command | Description |
+| --- | --- |
+| new | Create a new project |
+| info | Show current project info |
+
+## Export Group
+| Command | Description |
+| --- | --- |
+| render | Export the current project |
+`
+	if err := os.WriteFile(filepath.Join(shotcutRoot, "skills", "SKILL.md"), []byte(skill), 0o644); err != nil {
 		return err
 	}
 	payload := map[string]any{
@@ -592,7 +773,7 @@ func writeCLIHubFixture(root string) error {
 		"clis": []map[string]any{
 			{"name": "libreoffice", "display_name": "LibreOffice", "description": "Office suite", "category": "office", "entry_point": "cli-anything-libreoffice"},
 			{"name": "zotero", "display_name": "Zotero", "description": "References", "category": "office", "entry_point": "cli-anything-zotero"},
-			{"name": "shotcut", "display_name": "Shotcut", "description": "Video editing", "category": "video", "entry_point": "cli-anything-shotcut"},
+			{"name": "shotcut", "display_name": "Shotcut", "description": "Video editing", "category": "video", "entry_point": "cli-anything-shotcut", "skill_md": "shotcut/agent-harness/cli_anything/shotcut/skills/SKILL.md"},
 		},
 	}
 	return writeAgentJSON(filepath.Join(root, "registry.json"), payload)

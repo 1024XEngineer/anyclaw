@@ -154,6 +154,9 @@ func parseCommandTables(content string, skill *Skill) error {
 					cmdName = strings.ReplaceAll(cmdName, "`", "")
 					desc := strings.TrimSpace(match[2])
 					desc = strings.ReplaceAll(desc, "`", "")
+					if isMarkdownSeparatorRow(cmdName) || isMarkdownSeparatorRow(desc) {
+						continue
+					}
 					if cmdName != "Command" && cmdName != "" {
 						skill.Commands = append(skill.Commands, Command{
 							Name:        cmdName,
@@ -167,6 +170,21 @@ func parseCommandTables(content string, skill *Skill) error {
 	}
 
 	return nil
+}
+
+func isMarkdownSeparatorRow(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		switch r {
+		case '-', ':', '|', ' ':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func LoadSkillsForCatalog(cat *Catalog) map[string]*Skill {
