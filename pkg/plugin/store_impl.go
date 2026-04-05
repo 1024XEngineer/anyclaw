@@ -547,6 +547,113 @@ func (s *Store) Uninstall(id string) (*UninstallResult, error) {
 	return result, nil
 }
 
+type RollbackResult struct {
+	PluginID    string `json:"plugin_id"`
+	FromVersion string `json:"from_version"`
+	ToVersion   string `json:"to_version"`
+}
+
+func (s *Store) Rollback(ctx context.Context, id, targetVersion string) (*RollbackResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pluginPath := filepath.Join(s.pluginDir, id)
+	currentManifest, err := s.loadManifest(pluginPath)
+	if err != nil {
+		return nil, fmt.Errorf("plugin not installed: %s", id)
+	}
+
+	history := s.loadInstallHistory()
+	var targetRecord *InstallRecord
+	var targetSource PluginSource
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].PluginID == id && history[i].Version == targetVersion {
+			targetRecord = &history[i]
+			for _, src := range s.sources {
+				if src.Name == history[i].Source {
+					targetSource = src
+					break
+				}
+			}
+			break
+		}
+	}
+
+	if targetRecord == nil {
+		return nil, fmt.Errorf("version %s not found in install history for plugin %s", targetVersion, id)
+	}
+
+	if targetVersion == currentManifest.Version {
+		return nil, fmt.Errorf("already at version %s", targetVersion)
+	}
+
+	backupPath := pluginPath + ".rollback-backup"
+	if err := copyDirRecursive(pluginPath, backupPath); err != nil {
+		return nil, fmt.Errorf("backup current version failed: %w", err)
+	}
+
+	if targetSource.URL != "" && targetRecord.Checksum != "" {
+		listing := &PluginListing{
+			PluginID: id,
+			Version:  targetVersion,
+			SHA256:   targetRecord.Checksum,
+		}
+		if err := s.downloadAndExtract(ctx, targetSource, listing, targetVersion); err != nil {
+			os.RemoveAll(pluginPath)
+			copyDirRecursive(backupPath, pluginPath)
+			os.RemoveAll(backupPath)
+			return nil, fmt.Errorf("rollback download failed: %w", err)
+		}
+	} else {
+		prevPath := filepath.Join(s.cacheDir, id, targetVersion)
+		if _, err := os.Stat(prevPath); err == nil {
+			os.RemoveAll(pluginPath)
+			if err := copyDirRecursive(prevPath, pluginPath); err != nil {
+				os.RemoveAll(pluginPath)
+				copyDirRecursive(backupPath, pluginPath)
+				os.RemoveAll(backupPath)
+				return nil, fmt.Errorf("restore from cache failed: %w", err)
+			}
+		} else {
+			os.RemoveAll(pluginPath)
+			copyDirRecursive(backupPath, pluginPath)
+			os.RemoveAll(backupPath)
+			return nil, fmt.Errorf("version %s not available offline, re-download source not configured", targetVersion)
+		}
+	}
+
+	os.RemoveAll(backupPath)
+
+	record := InstallRecord{
+		PluginID:    id,
+		Version:     targetVersion,
+		InstalledAt: time.Now().UTC(),
+		Source:      targetSource.Name,
+		Checksum:    targetRecord.Checksum,
+	}
+	s.installHistory = append(s.installHistory, record)
+	s.saveInstallHistory()
+
+	return &RollbackResult{
+		PluginID:    id,
+		FromVersion: currentManifest.Version,
+		ToVersion:   targetVersion,
+	}, nil
+}
+
+func (s *Store) GetInstallHistory(id string) []InstallRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	history := s.loadInstallHistory()
+	var filtered []InstallRecord
+	for _, r := range history {
+		if r.PluginID == id {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
+}
+
 func (s *Store) ListInstalled() []InstallRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

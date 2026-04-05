@@ -301,6 +301,16 @@ header h1 span { color: var(--accent); }
   </div>
 </div>
 
+<div class="modal-overlay" id="rollbackModal">
+  <div class="modal">
+    <h2>Rollback Plugin</h2>
+    <div id="rollbackContent"></div>
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="closeRollbackModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = window.location.origin;
 let currentTab = 'browse';
@@ -382,6 +392,7 @@ async function loadInstalled() {
         </div>
         <div class="actions">
           <button class="btn btn-secondary" onclick="updatePlugin('${p.plugin_id}')">Update</button>
+          <button class="btn btn-secondary" onclick="showRollbackModal('${p.plugin_id}')">Rollback</button>
           <button class="btn btn-danger" onclick="uninstallPlugin('${p.plugin_id}')">Uninstall</button>
         </div>
       `;
@@ -520,6 +531,65 @@ function showToast(message, type) {
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 3000);
 }
+
+async function showRollbackModal(id) {
+  try {
+    const resp = await fetch(`${API}/market/plugins/${id}/history`);
+    const data = await resp.json();
+    if (data.error) {
+      showToast('Failed to load history: ' + data.error, 'error');
+      return;
+    }
+    const history = data.history || [];
+    if (history.length <= 1) {
+      showToast('No previous versions available for rollback', 'error');
+      return;
+    }
+    let html = `<p style="color:var(--text-dim);margin-bottom:16px;">Select a version to rollback to:</p>`;
+    const currentVersion = history[history.length - 1]?.version;
+    html += `<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">`;
+    for (let i = history.length - 2; i >= 0; i--) {
+      const h = history[i];
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--bg-input);border-radius:8px;">
+        <div>
+          <div style="font-weight:600;">v${h.version}</div>
+          <div style="font-size:12px;color:var(--text-dim);">Installed: ${new Date(h.installed_at).toLocaleString()}</div>
+        </div>
+        <button class="btn btn-secondary" onclick="rollbackPlugin('${id}', '${h.version}')">Rollback</button>
+      </div>`;
+    }
+    html += `</div>`;
+    document.getElementById('rollbackContent').innerHTML = html;
+    document.getElementById('rollbackModal').classList.add('active');
+  } catch (e) {
+    showToast('Failed to load history: ' + e.message, 'error');
+  }
+}
+
+function closeRollbackModal() {
+  document.getElementById('rollbackModal').classList.remove('active');
+}
+
+async function rollbackPlugin(id, version) {
+  showToast('Rolling back ' + id + ' to v' + version + '...', 'success');
+  try {
+    const resp = await fetch(`${API}/market/plugins/${id}/rollback?version=${version}`, { method: 'POST' });
+    const data = await resp.json();
+    if (data.error) {
+      showToast('Rollback failed: ' + data.error, 'error');
+    } else {
+      showToast('Rolled back ' + id + ' from v' + data.from_version + ' to v' + data.to_version, 'success');
+      closeRollbackModal();
+      loadInstalled();
+    }
+  } catch (e) {
+    showToast('Rollback failed: ' + e.message, 'error');
+  }
+}
+
+document.getElementById('rollbackModal').addEventListener('click', function(e) {
+  if (e.target === this) closeRollbackModal();
+});
 
 document.getElementById('pluginModal').addEventListener('click', function(e) {
   if (e.target === this) closeModal();

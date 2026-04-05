@@ -81,6 +81,16 @@ func (s *Server) RegisterPrompt(prompt ServerPrompt) {
 	s.prompts[prompt.Name] = prompt
 }
 
+func (s *Server) ListTools() []ServerTool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	tools := make([]ServerTool, 0, len(s.tools))
+	for _, t := range s.tools {
+		tools = append(tools, t)
+	}
+	return tools
+}
+
 func (s *Server) Run(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)

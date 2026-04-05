@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/llm"
@@ -15,6 +16,7 @@ type openAIChatRequest struct {
 	Model       string          `json:"model"`
 	Messages    []openAIMessage `json:"messages"`
 	Tools       []openAITool    `json:"tools,omitempty"`
+	ToolChoice  any             `json:"tool_choice,omitempty"`
 	Temperature *float64        `json:"temperature,omitempty"`
 	MaxTokens   *int            `json:"max_tokens,omitempty"`
 	Stream      bool            `json:"stream,omitempty"`
@@ -44,6 +46,7 @@ type openAIFunctionDef struct {
 type openAIToolCall struct {
 	ID       string             `json:"id"`
 	Type     string             `json:"type"`
+	Index    *int               `json:"index,omitempty"`
 	Function openAIFunctionCall `json:"function"`
 }
 
@@ -54,12 +57,13 @@ type openAIFunctionCall struct {
 
 // OpenAI-compatible chat completion response
 type openAIChatResponse struct {
-	ID      string         `json:"id"`
-	Object  string         `json:"object"`
-	Created int64          `json:"created"`
-	Model   string         `json:"model"`
-	Choices []openAIChoice `json:"choices"`
-	Usage   openAIUsage    `json:"usage"`
+	ID                string         `json:"id"`
+	Object            string         `json:"object"`
+	Created           int64          `json:"created"`
+	Model             string         `json:"model"`
+	Choices           []openAIChoice `json:"choices"`
+	Usage             openAIUsage    `json:"usage"`
+	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
 }
 
 type openAIChoice struct {
@@ -77,11 +81,12 @@ type openAIUsage struct {
 
 // OpenAI-compatible streaming chunk
 type openAIChunk struct {
-	ID      string         `json:"id"`
-	Object  string         `json:"object"`
-	Created int64          `json:"created"`
-	Model   string         `json:"model"`
-	Choices []openAIChoice `json:"choices"`
+	ID                string         `json:"id"`
+	Object            string         `json:"object"`
+	Created           int64          `json:"created"`
+	Model             string         `json:"model"`
+	Choices           []openAIChoice `json:"choices"`
+	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
 }
 
 // handleOpenAIChatCompletions implements /v1/chat/completions
@@ -205,12 +210,15 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, targ
 	})
 
 	// Stream content
+	var fullContent strings.Builder
+
 	err := targetApp.LLM.StreamChat(ctx, messages, toolDefs, func(chunk string) {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
+		fullContent.WriteString(chunk)
 		writeSSEData(w, flusher, openAIChunk{
 			ID:      chunkID,
 			Object:  "chat.completion.chunk",
@@ -223,13 +231,17 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, targ
 	})
 
 	// Send final chunk
+	finishReason := "stop"
+	if err != nil {
+		finishReason = "error"
+	}
 	finalChunk := openAIChunk{
 		ID:      chunkID,
 		Object:  "chat.completion.chunk",
 		Created: time.Now().Unix(),
 		Model:   req.Model,
 		Choices: []openAIChoice{
-			{Index: 0, Delta: &openAIMessage{}, FinishReason: "stop"},
+			{Index: 0, Delta: &openAIMessage{}, FinishReason: finishReason},
 		},
 	}
 	if err != nil {
@@ -260,23 +272,66 @@ func writeOpenAIError(w http.ResponseWriter, statusCode int, message string, err
 func convertOpenAIMessages(msgs []openAIMessage) []llm.Message {
 	var result []llm.Message
 	for _, msg := range msgs {
-		content := ""
+		m := llm.Message{
+			Role:       msg.Role,
+			Name:       msg.Name,
+			ToolCallID: msg.ToolCallID,
+		}
+
+		// Convert content
 		switch v := msg.Content.(type) {
 		case string:
-			content = v
+			m.Content = v
+		case nil:
+			m.Content = ""
 		case []any:
+			var blocks []llm.ContentBlock
 			for _, part := range v {
 				if p, ok := part.(map[string]any); ok {
-					if p["type"] == "text" {
-						content += p["text"].(string)
+					switch p["type"] {
+					case "text":
+						if text, ok := p["text"].(string); ok {
+							blocks = append(blocks, llm.ContentBlock{
+								Type: llm.ContentTypeText,
+								Text: text,
+							})
+						}
+					case "image_url":
+						if img, ok := p["image_url"].(map[string]any); ok {
+							if url, ok := img["url"].(string); ok {
+								blocks = append(blocks, llm.ContentBlock{
+									Type: llm.ContentTypeImageURL,
+									ImageURL: &llm.ImageURLBlock{
+										URL: url,
+									},
+								})
+							}
+						}
 					}
 				}
 			}
+			if len(blocks) > 0 {
+				m.SetContentBlocks(blocks)
+			}
 		}
-		result = append(result, llm.Message{
-			Role:    msg.Role,
-			Content: content,
-		})
+
+		// Convert tool calls
+		if len(msg.ToolCalls) > 0 {
+			var toolCalls []llm.ToolCall
+			for _, tc := range msg.ToolCalls {
+				toolCalls = append(toolCalls, llm.ToolCall{
+					ID:   tc.ID,
+					Type: tc.Type,
+					Function: llm.FunctionCall{
+						Name:      tc.Function.Name,
+						Arguments: tc.Function.Arguments,
+					},
+				})
+			}
+			m.ToolCalls = toolCalls
+		}
+
+		result = append(result, m)
 	}
 	return result
 }
@@ -341,9 +396,11 @@ func (s *Server) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Model  string `json:"model"`
-		Input  any    `json:"input"`
-		Stream bool   `json:"stream,omitempty"`
+		Model     string       `json:"model"`
+		Input     any          `json:"input"`
+		Stream    bool         `json:"stream,omitempty"`
+		Tools     []openAITool `json:"tools,omitempty"`
+		MaxTokens *int         `json:"max_output_tokens,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -352,22 +409,43 @@ func (s *Server) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var message string
+	var messages []llm.Message
+
 	switch v := req.Input.(type) {
 	case string:
 		message = v
+		messages = []llm.Message{{Role: "user", Content: message}}
 	case []any:
 		for _, item := range v {
 			if m, ok := item.(map[string]any); ok {
-				if m["type"] == "message" {
-					if content, ok := m["content"].(string); ok {
+				switch m["type"] {
+				case "message":
+					role := "user"
+					if r, ok := m["role"].(string); ok {
+						role = r
+					}
+					content := ""
+					if c, ok := m["content"].(string); ok {
+						content = c
+					}
+					messages = append(messages, llm.Message{Role: role, Content: content})
+					if content != "" {
 						message = content
 					}
+				case "function_call_output":
+					callID, _ := m["call_id"].(string)
+					output, _ := m["output"].(string)
+					messages = append(messages, llm.Message{
+						Role:       "tool",
+						ToolCallID: callID,
+						Content:    output,
+					})
 				}
 			}
 		}
 	}
 
-	if message == "" {
+	if message == "" && len(messages) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "input is required"})
 		return
 	}
@@ -383,12 +461,45 @@ func (s *Server) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use Chat API for single-turn
-	llmMessages := []llm.Message{{Role: "user", Content: message}}
-	response, err := targetApp.LLM.Chat(ctx, llmMessages, nil)
+	// Convert tools if provided
+	var toolDefs []llm.ToolDefinition
+	if len(req.Tools) > 0 {
+		toolDefs = convertOpenAITools(req.Tools)
+	}
+
+	// Handle streaming
+	if req.Stream {
+		s.handleOpenAIResponseStream(w, r, targetApp, messages, toolDefs, req)
+		return
+	}
+
+	// Non-streaming
+	response, err := targetApp.LLM.Chat(ctx, messages, toolDefs)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+
+	// Build output array
+	var output []map[string]any
+	if len(response.ToolCalls) > 0 {
+		for _, tc := range response.ToolCalls {
+			output = append(output, map[string]any{
+				"type":      "function_call",
+				"id":        tc.ID,
+				"name":      tc.Function.Name,
+				"arguments": tc.Function.Arguments,
+			})
+		}
+	}
+	if response.Content != "" {
+		output = append(output, map[string]any{
+			"type": "message",
+			"role": "assistant",
+			"content": []map[string]any{
+				{"type": "output_text", "text": response.Content},
+			},
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -396,12 +507,88 @@ func (s *Server) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		"object": "response",
 		"status": "completed",
 		"model":  req.Model,
+		"output": output,
+		"usage": map[string]any{
+			"input_tokens":  response.Usage.InputTokens,
+			"output_tokens": response.Usage.OutputTokens,
+			"total_tokens":  response.Usage.InputTokens + response.Usage.OutputTokens,
+		},
+	})
+}
+
+// handleOpenAIResponseStream handles streaming for /v1/responses
+func (s *Server) handleOpenAIResponseStream(w http.ResponseWriter, r *http.Request, targetApp *appRuntime.App, messages []llm.Message, toolDefs []llm.ToolDefinition, req struct {
+	Model     string       `json:"model"`
+	Input     any          `json:"input"`
+	Stream    bool         `json:"stream,omitempty"`
+	Tools     []openAITool `json:"tools,omitempty"`
+	MaxTokens *int         `json:"max_output_tokens,omitempty"`
+}) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+	respID := fmt.Sprintf("resp_%d", time.Now().UnixNano())
+
+	// Send created event
+	writeSSEResponse(w, flusher, respID, "response.created", req.Model, map[string]any{})
+
+	// Stream output
+	var content strings.Builder
+	err := targetApp.LLM.StreamChat(ctx, messages, toolDefs, func(chunk string) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		content.WriteString(chunk)
+		writeSSEResponse(w, flusher, respID, "response.output_text.delta", req.Model, map[string]any{
+			"text": chunk,
+		})
+	})
+
+	// Send completed event
+	writeSSEResponse(w, flusher, respID, "response.completed", req.Model, map[string]any{
 		"output": []map[string]any{
 			{
 				"type":    "message",
 				"role":    "assistant",
-				"content": response.Content,
+				"content": content.String(),
 			},
 		},
 	})
+
+	if err != nil {
+		writeSSEResponse(w, flusher, respID, "response.failed", req.Model, map[string]any{
+			"error": err.Error(),
+		})
+	}
+
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+func writeSSEResponse(w http.ResponseWriter, flusher http.Flusher, respID string, eventType string, model string, data map[string]any) {
+	payload := map[string]any{
+		"type": eventType,
+		"data": data,
+	}
+	if respID != "" {
+		payload["response"] = map[string]any{
+			"id":     respID,
+			"object": "response",
+			"model":  model,
+		}
+	}
+	jsonData, _ := json.Marshal(payload)
+	fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	flusher.Flush()
 }

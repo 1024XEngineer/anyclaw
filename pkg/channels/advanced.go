@@ -121,6 +121,26 @@ func (cc *ChannelCommands) handleSessions(ctx context.Context, args string, meta
 	return "Session management is available via the web UI.", nil
 }
 
+func (cc *ChannelCommands) Wrap(handler InboundHandler) InboundHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
+		result, handled, err := cc.Handle(ctx, message, meta)
+		if handled {
+			return sessionID, result, err
+		}
+		return handler(ctx, sessionID, message, meta)
+	}
+}
+
+func (cc *ChannelCommands) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
+		_, handled, err := cc.Handle(ctx, message, meta)
+		if handled {
+			return sessionID, err
+		}
+		return handler(ctx, sessionID, message, meta, onChunk)
+	}
+}
+
 type MentionGate struct {
 	mu            sync.RWMutex
 	enabled       bool
@@ -183,6 +203,72 @@ func (mg *MentionGate) IsEnabled() bool {
 	mg.mu.RLock()
 	defer mg.mu.RUnlock()
 	return mg.enabled
+}
+
+func (mg *MentionGate) Wrap(handler InboundHandler) InboundHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
+		mg.mu.RLock()
+		enabled := mg.enabled
+		botUserID := mg.botUserID
+		mentionIDs := mg.botMentionIDs
+		mg.mu.RUnlock()
+
+		if !enabled {
+			return handler(ctx, sessionID, message, meta)
+		}
+
+		channelType := meta["channel_type"]
+		isGroup := meta["is_group"] == "true"
+		isGuild := meta["guild_id"] != ""
+
+		if channelType == "dm" || channelType == "private" || (!isGroup && !isGuild) {
+			return handler(ctx, sessionID, message, meta)
+		}
+
+		if !isMentioned(message, mentionIDs) {
+			return sessionID, "", nil
+		}
+
+		cleanMessage := stripMentions(message, mentionIDs)
+		if cleanMessage == "" {
+			cleanMessage = message
+		}
+		meta["bot_user_id"] = botUserID
+		return handler(ctx, sessionID, cleanMessage, meta)
+	}
+}
+
+func (mg *MentionGate) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
+		mg.mu.RLock()
+		enabled := mg.enabled
+		botUserID := mg.botUserID
+		mentionIDs := mg.botMentionIDs
+		mg.mu.RUnlock()
+
+		if !enabled {
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		channelType := meta["channel_type"]
+		isGroup := meta["is_group"] == "true"
+		isGuild := meta["guild_id"] != ""
+
+		if channelType == "dm" || channelType == "private" || (!isGroup && !isGuild) {
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		if !isMentioned(message, mentionIDs) {
+			return sessionID, nil
+		}
+
+		cleanMessage := stripMentions(message, mentionIDs)
+		if cleanMessage == "" {
+			cleanMessage = message
+		}
+		meta["bot_user_id"] = botUserID
+		return handler(ctx, sessionID, cleanMessage, meta, onChunk)
+	}
 }
 
 func isMentioned(text string, mentionIDs []string) bool {
@@ -304,9 +390,40 @@ func (gs *GroupSecurity) SetRequireApproval(require bool) {
 	gs.mu.Unlock()
 }
 
+func (gs *GroupSecurity) Wrap(handler InboundHandler) InboundHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
+		userID := meta["user_id"]
+		groupID := meta["guild_id"]
+		if groupID == "" {
+			groupID = meta["chat_id"]
+		}
+
+		if !gs.ShouldProcess(userID, groupID) {
+			return sessionID, "", fmt.Errorf("user %s not authorized in group %s", userID, groupID)
+		}
+		return handler(ctx, sessionID, message, meta)
+	}
+}
+
+func (gs *GroupSecurity) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
+		userID := meta["user_id"]
+		groupID := meta["guild_id"]
+		if groupID == "" {
+			groupID = meta["chat_id"]
+		}
+
+		if !gs.ShouldProcess(userID, groupID) {
+			return sessionID, fmt.Errorf("user %s not authorized in group %s", userID, groupID)
+		}
+		return handler(ctx, sessionID, message, meta, onChunk)
+	}
+}
+
 type ChannelPairing struct {
 	mu       sync.RWMutex
 	pairings map[string]PairingInfo
+	enabled  bool
 }
 
 type PairingInfo struct {
@@ -400,6 +517,64 @@ func (cp *ChannelPairing) pairingKey(userID, deviceID, channel string) string {
 	return fmt.Sprintf("%s:%s:%s", channel, userID, deviceID)
 }
 
+func (cp *ChannelPairing) SetEnabled(enabled bool) {
+	cp.mu.Lock()
+	cp.enabled = enabled
+	cp.mu.Unlock()
+}
+
+func (cp *ChannelPairing) IsEnabled() bool {
+	cp.mu.RLock()
+	defer cp.mu.RUnlock()
+	return cp.enabled
+}
+
+func (cp *ChannelPairing) Wrap(handler InboundHandler) InboundHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
+		cp.mu.RLock()
+		enabled := cp.enabled
+		cp.mu.RUnlock()
+
+		if !enabled {
+			return handler(ctx, sessionID, message, meta)
+		}
+
+		userID := meta["user_id"]
+		deviceID := meta["device_id"]
+		channel := meta["channel"]
+
+		if !cp.IsPaired(userID, deviceID, channel) {
+			return sessionID, "Device not paired. Please pair your device first.", nil
+		}
+
+		cp.UpdateLastSeen(userID, deviceID, channel)
+		return handler(ctx, sessionID, message, meta)
+	}
+}
+
+func (cp *ChannelPairing) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
+		cp.mu.RLock()
+		enabled := cp.enabled
+		cp.mu.RUnlock()
+
+		if !enabled {
+			return handler(ctx, sessionID, message, meta, onChunk)
+		}
+
+		userID := meta["user_id"]
+		deviceID := meta["device_id"]
+		channel := meta["channel"]
+
+		if !cp.IsPaired(userID, deviceID, channel) {
+			return sessionID, fmt.Errorf("device not paired")
+		}
+
+		cp.UpdateLastSeen(userID, deviceID, channel)
+		return handler(ctx, sessionID, message, meta, onChunk)
+	}
+}
+
 type PresenceManager struct {
 	mu        sync.RWMutex
 	presences map[string]PresenceInfo
@@ -489,6 +664,40 @@ func (pm *PresenceManager) CleanupStale(timeout time.Duration) {
 			info.LastUpdate = now
 			pm.presences[key] = info
 		}
+	}
+}
+
+func (pm *PresenceManager) Wrap(handler InboundHandler) InboundHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
+		channel := meta["channel"]
+		userID := meta["user_id"]
+		if channel != "" && userID != "" {
+			pm.SetTyping(channel, userID, true)
+		}
+
+		respSessionID, response, err := handler(ctx, sessionID, message, meta)
+
+		if channel != "" && userID != "" {
+			pm.SetTyping(channel, userID, false)
+		}
+		return respSessionID, response, err
+	}
+}
+
+func (pm *PresenceManager) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
+		channel := meta["channel"]
+		userID := meta["user_id"]
+		if channel != "" && userID != "" {
+			pm.SetTyping(channel, userID, true)
+		}
+
+		respSessionID, err := handler(ctx, sessionID, message, meta, onChunk)
+
+		if channel != "" && userID != "" {
+			pm.SetTyping(channel, userID, false)
+		}
+		return respSessionID, err
 	}
 }
 
@@ -588,4 +797,38 @@ func (cd *ContactDirectory) Count() int {
 	cd.mu.RLock()
 	defer cd.mu.RUnlock()
 	return len(cd.contacts)
+}
+
+func (cd *ContactDirectory) Wrap(handler InboundHandler) InboundHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
+		userID := meta["user_id"]
+		channel := meta["channel"]
+		if userID != "" && channel != "" {
+			cd.AddOrUpdate(ContactInfo{
+				UserID:      userID,
+				Channel:     channel,
+				DisplayName: meta["username"],
+				Username:    meta["username"],
+				Metadata:    meta,
+			})
+		}
+		return handler(ctx, sessionID, message, meta)
+	}
+}
+
+func (cd *ContactDirectory) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
+	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
+		userID := meta["user_id"]
+		channel := meta["channel"]
+		if userID != "" && channel != "" {
+			cd.AddOrUpdate(ContactInfo{
+				UserID:      userID,
+				Channel:     channel,
+				DisplayName: meta["username"],
+				Username:    meta["username"],
+				Metadata:    meta,
+			})
+		}
+		return handler(ctx, sessionID, message, meta, onChunk)
+	}
 }

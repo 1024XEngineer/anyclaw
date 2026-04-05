@@ -478,12 +478,20 @@ func contains(slice []string, item string) bool {
 
 // PluginLifecycle 插件生命周期管理
 type PluginLifecycle struct {
-	State    PluginState
-	Manifest *ManifestV2
-	LoadedAt time.Time
-	LastUsed time.Time
-	Health   PluginHealth
-	Metrics  PluginMetrics
+	State       PluginState
+	Manifest    *ManifestV2
+	LoadedAt    time.Time
+	LastUsed    time.Time
+	Health      PluginHealth
+	Metrics     PluginMetrics
+	Sessions    map[string]*PluginSession
+	SuspendData map[string]any
+}
+
+type PluginSession struct {
+	SessionID string
+	BoundAt   time.Time
+	Context   map[string]any
 }
 
 type PluginState string

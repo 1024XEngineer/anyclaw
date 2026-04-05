@@ -1,10 +1,12 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -16,6 +18,7 @@ type LifecycleManager struct {
 	capabilityIndex     *CapabilityIndex
 	healthCheckInterval time.Duration
 	metricsStore        MetricsStore
+	trustStore          *TrustStore
 }
 
 // MetricsStore 指标存储
@@ -32,6 +35,11 @@ func NewLifecycleManager(registry *Registry) *LifecycleManager {
 		capabilityIndex:     NewCapabilityIndex(),
 		healthCheckInterval: 5 * time.Minute,
 	}
+}
+
+// SetTrustStore 设置信任存储
+func (lm *LifecycleManager) SetTrustStore(ts *TrustStore) {
+	lm.trustStore = ts
 }
 
 // GetCapabilityIndex 获取能力索引
@@ -108,13 +116,41 @@ func (lm *LifecycleManager) VerifyPlugin(ctx context.Context, pluginID string) e
 		return fmt.Errorf("plugin %s not found", pluginID)
 	}
 
-	// 检查签名（如果配置了）
-	// Note: Signature verification not yet implemented - trust checking is pending
 	if lm.registry.requireTrust {
-		// TODO: 实现签名验证
+		if lifecycle.Manifest.Signature == "" {
+			return fmt.Errorf("plugin %s: signature required but missing", pluginID)
+		}
+		if lifecycle.Manifest.Signer == "" {
+			return fmt.Errorf("plugin %s: signer required but missing", pluginID)
+		}
+		v1Manifest := lifecycle.Manifest.ConvertToV1()
+		if !lm.registry.isTrusted(*v1Manifest) {
+			return fmt.Errorf("plugin %s: signer %q is not trusted", pluginID, lifecycle.Manifest.Signer)
+		}
+		if lifecycle.Manifest.sourceDir != "" {
+			var sig Signature
+			if err := json.Unmarshal([]byte(lifecycle.Manifest.Signature), &sig); err != nil {
+				return fmt.Errorf("plugin %s: invalid signature format: %w", pluginID, err)
+			}
+			if lm.trustStore != nil {
+				signer, trusted := lm.trustStore.GetSigner(sig.KeyID)
+				if !trusted && !lm.trustStore.IsTrusted(sig.KeyID) {
+					return fmt.Errorf("plugin %s: key %q not in trust store", pluginID, sig.KeyID)
+				}
+				if signer != nil && signer.TrustLevel == TrustLevelUntrusted {
+					return fmt.Errorf("plugin %s: signer %q is explicitly untrusted", pluginID, signer.Name)
+				}
+			}
+			ok, err := VerifySignature(v1Manifest, &sig, "")
+			if err != nil {
+				return fmt.Errorf("plugin %s: signature verification failed: %w", pluginID, err)
+			}
+			if !ok {
+				return fmt.Errorf("plugin %s: signature verification returned false", pluginID)
+			}
+		}
 	}
 
-	// 检查健康状态
 	if err := lm.CheckPluginHealth(ctx, pluginID); err != nil {
 		return fmt.Errorf("plugin health check failed: %v", err)
 	}
@@ -181,7 +217,15 @@ func (lm *LifecycleManager) BindPlugin(ctx context.Context, pluginID string, ses
 		return fmt.Errorf("plugin must be indexed before binding")
 	}
 
-	// TODO: 实现绑定逻辑
+	if lifecycle.Sessions == nil {
+		lifecycle.Sessions = make(map[string]*PluginSession)
+	}
+
+	lifecycle.Sessions[sessionID] = &PluginSession{
+		SessionID: sessionID,
+		BoundAt:   time.Now(),
+		Context:   make(map[string]any),
+	}
 
 	lifecycle.State = PluginStateBound
 	return nil
@@ -194,38 +238,146 @@ func (lm *LifecycleManager) ExecutePlugin(ctx context.Context, pluginID string, 
 		return nil, fmt.Errorf("plugin %s not found", pluginID)
 	}
 
-	if lifecycle.State != PluginStateBound {
+	if lifecycle.State != PluginStateBound && lifecycle.State != PluginStateExecuting {
 		return nil, fmt.Errorf("plugin must be bound before execution")
 	}
 
 	startTime := time.Now()
 
-	// 执行 before_execute 钩子
 	if err := lm.executeHook(ctx, pluginID, HookBeforeExecute); err != nil {
 		return nil, fmt.Errorf("before_execute hook failed: %v", err)
 	}
 
 	lifecycle.State = PluginStateExecuting
 
-	// TODO: 执行插件动作
-	outputs := map[string]any{"status": "executed"}
+	outputs, err := lm.runPluginAction(ctx, pluginID, action, inputs)
 
-	// 执行 after_execute 钩子
+	if err != nil {
+		duration := time.Since(startTime)
+		lifecycle.Metrics.ExecutionCount++
+		lifecycle.Metrics.FailureCount++
+		lifecycle.Metrics.AverageTime = time.Duration((int64(lifecycle.Metrics.AverageTime)*int64(lifecycle.Metrics.ExecutionCount-1) + int64(duration)) / int64(lifecycle.Metrics.ExecutionCount))
+		lifecycle.Metrics.LastExecuted = time.Now()
+		lifecycle.State = PluginStateBound
+
+		if lm.metricsStore != nil {
+			lm.metricsStore.RecordExecution(pluginID, false, duration)
+		}
+		return nil, &PluginExecutionError{
+			PluginID:  pluginID,
+			Action:    action,
+			Reason:    err.Error(),
+			Retryable: lifecycle.Manifest.RetryPolicy != nil,
+		}
+	}
+
 	if err := lm.executeHook(ctx, pluginID, HookAfterExecute); err != nil {
 		return nil, fmt.Errorf("after_execute hook failed: %v", err)
 	}
 
 	duration := time.Since(startTime)
+	lifecycle.Metrics.ExecutionCount++
+	lifecycle.Metrics.SuccessCount++
+	lifecycle.Metrics.AverageTime = time.Duration((int64(lifecycle.Metrics.AverageTime)*int64(lifecycle.Metrics.ExecutionCount-1) + int64(duration)) / int64(lifecycle.Metrics.ExecutionCount))
+	lifecycle.Metrics.LastExecuted = time.Now()
+	lifecycle.LastUsed = time.Now()
+	lifecycle.State = PluginStateBound
 
-	// 记录指标
 	if lm.metricsStore != nil {
 		lm.metricsStore.RecordExecution(pluginID, true, duration)
 	}
 
-	lifecycle.LastUsed = time.Now()
-	lifecycle.State = PluginStateBound
-
 	return outputs, nil
+}
+
+func (lm *LifecycleManager) runPluginAction(ctx context.Context, pluginID string, action string, inputs map[string]any) (map[string]any, error) {
+	lifecycle := lm.plugins[pluginID]
+	manifest := lifecycle.Manifest
+
+	if manifest == nil {
+		return nil, fmt.Errorf("plugin manifest not loaded")
+	}
+
+	v1 := manifest.ConvertToV1()
+
+	if v1.Entrypoint != "" {
+		timeout := time.Duration(manifest.TimeoutSeconds) * time.Second
+		if timeout == 0 {
+			timeout = 30 * time.Second
+		}
+		cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		cmd := exec.CommandContext(cmdCtx, v1.Entrypoint, action)
+		cmd.Dir = manifest.sourceDir
+
+		if len(inputs) > 0 {
+			inputData, _ := json.Marshal(inputs)
+			cmd.Stdin = bytes.NewReader(inputData)
+		}
+
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		if err := cmd.Run(); err != nil {
+			if stderr.Len() > 0 {
+				return nil, fmt.Errorf("plugin execution failed: %s", stderr.String())
+			}
+			return nil, fmt.Errorf("plugin execution failed: %w", err)
+		}
+
+		var result map[string]any
+		if stdout.Len() > 0 {
+			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+				result = map[string]any{"output": stdout.String()}
+			}
+		} else {
+			result = map[string]any{"status": "success"}
+		}
+		return result, nil
+	}
+
+	if v1.MCP != nil && v1.MCP.Command != "" {
+		timeout := time.Duration(manifest.TimeoutSeconds) * time.Second
+		if timeout == 0 {
+			timeout = 30 * time.Second
+		}
+		cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		args := append(v1.MCP.Args, action)
+		cmd := exec.CommandContext(cmdCtx, v1.MCP.Command, args...)
+		cmd.Dir = manifest.sourceDir
+
+		if len(inputs) > 0 {
+			inputData, _ := json.Marshal(inputs)
+			cmd.Stdin = bytes.NewReader(inputData)
+		}
+
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		if err := cmd.Run(); err != nil {
+			if stderr.Len() > 0 {
+				return nil, fmt.Errorf("MCP execution failed: %s", stderr.String())
+			}
+			return nil, fmt.Errorf("MCP execution failed: %w", err)
+		}
+
+		var result map[string]any
+		if stdout.Len() > 0 {
+			if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+				result = map[string]any{"output": stdout.String()}
+			}
+		} else {
+			result = map[string]any{"status": "success"}
+		}
+		return result, nil
+	}
+
+	return map[string]any{"status": "executed", "plugin": pluginID, "action": action}, nil
 }
 
 // SuspendPlugin 暂停插件
@@ -235,7 +387,20 @@ func (lm *LifecycleManager) SuspendPlugin(ctx context.Context, pluginID string) 
 		return fmt.Errorf("plugin %s not found", pluginID)
 	}
 
-	// TODO: 保存插件状态
+	if lifecycle.SuspendData == nil {
+		lifecycle.SuspendData = make(map[string]any)
+	}
+
+	lifecycle.SuspendData["state"] = string(lifecycle.State)
+	lifecycle.SuspendData["sessions"] = lifecycle.Sessions
+	lifecycle.SuspendData["suspended_at"] = time.Now().UTC().Format(time.RFC3339)
+
+	if lifecycle.Manifest.ResumeSupport != nil && lifecycle.Manifest.ResumeSupport.Checkpointable {
+		checkpointPath := filepath.Join(lifecycle.Manifest.sourceDir, ".suspend", pluginID+".json")
+		os.MkdirAll(filepath.Dir(checkpointPath), 0755)
+		data, _ := json.MarshalIndent(lifecycle.SuspendData, "", "  ")
+		os.WriteFile(checkpointPath, data, 0644)
+	}
 
 	lifecycle.State = PluginStateSuspended
 	return nil
@@ -252,9 +417,25 @@ func (lm *LifecycleManager) ResumePlugin(ctx context.Context, pluginID string) e
 		return fmt.Errorf("plugin must be suspended before resume")
 	}
 
-	// TODO: 恢复插件状态
+	if lifecycle.SuspendData != nil {
+		if prevState, ok := lifecycle.SuspendData["state"].(string); ok {
+			lifecycle.State = PluginState(prevState)
+		}
+		if sessions, ok := lifecycle.SuspendData["sessions"].(map[string]*PluginSession); ok {
+			lifecycle.Sessions = sessions
+		}
+		delete(lifecycle.SuspendData, "suspended_at")
 
-	lifecycle.State = PluginStateBound
+		if lifecycle.Manifest.ResumeSupport != nil && lifecycle.Manifest.ResumeSupport.Checkpointable {
+			checkpointPath := filepath.Join(lifecycle.Manifest.sourceDir, ".suspend", pluginID+".json")
+			os.Remove(checkpointPath)
+		}
+	}
+
+	if lifecycle.State == "" {
+		lifecycle.State = PluginStateBound
+	}
+
 	return nil
 }
 
@@ -265,15 +446,22 @@ func (lm *LifecycleManager) UnloadPlugin(ctx context.Context, pluginID string) e
 		return fmt.Errorf("plugin %s not found", pluginID)
 	}
 
-	// 从能力索引中移除
 	lm.capabilityIndex.Remove(pluginID)
 
-	// 执行 before_unload 钩子
 	if err := lm.executeHook(ctx, pluginID, HookBeforeUnload); err != nil {
 		return fmt.Errorf("before_unload hook failed: %v", err)
 	}
 
-	// TODO: 清理插件资源
+	for sessionID := range lifecycle.Sessions {
+		delete(lifecycle.Sessions, sessionID)
+	}
+	lifecycle.Sessions = nil
+
+	if lifecycle.SuspendData != nil {
+		checkpointPath := filepath.Join(lifecycle.Manifest.sourceDir, ".suspend", pluginID+".json")
+		os.Remove(checkpointPath)
+		lifecycle.SuspendData = nil
+	}
 
 	lifecycle.State = PluginStateUnloaded
 	delete(lm.plugins, pluginID)
@@ -327,6 +515,29 @@ func (lm *LifecycleManager) CheckPluginHealth(ctx context.Context, pluginID stri
 }
 
 func executeHook(ctx context.Context, command string, workDir string) (int, error) {
+	if command == "" {
+		return 0, nil
+	}
+
+	var cmd *exec.Cmd
+	if workDir != "" {
+		cmd = exec.CommandContext(ctx, "sh", "-c", command)
+		cmd.Dir = workDir
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", command)
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode(), fmt.Errorf("command failed (exit %d): %s", exitErr.ExitCode(), stderr.String())
+		}
+		return -1, fmt.Errorf("command failed: %w", err)
+	}
+
 	return 0, nil
 }
 

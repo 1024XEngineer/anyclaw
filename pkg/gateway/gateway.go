@@ -21,6 +21,7 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/chat"
 	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/anyclaw/anyclaw/pkg/discovery"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/mcp"
 	"github.com/anyclaw/anyclaw/pkg/plugin"
@@ -83,6 +84,13 @@ type Server struct {
 	mcpRegistry    *mcp.Registry
 	mcpServer      *mcp.Server
 	marketStore    *plugin.Store
+	discoverySvc   *discovery.Service
+	mentionGate    *channel.MentionGate
+	groupSecurity  *channel.GroupSecurity
+	channelCmds    *channel.ChannelCommands
+	channelPairing *channel.ChannelPairing
+	presenceMgr    *channel.PresenceManager
+	contactDir     *channel.ContactDirectory
 }
 
 var titleCase = cases.Title(language.English)
@@ -212,6 +220,32 @@ func (s *Server) initChannels() {
 		}
 	}
 	s.channels = channel.NewManager(adapters...)
+	s.initChannelAdvanced()
+}
+
+func (s *Server) initChannelAdvanced() {
+	botName := s.app.Config.Agent.Name
+	if botName == "" {
+		botName = "AnyClaw"
+	}
+
+	botUserID := ""
+	if s.telegram != nil {
+		botUserID = s.app.Config.Channels.Telegram.BotToken
+	}
+
+	s.mentionGate = channel.NewMentionGate(false, botUserID, nil)
+	s.groupSecurity = channel.NewGroupSecurity()
+	s.channelCmds = channel.NewChannelCommands(botName)
+	s.channelPairing = channel.NewChannelPairing()
+	s.presenceMgr = channel.NewPresenceManager(func(ch, userID string, presence channel.PresenceInfo) {
+		s.appendEvent("channel.presence", "", map[string]any{
+			"channel": ch,
+			"user_id": userID,
+			"status":  presence.Status,
+		})
+	})
+	s.contactDir = channel.NewContactDirectory()
 }
 
 func (s *Server) initSTT() {
@@ -790,6 +824,7 @@ func (s *Server) Run(ctx context.Context) error {
 	s.initChannels()
 	s.initMCP(ctx)
 	s.initMarketStore()
+	s.initDiscovery(ctx)
 	if err := s.ensureDefaultWorkspace(); err != nil {
 		return err
 	}
@@ -866,6 +901,11 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/market/plugins/", s.wrap("/market/plugins/", s.handleMarketPluginAction))
 	mux.HandleFunc("/market/installed", s.wrap("/market/installed", requirePermission("market.read", s.handleMarketInstalled)))
 	mux.HandleFunc("/market/categories", s.wrap("/market/categories", requirePermission("market.read", s.handleMarketCategories)))
+	mux.HandleFunc("/channel/mention-gate", s.wrap("/channel/mention-gate", s.handleMentionGate))
+	mux.HandleFunc("/channel/group-security", s.wrap("/channel/group-security", s.handleGroupSecurity))
+	mux.HandleFunc("/channel/pairing", s.wrap("/channel/pairing", s.handleChannelPairing))
+	mux.HandleFunc("/channel/presence", s.wrap("/channel/presence", s.handlePresence))
+	mux.HandleFunc("/channel/contacts", s.wrap("/channel/contacts", s.handleContacts))
 	mux.HandleFunc("/channels/whatsapp/webhook", s.rateLimit.Wrap(s.handleWhatsAppWebhook))
 	mux.HandleFunc("/channels/discord/interactions", s.rateLimit.Wrap(s.handleDiscordInteractions))
 	mux.HandleFunc("/ingress/web", s.rateLimit.Wrap(s.handleSignedIngress))
@@ -889,6 +929,11 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/nodes", s.wrap("/nodes", requirePermission("nodes.read", s.handleNodesList)))
 	mux.HandleFunc("/nodes/", s.wrap("/nodes/", s.handleNodeByID))
 	mux.HandleFunc("/nodes/invoke", s.wrap("/nodes/invoke", requirePermission("nodes.write", s.handleNodeInvoke)))
+
+	// LAN Discovery
+	mux.HandleFunc("/discovery/instances", s.wrap("/discovery/instances", s.handleDiscoveryInstances))
+	mux.HandleFunc("/discovery/query", s.wrap("/discovery/query", s.handleDiscoveryQuery))
+	mux.HandleFunc("/discovery", s.wrap("/discovery", s.handleDiscoveryUI))
 
 	// Cron jobs
 	mux.HandleFunc("/cron", s.wrap("/cron", requirePermission("cron.read", s.handleCronList)))
@@ -926,6 +971,12 @@ func (s *Server) runChannels(ctx context.Context) {
 		return
 	}
 	handler := s.processChannelMessage
+	handler = s.mentionGate.Wrap(handler)
+	handler = s.groupSecurity.Wrap(handler)
+	handler = s.channelPairing.Wrap(handler)
+	handler = s.channelCmds.Wrap(handler)
+	handler = s.contactDir.Wrap(handler)
+	handler = s.presenceMgr.Wrap(handler)
 	if s.sttIntegration != nil {
 		handler = s.sttIntegration.WrapInboundHandler(handler)
 	}
@@ -940,6 +991,12 @@ func (s *Server) runStreamChannels(ctx context.Context) {
 		}
 		go func(sa channel.StreamAdapter) {
 			handler := s.processChannelMessageStream
+			handler = s.mentionGate.WrapStream(handler)
+			handler = s.groupSecurity.WrapStream(handler)
+			handler = s.channelPairing.WrapStream(handler)
+			handler = s.channelCmds.WrapStream(handler)
+			handler = s.contactDir.WrapStream(handler)
+			handler = s.presenceMgr.WrapStream(handler)
 			if s.sttIntegration != nil {
 				handler = s.sttIntegration.WrapStreamInboundHandler(handler)
 			}
@@ -4068,6 +4125,70 @@ func (s *Server) initMarketStore() {
 	s.marketStore = plugin.NewStore(pluginDir, marketDir, cacheDir, sources, trustStore, s.plugins)
 }
 
+func (s *Server) initDiscovery(ctx context.Context) {
+	port := s.app.Config.Gateway.Port
+	if port <= 0 {
+		port = 18789
+	}
+
+	caps := []string{"gateway", "chat", "agents"}
+	for _, profile := range s.app.Config.Agent.Profiles {
+		caps = append(caps, "agent:"+profile.Name)
+	}
+
+	svc := discovery.NewService(discovery.Config{
+		ServiceName:  s.app.Config.Agent.Name,
+		ServicePort:  port,
+		InstanceID:   fmt.Sprintf("anyclaw-%s", s.app.Config.Agent.Name),
+		Version:      "1.0.0",
+		Capabilities: caps,
+		Metadata: map[string]string{
+			"provider": s.app.Config.LLM.Provider,
+			"model":    s.app.Config.LLM.Model,
+		},
+	})
+
+	svc.OnDiscover(func(inst *discovery.Instance) {
+		s.appendEvent("discovery.instance", "", map[string]any{
+			"event":   "discovered",
+			"id":      inst.ID,
+			"name":    inst.Name,
+			"url":     inst.URL,
+			"version": inst.Version,
+			"caps":    inst.Caps,
+		})
+
+		if inst.Address != "" && !discovery.IsLocalhost(inst.Address) {
+			node := &DeviceNode{
+				ID:           inst.ID,
+				Name:         inst.Name,
+				Type:         "anyclaw",
+				Capabilities: inst.Caps,
+				Status:       "online",
+				ConnectedAt:  inst.LastSeen,
+				LastSeen:     inst.LastSeen,
+				Metadata: map[string]string{
+					"url":     inst.URL,
+					"version": inst.Version,
+				},
+			}
+			s.nodes.Register(node)
+		}
+	})
+
+	if err := svc.Start(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "discovery start error: %v\n", err)
+		return
+	}
+
+	s.discoverySvc = svc
+
+	go func() {
+		<-ctx.Done()
+		svc.Stop()
+	}()
+}
+
 func (s *Server) registerBuiltinMCPTools() {
 	s.mcpServer.RegisterTool(mcp.ServerTool{
 		Name:        "chat",
@@ -4372,6 +4493,19 @@ func (s *Server) handleMarketPluginAction(w http.ResponseWriter, r *http.Request
 				}
 				writeJSON(w, http.StatusOK, result)
 				return
+			case "rollback":
+				targetVersion := r.URL.Query().Get("version")
+				if targetVersion == "" {
+					http.Error(w, "version query param required for rollback", http.StatusBadRequest)
+					return
+				}
+				result, err := s.marketStore.Rollback(ctx, pluginID, targetVersion)
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, result)
+				return
 			}
 		}
 		http.Error(w, "unknown action", http.StatusBadRequest)
@@ -4383,6 +4517,11 @@ func (s *Server) handleMarketPluginAction(w http.ResponseWriter, r *http.Request
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
+			return
+		}
+		if len(parts) > 1 && parts[1] == "history" {
+			history := s.marketStore.GetInstallHistory(pluginID)
+			writeJSON(w, http.StatusOK, map[string]any{"history": history})
 			return
 		}
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -4438,4 +4577,200 @@ func (s *Server) handleMarketUI(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(data)
+}
+
+func (s *Server) handleDiscoveryInstances(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.discoverySvc == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"instances": []any{}})
+		return
+	}
+
+	instances := s.discoverySvc.Instances()
+	writeJSON(w, http.StatusOK, map[string]any{"instances": instances})
+}
+
+func (s *Server) handleDiscoveryQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.discoverySvc == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "discovery not enabled"})
+		return
+	}
+
+	s.discoverySvc.SendQuery()
+	writeJSON(w, http.StatusOK, map[string]any{"status": "query sent"})
+}
+
+func (s *Server) handleDiscoveryUI(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile("ui/discovery/index.html")
+	if err != nil {
+		data, err = os.ReadFile(filepath.Join(s.app.Config.Gateway.ControlUI.Root, "discovery", "index.html"))
+	}
+	if err != nil {
+		http.Error(w, "discovery UI not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
+func (s *Server) handleMentionGate(w http.ResponseWriter, r *http.Request) {
+	if s.mentionGate == nil {
+		http.Error(w, "mention gate not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled": s.mentionGate.IsEnabled(),
+		})
+	case http.MethodPost:
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		s.mentionGate.SetEnabled(req.Enabled)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "enabled": req.Enabled})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleGroupSecurity(w http.ResponseWriter, r *http.Request) {
+	if s.groupSecurity == nil {
+		http.Error(w, "group security not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	case http.MethodPost:
+		var req struct {
+			Action  string `json:"action"`
+			UserID  string `json:"user_id"`
+			GroupID string `json:"group_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		switch req.Action {
+		case "allow_group":
+			s.groupSecurity.AllowGroup(req.GroupID)
+		case "deny_group":
+			s.groupSecurity.DenyGroup(req.GroupID)
+		case "allow_user":
+			s.groupSecurity.AllowUser(req.UserID)
+		case "deny_user":
+			s.groupSecurity.DenyUser(req.UserID)
+		default:
+			http.Error(w, "unknown action", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "updated"})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleChannelPairing(w http.ResponseWriter, r *http.Request) {
+	if s.channelPairing == nil {
+		http.Error(w, "channel pairing not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled": s.channelPairing.IsEnabled(),
+			"paired":  s.channelPairing.ListPaired(),
+		})
+	case http.MethodPost:
+		var req struct {
+			Action      string `json:"action"`
+			UserID      string `json:"user_id"`
+			DeviceID    string `json:"device_id"`
+			Channel     string `json:"channel"`
+			DisplayName string `json:"display_name"`
+			TTL         int    `json:"ttl_seconds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		switch req.Action {
+		case "pair":
+			ttl := time.Duration(req.TTL) * time.Second
+			if ttl <= 0 {
+				ttl = 24 * time.Hour
+			}
+			s.channelPairing.Pair(req.UserID, req.DeviceID, req.Channel, req.DisplayName, ttl)
+		case "unpair":
+			s.channelPairing.Unpair(req.UserID, req.DeviceID, req.Channel)
+		default:
+			http.Error(w, "unknown action", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "updated"})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handlePresence(w http.ResponseWriter, r *http.Request) {
+	if s.presenceMgr == nil {
+		http.Error(w, "presence manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		ch := r.URL.Query().Get("channel")
+		userID := r.URL.Query().Get("user_id")
+		if ch != "" && userID != "" {
+			info, ok := s.presenceMgr.GetPresence(ch, userID)
+			if !ok {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+				return
+			}
+			writeJSON(w, http.StatusOK, info)
+		} else {
+			writeJSON(w, http.StatusOK, s.presenceMgr.ListActive())
+		}
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleContacts(w http.ResponseWriter, r *http.Request) {
+	if s.contactDir == nil {
+		http.Error(w, "contact directory not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		ch := r.URL.Query().Get("channel")
+		query := r.URL.Query().Get("q")
+		if query != "" {
+			writeJSON(w, http.StatusOK, s.contactDir.Search(query))
+		} else {
+			writeJSON(w, http.StatusOK, s.contactDir.List(ch))
+		}
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }

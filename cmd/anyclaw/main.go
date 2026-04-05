@@ -104,6 +104,8 @@ func run(ctx context.Context, args []string) error {
 			return runStoreCommand(args[1:])
 		case "task":
 			return runTaskCommand(ctx, args[1:])
+		case "mcp":
+			return runMCPCommand(args[1:])
 		}
 	}
 
