@@ -209,7 +209,7 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	t = time.Now()
 
 	secretsConfigDir := filepath.Dir(app.ConfigPath)
-	if secretsConfigDir == "." {
+	if secretsConfigDir == "" {
 		secretsConfigDir = "."
 	}
 	secretsStorePath := filepath.Join(secretsConfigDir, ".anyclaw", "secrets", "store.json")
@@ -318,8 +318,7 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		warmupCfg := memCfg.Warmup
 		if warmupCfg.Enabled && len(warmupCfg.Queries) > 0 {
 			go func() {
-				result := warmupper.Warmup(warmupCfg.Queries, 4)
-				_ = result
+				_ = warmupper.Warmup(warmupCfg.Queries, 4)
 			}()
 		}
 	}

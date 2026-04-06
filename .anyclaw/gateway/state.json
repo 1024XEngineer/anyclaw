@@ -198,6 +198,32 @@
         "pairing_enabled": false,
         "risk_acknowledged": true
       }
+    },
+    {
+      "id": "evt_1775473322143220400_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T11:02:02.1432204Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775473987271652100_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T11:13:07.2716521Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
     }
   ],
   "tools": [],
@@ -241,5 +267,5 @@
     }
   ],
   "jobs": [],
-  "updated": "2026-04-06T08:28:16.4267713Z"
+  "updated": "2026-04-06T11:13:07.277496Z"
 }

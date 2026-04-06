@@ -650,6 +650,9 @@ func rebindBuiltinsStable(state *RuntimeState) {
 }
 
 func applyLLMRouteStable(state *RuntimeState, input string) string {
+	if state.llmClient == nil {
+		return ""
+	}
 	routeDecision := routing.DecideLLM(state.cfg.LLM, input)
 	providerChanged := strings.TrimSpace(routeDecision.Provider) != "" && routeDecision.Provider != state.cfg.LLM.Provider
 	modelChanged := strings.TrimSpace(routeDecision.Model) != "" && routeDecision.Model != state.cfg.LLM.Model
@@ -711,6 +714,9 @@ func showAuditLogStable(state *RuntimeState) {
 }
 
 func switchAgentProfileStable(state *RuntimeState, name string) error {
+	if state.agent == nil {
+		return fmt.Errorf("agent switching not available in Gateway mode")
+	}
 	if !state.cfg.ApplyAgentProfile(name) {
 		return fmt.Errorf("agent not found: %s", name)
 	}
@@ -755,10 +761,18 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 		printInteractiveHelp()
 		return false
 	case commandText == "/clear":
-		state.agent.ClearHistory()
-		printSuccess("Chat history cleared")
+		if state.agent != nil {
+			state.agent.ClearHistory()
+			printSuccess("Chat history cleared")
+		} else {
+			printSuccess("Chat history cleared (Gateway mode)")
+		}
 		return false
 	case commandText == "/memory":
+		if state.agent == nil {
+			printWarn("Memory not available in Gateway mode")
+			return false
+		}
 		mem, _ := state.agent.ShowMemory()
 		fmt.Println()
 		fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 40)))
@@ -766,6 +780,10 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 		fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 40)))
 		return false
 	case commandText == "/skills":
+		if state.agent == nil {
+			printWarn("Skills not available in Gateway mode")
+			return false
+		}
 		loadedSkills := state.agent.ListSkills()
 		fmt.Println()
 		fmt.Printf("%s\n", ui.Bold.Sprint("Skills"))
@@ -778,6 +796,10 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 		}
 		return false
 	case commandText == "/tools":
+		if state.agent == nil {
+			printWarn("Tools not available in Gateway mode")
+			return false
+		}
 		registeredTools := state.agent.ListTools()
 		fmt.Println()
 		fmt.Printf("%s\n", ui.Bold.Sprint("Tools"))
@@ -796,6 +818,10 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 		showAgentProfilesStable(state)
 		return false
 	case commandText == "/audit":
+		if state.audit == nil {
+			printWarn("Audit log not available in Gateway mode")
+			return false
+		}
 		showAuditLogStable(state)
 		return false
 	case strings.HasPrefix(commandText, "/agent use "):
@@ -854,6 +880,10 @@ func handleSetCommandStable(state *RuntimeState, input string) {
 
 	switch key {
 	case "provider":
+		if state.llmClient == nil {
+			printWarn("Provider switching not available in Gateway mode")
+			return
+		}
 		if err := state.llmClient.SwitchProvider(value); err != nil {
 			printError("Failed to switch provider: %v", err)
 			return
@@ -863,6 +893,10 @@ func handleSetCommandStable(state *RuntimeState, input string) {
 		printSuccess("Provider set to: %s", value)
 
 	case "model":
+		if state.llmClient == nil {
+			printWarn("Model switching not available in Gateway mode")
+			return
+		}
 		if err := state.llmClient.SwitchModel(value); err != nil {
 			printError("Failed to switch model: %v", err)
 			return
@@ -872,6 +906,10 @@ func handleSetCommandStable(state *RuntimeState, input string) {
 		printSuccess("Model set to: %s", value)
 
 	case "apikey", "api-key":
+		if state.llmClient == nil {
+			printWarn("API key setting not available in Gateway mode")
+			return
+		}
 		if err := state.llmClient.SetAPIKey(value); err != nil {
 			printError("Failed to set API key: %v", err)
 			return
@@ -881,6 +919,10 @@ func handleSetCommandStable(state *RuntimeState, input string) {
 		printSuccess("API key updated!")
 
 	case "temp", "temperature":
+		if state.llmClient == nil {
+			printWarn("Temperature setting not available in Gateway mode")
+			return
+		}
 		tempValue, err := strconv.ParseFloat(value, 64)
 		if err != nil {
 			printError("Invalid temperature value (0.0-2.0)")
@@ -982,7 +1024,11 @@ func runSetupWizardGateway(cfg *config.Config) {
 	showAvailableProvidersStable()
 	fmt.Printf("%s\nProvider > %s", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
 
-	selectedProvider, _ := wizardReader.ReadString('\n')
+	selectedProvider, err := wizardReader.ReadString('\n')
+	if err != nil {
+		printError("Failed to read input: %v", err)
+		return
+	}
 	selectedProvider = strings.TrimSpace(strings.ToLower(selectedProvider))
 	if selectedProvider == "" {
 		selectedProvider = "qwen"
@@ -996,7 +1042,11 @@ func runSetupWizardGateway(cfg *config.Config) {
 	showModelsForProviderStable(selectedProvider)
 	fmt.Printf("%s\nModel > %s", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
 
-	selectedModel, _ := wizardReader.ReadString('\n')
+	selectedModel, err := wizardReader.ReadString('\n')
+	if err != nil {
+		printError("Failed to read input: %v", err)
+		return
+	}
 	selectedModel = strings.TrimSpace(strings.ToLower(selectedModel))
 	if selectedModel == "" {
 		selectedModel = getDefaultModel(selectedProvider)
@@ -1007,21 +1057,33 @@ func runSetupWizardGateway(cfg *config.Config) {
 	fmt.Printf("%s\n", getProviderHint(selectedProvider))
 	fmt.Printf("%sAPI key: %s", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
 
-	enteredAPIKey, _ := wizardReader.ReadString('\n')
+	enteredAPIKey, err := wizardReader.ReadString('\n')
+	if err != nil {
+		printError("Failed to read input: %v", err)
+		return
+	}
 	cfg.LLM.APIKey = strings.TrimSpace(enteredAPIKey)
 
 	fmt.Printf("\n%s", ui.Bold.Sprint("Step 4/5: Proxy"))
 	fmt.Printf("%s (optional, press Enter to skip)%s", ui.Yellow.Sprint(""), ui.Reset.Sprint(""))
 	fmt.Printf("%s\n> %s", ui.Green.Sprint(""), ui.Reset.Sprint(""))
 
-	enteredProxy, _ := wizardReader.ReadString('\n')
+	enteredProxy, err := wizardReader.ReadString('\n')
+	if err != nil {
+		printError("Failed to read input: %v", err)
+		return
+	}
 	cfg.LLM.Proxy = strings.TrimSpace(enteredProxy)
 
 	fmt.Printf("\n%s", ui.Bold.Sprint("Step 5/5: Agent name"))
 	fmt.Printf("%s (default: AnyClaw)%s", ui.Yellow.Sprint(""), ui.Reset.Sprint(""))
 	fmt.Printf("%s\n> %s", ui.Green.Sprint(""), ui.Reset.Sprint(""))
 
-	agentName, _ := wizardReader.ReadString('\n')
+	agentName, err := wizardReader.ReadString('\n')
+	if err != nil {
+		printError("Failed to read input: %v", err)
+		return
+	}
 	agentName = strings.TrimSpace(agentName)
 	if agentName != "" {
 		cfg.Agent.Name = agentName

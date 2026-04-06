@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,10 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/config"
 	"github.com/gorilla/websocket"
 )
+
+type pendingRequest struct {
+	ch chan openClawWSFrame
+}
 
 type WSClient struct {
 	url       string
@@ -21,43 +26,62 @@ type WSClient struct {
 	mu        sync.RWMutex
 	nonce     string
 	onEvent   func(event *Event)
+	pending   map[string]*pendingRequest
+	pendingMu sync.Mutex
 	closed    chan struct{}
+	closeOnce sync.Once
+	writeMu   sync.Mutex
 }
 
 func NewWSClient(url, token string) *WSClient {
 	return &WSClient{
-		url:    url,
-		token:  token,
-		closed: make(chan struct{}),
+		url:     url,
+		token:   token,
+		pending: make(map[string]*pendingRequest),
+		closed:  make(chan struct{}),
 	}
 }
 
 func (c *WSClient) Connect(ctx context.Context) error {
+	c.mu.Lock()
 	if c.connected {
+		c.mu.Unlock()
 		return nil
 	}
+	c.mu.Unlock()
 
 	header := http.Header{}
 	if c.token != "" {
 		header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.url, header)
+	dialer := websocket.DefaultDialer
+	dialer.Proxy = func(req *http.Request) (*url.URL, error) {
+		return nil, nil
+	}
+	conn, _, err := dialer.DialContext(ctx, c.url, header)
 	if err != nil {
 		return fmt.Errorf("failed to connect to gateway: %w", err)
 	}
 
+	c.mu.Lock()
 	c.conn = conn
 	c.nonce = uniqueID("client")
-	c.connected = true
-
-	go c.readLoop()
+	c.mu.Unlock()
 
 	if err := c.sendConnect(ctx); err != nil {
-		c.conn.Close()
+		conn.Close()
+		c.mu.Lock()
 		c.connected = false
+		c.mu.Unlock()
 		return err
 	}
+
+	c.mu.Lock()
+	c.connected = true
+	c.mu.Unlock()
+
+	go c.readLoop()
 
 	return nil
 }
@@ -111,7 +135,6 @@ func (c *WSClient) sendConnect(ctx context.Context) error {
 		return fmt.Errorf("connect failed: %s", resp.Error)
 	}
 
-	c.connected = true
 	return nil
 }
 
@@ -123,6 +146,16 @@ func (c *WSClient) readLoop() {
 		}
 		c.connected = false
 		c.mu.Unlock()
+
+		c.pendingMu.Lock()
+		for id, p := range c.pending {
+			select {
+			case p.ch <- openClawWSFrame{}:
+			default:
+			}
+			delete(c.pending, id)
+		}
+		c.pendingMu.Unlock()
 	}()
 
 	c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
@@ -132,12 +165,6 @@ func (c *WSClient) readLoop() {
 	})
 
 	for {
-		select {
-		case <-c.closed:
-			return
-		default:
-		}
-
 		var frame openClawWSFrame
 		err := c.conn.ReadJSON(&frame)
 		if err != nil {
@@ -146,8 +173,21 @@ func (c *WSClient) readLoop() {
 
 		c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 
+		if frame.Type == "res" && frame.ID != "" {
+			c.pendingMu.Lock()
+			if p, ok := c.pending[frame.ID]; ok {
+				p.ch <- frame
+				delete(c.pending, frame.ID)
+			}
+			c.pendingMu.Unlock()
+			continue
+		}
+
 		if frame.Type == "event" && frame.Event != "" {
-			if c.onEvent != nil {
+			c.mu.RLock()
+			handler := c.onEvent
+			c.mu.RUnlock()
+			if handler != nil {
 				var payload map[string]any
 				if frame.Data != nil {
 					if p, ok := frame.Data.(map[string]any); ok {
@@ -159,9 +199,48 @@ func (c *WSClient) readLoop() {
 					SessionID: "",
 					Payload:   payload,
 				}
-				c.onEvent(event)
+				handler(event)
 			}
 		}
+	}
+}
+
+func (c *WSClient) call(ctx context.Context, frame openClawWSFrame) (openClawWSFrame, error) {
+	c.mu.RLock()
+	if !c.connected {
+		c.mu.RUnlock()
+		return openClawWSFrame{}, fmt.Errorf("not connected to gateway")
+	}
+	conn := c.conn
+	c.mu.RUnlock()
+
+	ch := make(chan openClawWSFrame, 1)
+
+	c.pendingMu.Lock()
+	c.pending[frame.ID] = &pendingRequest{ch: ch}
+	c.pendingMu.Unlock()
+
+	c.writeMu.Lock()
+	err := conn.WriteJSON(frame)
+	c.writeMu.Unlock()
+	if err != nil {
+		c.pendingMu.Lock()
+		delete(c.pending, frame.ID)
+		c.pendingMu.Unlock()
+		return openClawWSFrame{}, err
+	}
+
+	select {
+	case resp, ok := <-ch:
+		if !ok {
+			return openClawWSFrame{}, fmt.Errorf("connection closed")
+		}
+		return resp, nil
+	case <-ctx.Done():
+		c.pendingMu.Lock()
+		delete(c.pending, frame.ID)
+		c.pendingMu.Unlock()
+		return openClawWSFrame{}, ctx.Err()
 	}
 }
 
@@ -172,11 +251,9 @@ func (c *WSClient) Connected() bool {
 }
 
 func (c *WSClient) Close() error {
-	select {
-	case <-c.closed:
-	default:
+	c.closeOnce.Do(func() {
 		close(c.closed)
-	}
+	})
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -189,14 +266,6 @@ func (c *WSClient) Close() error {
 }
 
 func (c *WSClient) SendMessage(ctx context.Context, message string) (string, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return "", fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -209,14 +278,8 @@ func (c *WSClient) SendMessage(ctx context.Context, message string) (string, err
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return "", err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return "", err
 	}
 
@@ -237,14 +300,6 @@ func (c *WSClient) SendMessage(ctx context.Context, message string) (string, err
 }
 
 func (c *WSClient) GetStatus(ctx context.Context) (Status, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return Status{}, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -254,14 +309,8 @@ func (c *WSClient) GetStatus(ctx context.Context) (Status, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return Status{}, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return Status{}, err
 	}
 
@@ -281,14 +330,6 @@ func (c *WSClient) GetStatus(ctx context.Context) (Status, error) {
 }
 
 func (c *WSClient) ListSessions(ctx context.Context) ([]Session, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -298,14 +339,8 @@ func (c *WSClient) ListSessions(ctx context.Context) ([]Session, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -335,15 +370,9 @@ func (c *WSClient) ListSessions(ctx context.Context) ([]Session, error) {
 }
 
 func (c *WSClient) SubscribeEvents(ctx context.Context, eventType string, handler func(*Event)) error {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
+	c.mu.Lock()
 	c.onEvent = handler
+	c.mu.Unlock()
 
 	frame := openClawWSFrame{
 		Type:   "req",
@@ -357,18 +386,11 @@ func (c *WSClient) SubscribeEvents(ctx context.Context, eventType string, handle
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	return conn.WriteJSON(frame)
+	_, err := c.call(ctx, frame)
+	return err
 }
 
 func (c *WSClient) InvokeTool(ctx context.Context, toolName string, args map[string]any) (any, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -382,14 +404,8 @@ func (c *WSClient) InvokeTool(ctx context.Context, toolName string, args map[str
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -401,14 +417,6 @@ func (c *WSClient) InvokeTool(ctx context.Context, toolName string, args map[str
 }
 
 func (c *WSClient) SendChatMessage(ctx context.Context, sessionID, message string) (string, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return "", fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -422,14 +430,8 @@ func (c *WSClient) SendChatMessage(ctx context.Context, sessionID, message strin
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return "", err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return "", err
 	}
 
@@ -447,14 +449,6 @@ func (c *WSClient) SendChatMessage(ctx context.Context, sessionID, message strin
 }
 
 func (c *WSClient) GetConfig(ctx context.Context) (map[string]any, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -464,14 +458,8 @@ func (c *WSClient) GetConfig(ctx context.Context) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -488,14 +476,6 @@ func (c *WSClient) GetConfig(ctx context.Context) (map[string]any, error) {
 }
 
 func (c *WSClient) SetConfig(ctx context.Context, key string, value any) error {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -509,33 +489,11 @@ func (c *WSClient) SetConfig(ctx context.Context, key string, value any) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
-	if err != nil {
-		return err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
-		return err
-	}
-
-	if !resp.OK {
-		return fmt.Errorf("%s", resp.Error)
-	}
-
-	return nil
+	_, err := c.call(ctx, frame)
+	return err
 }
 
 func (c *WSClient) ListAgents(ctx context.Context) ([]string, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -545,14 +503,8 @@ func (c *WSClient) ListAgents(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -579,14 +531,6 @@ func (c *WSClient) ListAgents(ctx context.Context) ([]string, error) {
 }
 
 func (c *WSClient) ListChannels(ctx context.Context) ([]string, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -596,14 +540,8 @@ func (c *WSClient) ListChannels(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -630,14 +568,6 @@ func (c *WSClient) ListChannels(ctx context.Context) ([]string, error) {
 }
 
 func (c *WSClient) ListTools(ctx context.Context) ([]string, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -647,14 +577,8 @@ func (c *WSClient) ListTools(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -681,14 +605,6 @@ func (c *WSClient) ListTools(ctx context.Context) ([]string, error) {
 }
 
 func (c *WSClient) AbortChat(ctx context.Context) error {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -698,33 +614,11 @@ func (c *WSClient) AbortChat(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
-	if err != nil {
-		return err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
-		return err
-	}
-
-	if !resp.OK {
-		return fmt.Errorf("%s", resp.Error)
-	}
-
-	return nil
+	_, err := c.call(ctx, frame)
+	return err
 }
 
 func (c *WSClient) GetChatHistory(ctx context.Context, sessionID string) ([]map[string]any, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -737,14 +631,8 @@ func (c *WSClient) GetChatHistory(ctx context.Context, sessionID string) ([]map[
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -767,14 +655,6 @@ func (c *WSClient) GetChatHistory(ctx context.Context, sessionID string) ([]map[
 }
 
 func (c *WSClient) Ping(ctx context.Context) error {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -784,33 +664,11 @@ func (c *WSClient) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
-	if err != nil {
-		return err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
-		return err
-	}
-
-	if !resp.OK {
-		return fmt.Errorf("%s", resp.Error)
-	}
-
-	return nil
+	_, err := c.call(ctx, frame)
+	return err
 }
 
 func (c *WSClient) ListMethods(ctx context.Context) ([]string, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -820,14 +678,8 @@ func (c *WSClient) ListMethods(ctx context.Context) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -869,14 +721,6 @@ type PairingCodeResult struct {
 }
 
 func (c *WSClient) GeneratePairingCode(ctx context.Context, deviceName, deviceType string) (*PairingCodeResult, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -890,14 +734,8 @@ func (c *WSClient) GeneratePairingCode(ctx context.Context, deviceName, deviceTy
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -928,14 +766,6 @@ func (c *WSClient) GeneratePairingCode(ctx context.Context, deviceName, deviceTy
 }
 
 func (c *WSClient) ValidatePairingCode(ctx context.Context, code string) (bool, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return false, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -948,14 +778,8 @@ func (c *WSClient) ValidatePairingCode(ctx context.Context, code string) (bool, 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return false, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return false, err
 	}
 
@@ -973,14 +797,6 @@ func (c *WSClient) ValidatePairingCode(ctx context.Context, code string) (bool, 
 }
 
 func (c *WSClient) CompletePairing(ctx context.Context, code, deviceID, deviceName string) (map[string]any, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -995,14 +811,8 @@ func (c *WSClient) CompletePairing(ctx context.Context, code, deviceID, deviceNa
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -1019,14 +829,6 @@ func (c *WSClient) CompletePairing(ctx context.Context, code, deviceID, deviceNa
 }
 
 func (c *WSClient) ListPairedDevices(ctx context.Context) ([]map[string]any, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -1036,14 +838,8 @@ func (c *WSClient) ListPairedDevices(ctx context.Context) ([]map[string]any, err
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -1066,14 +862,6 @@ func (c *WSClient) ListPairedDevices(ctx context.Context) ([]map[string]any, err
 }
 
 func (c *WSClient) UnpairDevice(ctx context.Context, deviceID string) error {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -1086,33 +874,11 @@ func (c *WSClient) UnpairDevice(ctx context.Context, deviceID string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
-	if err != nil {
-		return err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
-		return err
-	}
-
-	if !resp.OK {
-		return fmt.Errorf("%s", resp.Error)
-	}
-
-	return nil
+	_, err := c.call(ctx, frame)
+	return err
 }
 
 func (c *WSClient) GetPairingStatus(ctx context.Context) (map[string]any, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -1122,14 +888,8 @@ func (c *WSClient) GetPairingStatus(ctx context.Context) (map[string]any, error)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 
@@ -1146,14 +906,6 @@ func (c *WSClient) GetPairingStatus(ctx context.Context) (map[string]any, error)
 }
 
 func (c *WSClient) RenewPairing(ctx context.Context, deviceID string) (map[string]any, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("not connected to gateway")
-	}
-	conn := c.conn
-	c.mu.RUnlock()
-
 	frame := openClawWSFrame{
 		Type:   "req",
 		ID:     uniqueID("req"),
@@ -1166,14 +918,8 @@ func (c *WSClient) RenewPairing(ctx context.Context, deviceID string) (map[strin
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := conn.WriteJSON(frame)
+	resp, err := c.call(ctx, frame)
 	if err != nil {
-		return nil, err
-	}
-
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	var resp openClawWSFrame
-	if err := conn.ReadJSON(&resp); err != nil {
 		return nil, err
 	}
 

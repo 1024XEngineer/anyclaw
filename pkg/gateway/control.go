@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -35,6 +37,9 @@ type Gateway struct {
 	handlers   map[string]MessageHandler
 	handlersMu sync.RWMutex
 	stopCh     chan struct{}
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
+	startedAt  time.Time
 }
 
 // Client WebSocket 客户端
@@ -46,6 +51,7 @@ type Client struct {
 	SessionID  string
 	Connected  time.Time
 	LastActive time.Time
+	closeOnce  sync.Once
 }
 
 // MessageHandler 消息处理器
@@ -96,6 +102,7 @@ func NewGateway(config GatewayConfig) *Gateway {
 
 // Start 启动 Gateway
 func (g *Gateway) Start(ctx context.Context) error {
+	g.startedAt = time.Now()
 	mux := http.NewServeMux()
 
 	// WebSocket 端点
@@ -119,7 +126,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 
 	// 启动清理协程
-	go g.cleanupClients(ctx)
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		g.cleanupClients(ctx)
+	}()
 
 	// 启动服务器
 	if g.config.EnableTLS {
@@ -130,7 +141,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 // Stop 停止 Gateway
 func (g *Gateway) Stop(ctx context.Context) error {
-	close(g.stopCh)
+	g.stopOnce.Do(func() {
+		close(g.stopCh)
+	})
 
 	// 关闭所有客户端连接
 	g.clientsMu.Lock()
@@ -139,6 +152,9 @@ func (g *Gateway) Stop(ctx context.Context) error {
 		client.Conn.Close()
 	}
 	g.clientsMu.Unlock()
+
+	// 等待所有 goroutine 结束
+	g.wg.Wait()
 
 	// 关闭服务器
 	if g.server != nil {
@@ -188,17 +204,26 @@ func (g *Gateway) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	g.clientsMu.Unlock()
 
 	// 启动读写协程
-	go g.readPump(client)
-	go g.writePump(client)
+	g.wg.Add(2)
+	go func() {
+		defer g.wg.Done()
+		g.readPump(client, r.Context())
+	}()
+	go func() {
+		defer g.wg.Done()
+		g.writePump(client)
+	}()
 }
 
 // readPump 读取消息
-func (g *Gateway) readPump(client *Client) {
+func (g *Gateway) readPump(client *Client, ctx context.Context) {
 	defer func() {
 		g.clientsMu.Lock()
 		delete(g.clients, client.ID)
 		g.clientsMu.Unlock()
-		client.Conn.Close()
+		client.closeOnce.Do(func() {
+			client.Conn.Close()
+		})
 	}()
 
 	client.Conn.SetReadLimit(4096)
@@ -221,7 +246,7 @@ func (g *Gateway) readPump(client *Client) {
 		client.LastActive = time.Now()
 
 		// 处理消息
-		go g.handleMessage(client, message)
+		go g.handleMessage(ctx, client, message)
 	}
 }
 
@@ -230,7 +255,9 @@ func (g *Gateway) writePump(client *Client) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
-		client.Conn.Close()
+		client.closeOnce.Do(func() {
+			client.Conn.Close()
+		})
 	}()
 
 	for {
@@ -256,7 +283,7 @@ func (g *Gateway) writePump(client *Client) {
 }
 
 // handleMessage 处理消息
-func (g *Gateway) handleMessage(client *Client, data []byte) {
+func (g *Gateway) handleMessage(ctx context.Context, client *Client, data []byte) {
 	var msg Message
 	if err := json.Unmarshal(data, &msg); err != nil {
 		g.sendError(client, msg.ID, 400, "invalid message format")
@@ -276,7 +303,6 @@ func (g *Gateway) handleMessage(client *Client, data []byte) {
 	}
 
 	// 执行处理器
-	ctx := context.Background()
 	if err := handler(ctx, client, &msg); err != nil {
 		g.sendError(client, msg.ID, 500, err.Error())
 		return
@@ -303,7 +329,7 @@ func (g *Gateway) sendError(client *Client, id string, code int, message string)
 	select {
 	case client.Send <- data:
 	default:
-		close(client.Send)
+		// skip when buffer is full to avoid closing channel concurrently
 	}
 }
 
@@ -397,7 +423,12 @@ func (g *Gateway) cleanupClients(ctx context.Context) {
 			now := time.Now()
 			for id, client := range g.clients {
 				if now.Sub(client.LastActive) > 5*time.Minute {
-					close(client.Send)
+					func() {
+						defer func() {
+							recover()
+						}()
+						close(client.Send)
+					}()
 					client.Conn.Close()
 					delete(g.clients, id)
 				}
@@ -426,7 +457,7 @@ func (g *Gateway) handleStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":     "running",
 		"clients":    clientCount,
-		"uptime":     time.Since(time.Now()).String(),
+		"uptime":     time.Since(g.startedAt).String(),
 		"max_conns":  g.config.MaxConnections,
 		"enable_tls": g.config.EnableTLS,
 	})
@@ -452,5 +483,9 @@ func (g *Gateway) handleTools(w http.ResponseWriter, r *http.Request) {
 
 // generateClientID 生成客户端 ID
 func generateClientID() string {
-	return fmt.Sprintf("client_%d", time.Now().UnixNano())
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("client_%d", time.Now().UnixNano())
+	}
+	return "client_" + hex.EncodeToString(b)
 }

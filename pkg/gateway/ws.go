@@ -33,6 +33,7 @@ type openClawWSConn struct {
 	user        *AuthUser
 	writeMu     sync.Mutex
 	connected   bool
+	connMu      sync.RWMutex
 	challenge   string
 	eventStream chan *Event
 	closed      chan struct{}
@@ -172,6 +173,10 @@ func (c *openClawWSConn) run(ctx context.Context) {
 	}); err != nil {
 		return
 	}
+	var handlerWg sync.WaitGroup
+	defer func() {
+		handlerWg.Wait()
+	}()
 	for {
 		var frame openClawWSFrame
 		if err := c.conn.ReadJSON(&frame); err != nil {
@@ -182,9 +187,13 @@ func (c *openClawWSConn) run(ctx context.Context) {
 			_ = c.writeError(frame.ID, "frame type must be req")
 			continue
 		}
-		if err := c.handleRequest(ctx, frame); err != nil {
-			_ = c.writeError(frame.ID, err.Error())
-		}
+		handlerWg.Add(1)
+		go func(f openClawWSFrame) {
+			defer handlerWg.Done()
+			if err := c.handleRequest(ctx, f); err != nil {
+				_ = c.writeError(f.ID, err.Error())
+			}
+		}(frame)
 	}
 }
 
@@ -193,7 +202,10 @@ func (c *openClawWSConn) handleRequest(ctx context.Context, frame openClawWSFram
 	if method == "" {
 		return fmt.Errorf("method is required")
 	}
-	if !c.connected && !strings.EqualFold(method, "connect") {
+	c.connMu.RLock()
+	connected := c.connected
+	c.connMu.RUnlock()
+	if !connected && !strings.EqualFold(method, "connect") {
 		return fmt.Errorf("connect required before calling %s", method)
 	}
 	switch strings.ToLower(method) {
@@ -202,8 +214,10 @@ func (c *openClawWSConn) handleRequest(ctx context.Context, frame openClawWSFram
 		if provided == "" || provided != c.challenge {
 			return c.writeResponse(frame.ID, false, nil, "challenge verification failed")
 		}
+		c.connMu.Lock()
 		c.connected = true
 		c.connectedAt = time.Now().UTC()
+		c.connMu.Unlock()
 		return c.writeResponse(frame.ID, true, map[string]any{
 			"status":       "connected",
 			"protocol":     "openclaw.gateway.v1",
@@ -378,10 +392,12 @@ func (c *openClawWSConn) handleRequest(ctx context.Context, frame openClawWSFram
 		if providerRef == "" {
 			return fmt.Errorf("provider_ref required")
 		}
-		// 调用 REST 处理逻辑
+		reqBody, err := json.Marshal(map[string]string{"provider_ref": providerRef})
+		if err != nil {
+			return fmt.Errorf("failed to marshal request: %v", err)
+		}
 		w := httptest.NewRecorder()
-		reqBody := fmt.Sprintf(`{"provider_ref": "%s"}`, providerRef)
-		req := httptest.NewRequest(http.MethodPost, "/api/providers/default", strings.NewReader(reqBody))
+		req := httptest.NewRequest(http.MethodPost, "/api/providers/default", bytes.NewReader(reqBody))
 		req = req.WithContext(ctx)
 		c.server.handleDefaultProvider(w, req)
 		if w.Code >= 400 {
