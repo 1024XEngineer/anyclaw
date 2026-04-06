@@ -1,1 +1,0 @@
-"""Audacity CLI - Core modules."""

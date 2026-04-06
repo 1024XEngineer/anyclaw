@@ -1,2 +1,0 @@
-"""Mermaid utility modules."""
-

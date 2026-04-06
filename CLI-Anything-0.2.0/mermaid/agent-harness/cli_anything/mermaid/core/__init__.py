@@ -1,2 +1,0 @@
-"""Core Mermaid CLI modules."""
-
