@@ -30,7 +30,7 @@
     }
   },
   "agent": {
-    "name": "AnyClaw",
+    "name": "艾莉",
     "description": "Your AI assistant with file-based memory",
     "work_dir": ".anyclaw",
     "working_dir": "workflows",
@@ -45,8 +45,18 @@
       "name": "Primary Ollama",
       "type": "ollama",
       "provider": "ollama",
-      "default_model": "llama3.2",
       "base_url": "http://127.0.0.1:11434",
+      "default_model": "llama3.2",
+      "enabled": true
+    },
+    {
+      "id": "primary-qwen",
+      "name": "Primary Qwen",
+      "type": "qwen",
+      "provider": "qwen",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "",
+      "default_model": "qwen-max",
       "enabled": true
     }
   ],
@@ -204,7 +214,7 @@
       "C:\\Users\\Lenovo\\NTUSER.DAT"
     ],
     "command_timeout_seconds": 30,
-    "risk_acknowledged": false
+    "risk_acknowledged": true
   },
   "orchestrator": {
     "enabled": true,

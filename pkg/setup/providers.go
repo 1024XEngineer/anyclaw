@@ -9,19 +9,20 @@ import (
 )
 
 type ProviderOption struct {
-	ID             string
-	Label          string
-	DefaultModel   string
-	Hint           string
-	RequiresAPIKey bool
+	ID              string
+	Label           string
+	DefaultModel    string
+	AvailableModels []string
+	Hint            string
+	RequiresAPIKey  bool
 }
 
 var providerOptions = []ProviderOption{
-	{ID: "openai", Label: "OpenAI", DefaultModel: "gpt-4o-mini", Hint: "Use your OpenAI API key.", RequiresAPIKey: true},
-	{ID: "anthropic", Label: "Anthropic", DefaultModel: "claude-sonnet-4-7", Hint: "Use your Anthropic API key.", RequiresAPIKey: true},
-	{ID: "qwen", Label: "Qwen", DefaultModel: "qwen-plus", Hint: "Use your DashScope API key.", RequiresAPIKey: true},
-	{ID: "ollama", Label: "Ollama", DefaultModel: "llama3.2", Hint: "No API key needed. Make sure Ollama is running locally.", RequiresAPIKey: false},
-	{ID: "compatible", Label: "OpenAI-compatible", DefaultModel: "gpt-4o-mini", Hint: "Use your compatible endpoint URL and API key.", RequiresAPIKey: true},
+	{ID: "openai", Label: "OpenAI", DefaultModel: "gpt-4o-mini", AvailableModels: []string{"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"}, Hint: "Use your OpenAI API key.", RequiresAPIKey: true},
+	{ID: "anthropic", Label: "Anthropic", DefaultModel: "claude-sonnet-4-7", AvailableModels: []string{"claude-opus-4-5", "claude-sonnet-4-7", "claude-haiku-3-5"}, Hint: "Use your Anthropic API key.", RequiresAPIKey: true},
+	{ID: "qwen", Label: "Qwen", DefaultModel: "qwen-plus", AvailableModels: []string{"qwen-plus", "qwen-turbo", "qwen-max", "qwen2.5-72b-instruct", "qwen2.5-14b-instruct", "qwq-32b-preview", "qwen-coder-plus"}, Hint: "Use your DashScope API key.", RequiresAPIKey: true},
+	{ID: "ollama", Label: "Ollama", DefaultModel: "llama3.2", AvailableModels: []string{"llama3.2", "llama3.1", "codellama", "mistral", "qwen2.5"}, Hint: "No API key needed. Make sure Ollama is running locally.", RequiresAPIKey: false},
+	{ID: "compatible", Label: "OpenAI-compatible", DefaultModel: "gpt-4o-mini", AvailableModels: nil, Hint: "Use your compatible endpoint URL and API key.", RequiresAPIKey: true},
 }
 
 func ProviderOptions() []ProviderOption {
@@ -42,6 +43,16 @@ func DefaultModelForProvider(provider string) string {
 		}
 	}
 	return "gpt-4o-mini"
+}
+
+func AvailableModelsForProvider(provider string) []string {
+	provider = CanonicalProvider(provider)
+	for _, option := range providerOptions {
+		if option.ID == provider {
+			return option.AvailableModels
+		}
+	}
+	return nil
 }
 
 func ProviderLabel(provider string) string {

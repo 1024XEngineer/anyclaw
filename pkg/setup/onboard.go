@@ -85,7 +85,7 @@ func applyOnboardingDefaults(cfg *config.Config) {
 		return
 	}
 	cfg.LLM.Provider = firstNonEmpty(CanonicalProvider(cfg.LLM.Provider), "openai")
-	cfg.LLM.Model = firstNonEmpty(cfg.LLM.Model, DefaultModelForProvider(cfg.LLM.Provider))
+	// Don't set model default here - it will be set after user chooses provider
 	cfg.Agent.Name = firstNonEmpty(cfg.Agent.Name, "AnyClaw")
 	cfg.Agent.WorkDir = firstNonEmpty(cfg.Agent.WorkDir, ".anyclaw")
 	cfg.Agent.WorkingDir = firstNonEmpty(cfg.Agent.WorkingDir, "workflows/default")
@@ -132,6 +132,14 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 		selectedProvider = currentProvider
 	}
 	sameProvider = CanonicalProvider(currentProvider) == CanonicalProvider(selectedProvider)
+
+	availableModels := AvailableModelsForProvider(selectedProvider)
+	if len(availableModels) > 0 {
+		fmt.Fprintln(output, "  Available models:")
+		for _, m := range availableModels {
+			fmt.Fprintf(output, "    - %s\n", m)
+		}
+	}
 
 	currentModel := firstNonEmpty(cfg.LLM.Model, DefaultModelForProvider(selectedProvider))
 	modelChoice, err := prompt(reader, output, fmt.Sprintf("Model [%s]", currentModel))

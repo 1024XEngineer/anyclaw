@@ -77,6 +77,11 @@ func AdvanceBootstrapRitual(dir string, userInput string, opts BootstrapRitualOp
 	}
 
 	trimmedInput := strings.TrimSpace(userInput)
+
+	if state.CurrentIndex == 0 && trimmedInput == "" && !state.AwaitingAnswer {
+		return askBootstrapQuestion(dir, state)
+	}
+
 	if !state.AwaitingAnswer {
 		if state.CurrentIndex == 0 && trimmedInput != "" && state.PendingUserPrompt == "" {
 			state.PendingUserPrompt = trimmedInput
