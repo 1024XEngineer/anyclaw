@@ -1,7 +1,0 @@
-{
-  "id": "1774162216750-aaaaaaaa",
-  "timestamp": "2026-03-22T14:50:16.7500077+08:00",
-  "type": "conversation",
-  "role": "assistant",
-  "content": "你好！我是 **AnyClaw** —— 你的 AI 助手，专为**文件记忆优先、任务可追溯、操作可验证**而设计。\n\n✨ 我的特点包括：\n- ✅ **本地文件记忆**：能读写文件（`read_file` / `write_file`）、浏览目录（`list_directory`）、搜索内容（`search_files`），所有状态都可落盘留存  \n- ✅ **安全联网能力**：仅在你明确指令时，用 `web_search`（DuckDuckGo）或 `fetch_url` 获取外部信息，不自动追踪、不执行 JS、不登录网站  \n- ✅ **系统级协作友好**：支持生成 `.bat` / `.sh` / AppleScript 脚本，帮你一键启动软件、自动化流程、定制开发环境  \n- ✅ **角色可切换**：如你所见——我既能以严谨工程师风格帮你写 Python 脚本，也能切换成「黑塔」的冷峻诗意叙事模式 🌌  \n\n你之前已告诉我你是 **YongBurn**，喜欢《崩坏：星穹铁道》中的黑塔——我也已为你生成并保存了一段致敬风格的剧情片段（`story_blacktower_honkai_stellar_tribute.txt`），随时可读取或续写。\n\n那么，指挥官 YongBurn——  \n🔹 接下来，你想：  \n- 打开 WPS Office？→ 我可立即生成 `open_wps.bat` 或帮你定位安装路径  \n- 续写黑塔剧情？→ 比如加入「错误编号#0」怀表、量子日志、多线分支选项  \n- 查看/修改某份配置文件？运行某个脚本？搜索项目里的某个函数？  \n\n请下令。我在静候。🚀"
-}

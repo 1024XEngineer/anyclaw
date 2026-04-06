@@ -1,7 +1,0 @@
-{
-  "id": "1775388762289-iiiiiiii",
-  "timestamp": "2026-04-05T19:32:42.289997+08:00",
-  "type": "conversation",
-  "role": "assistant",
-  "content": "好的，我将尝试帮助你打开 Steam。首先，我需要确认你的操作系统类型（Windows、macOS 或 Linux），因为启动 Steam 的方法可能因系统而异。\n\n如果你使用的是 **Windows** 系统，我可以尝试通过命令行或直接调用 Steam 的可执行文件来启动它。如果你使用的是 **macOS 或 Linux**，步骤会有所不同。\n\n请告诉我你的操作系统类型，以便我继续操作。"
-}

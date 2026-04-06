@@ -1,7 +1,0 @@
-{
-  "id": "1775011606446-mmmmmmmm",
-  "timestamp": "2026-04-01T10:46:46.446729+08:00",
-  "type": "conversation",
-  "role": "assistant",
-  "content": "✅ **任务完成**\n\n我已成功读取文件 `D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\openclaw\\skills\\github\\SKILL.md` 的内容。\n\n### 文件内容概要：\n\n这是一个 **GitHub Skill** 文档，定义了使用 GitHub CLI (`gh`) 进行 GitHub 操作的能力范围和指南。\n\n**核心信息：**\n- **名称**: github\n- **描述**: 通过 `gh` CLI 执行 GitHub 操作（issues、PRs、CI runs、code review、API queries）\n- **图标**: 🐙\n- **依赖**: 需要安装 `gh` 命令行工具\n\n**使用场景：**\n- ✅ 检查 PR 状态、审查或合并准备情况\n- ✅ 查看 CI/工作流运行状态和日志\n- ✅ 创建、关闭或评论 issues\n- ✅ 创建或合并 pull requests\n- ✅ 查询 GitHub API 获取仓库数据\n- ✅ 列出仓库、发布版本或协作者\n\n**不适用场景：**\n- ❌ 本地 git 操作（commit、push、pull、branch）→ 应直接使用 `git`\n- ❌ 非 GitHub 仓库（GitLab、Bitbucket）→ 需要不同的 CLI\n- ❌ 克隆仓库 → 使用 `git clone`\n- ❌ 审查实际代码变更 → 使用 `coding-agent` skill\n- ❌ 复杂多文件差异 → 使用 `coding-agent` 或直接读取文件\n\n**包含内容：**\n- 设置说明（`gh auth login`）\n- 常用命令（PRs、Issues、CI/Workflow Runs、API Queries）\n- JSON 输出和 `--jq` 过滤示例\n- 实用模板（PR Review Summary、Issue Triage）\n- 注意事项\n\n---\n\n**验证状态：**\n- ✅ 文件路径正确\n- ✅ 文件存在且可读\n- ✅ 内容完整（包含元数据、使用指南、命令示例）\n- ✅ 格式为 Markdown\n- ✅ 无未验证部分\n\n任务已全部完成。"
-}

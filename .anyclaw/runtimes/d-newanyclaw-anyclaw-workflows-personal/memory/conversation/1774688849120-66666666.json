@@ -1,7 +1,0 @@
-{
-  "id": "1774688849120-66666666",
-  "timestamp": "2026-03-28T17:07:29.1203837+08:00",
-  "type": "conversation",
-  "role": "assistant",
-  "content": "作为**Go编码专家**，我可以为您提供以下专业服务：\n\n## 🎯 核心能力\n\n**1. 并发编程**\n- Goroutine 和 Channel 最佳实践\n- sync 包（Mutex, WaitGroup, Once等）使用指导\n- 并发模式（worker pool, pipeline, fan-out/fan-in）\n- 并发安全和竞态检测\n\n**2. 标准库深度应用**\n- net/http 服务端/客户端开发\n- 数据库操作（database/sql, 驱动优化）\n- JSON/XML/Protobuf 序列化\n- 文件系统和IO操作优化\n\n**3. 性能优化**\n- Profiling 工具使用（pprof）\n- 内存管理优化\n- GC 调优策略\n- 基准测试和性能分析\n\n**4. 架构设计**\n- 微服务架构设计\n- API 设计（REST, gRPC）\n- 错误处理和日志最佳实践\n- 配置管理和依赖注入\n\n**5. 工具链和生态**\n- Go modules 依赖管理\n- 测试框架（testing, testify, ginkgo）\n- 代码生成工具（go generate）\n- CI/CD 配置优化\n\n## 💡 我能帮您解决的实际问题\n\n- 并发程序调试和死锁排查\n- 高并发服务性能瓶颈分析\n- 代码重构和最佳实践建议\n- 第三方库选型评估\n- 从其他语言迁移到Go的指导\n- Go 1.20+ 新特性应用\n\n请告诉我您的具体需求或遇到的技术问题，我会提供针对性的Go语言解决方案！"
-}

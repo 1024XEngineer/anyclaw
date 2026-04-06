@@ -1,7 +1,0 @@
-{
-  "id": "1775401074093-uuuuuuuu",
-  "timestamp": "2026-04-05T22:57:54.0937937+08:00",
-  "type": "conversation",
-  "role": "assistant",
-  "content": "我可以帮助您通过以下方式控制 Microsoft Edge 浏览器：\n\n### 1. **打开 Edge**\n- 使用工具 `browser_open` 或直接调用系统命令打开 Edge。\n\n### 2. **导航到特定网页**\n- 使用 `browser_navigate` 工具，输入 URL 地址，将 Edge 导航到指定网页。\n\n### 3. **操作网页内容**\n- **点击元素**：使用 `browser_click` 工具点击页面上的按钮或链接。\n- **填写表单**：使用 `browser_select` 或 `browser_type` 工具在输入框中输入文本。\n- **选择选项**：使用 `browser_select` 工具选择下拉菜单中的选项。\n\n### 4. **管理标签页**\n- **新建标签页**：使用 `browser_tab_new` 工具创建新标签页。\n- **切换标签页**：使用 `browser_tab_switch` 工具切换当前活动的标签页。\n- **关闭标签页**：使用 `browser_tab_close` 工具关闭当前标签页。\n\n### 5. **下载文件**\n- 使用 `browser_download` 工具从网页上下载文件。\n\n### 6. **截图和验证**\n- **截图网页**：使用 `browser_screenshot` 工具截取当前网页的屏幕截图。\n- **验证内容**：使用 `browser_wait` 工具等待特定元素加载完成，确保操作成功。\n\n### 7. **执行 JavaScript**\n- 使用 `browser_eval` 工具在网页中执行 JavaScript 代码，实现更复杂的交互。\n\n### 8. **关闭 Edge**\n- 使用 `browser_close` 工具关闭浏览器会话。\n\n如果您需要具体的操作步骤或示例，请告诉我您希望完成的任务，我将为您提供详细的指导。需要我帮您执行某个具体任务吗？"
-}
