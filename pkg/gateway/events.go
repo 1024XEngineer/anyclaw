@@ -35,6 +35,9 @@ func (b *Bus) Unsubscribe(ch chan *Event) {
 }
 
 func (b *Bus) Publish(event *Event) {
+	if b == nil || event == nil {
+		return
+	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for ch := range b.subscribers {

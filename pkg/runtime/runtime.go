@@ -563,7 +563,7 @@ func GatewayAddress(cfg *config.Config) string {
 }
 
 func GatewayURL(cfg *config.Config) string {
-	return "http://" + GatewayAddress(cfg)
+	return "ws://" + GatewayAddress(cfg) + "/ws"
 }
 
 func resolveMainAgentPersonality(cfg *config.Config) config.PersonalitySpec {

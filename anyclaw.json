@@ -1,10 +1,10 @@
 {
   "llm": {
-    "provider": "ollama",
-    "model": "llama3.2",
-    "api_key": "",
-    "base_url": "http://127.0.0.1:11434",
-    "default_provider_ref": "primary-ollama",
+    "provider": "qwen",
+    "model": "qwen-max",
+    "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "default_provider_ref": "primary-qwen",
     "max_tokens": 4096,
     "temperature": 0.7,
     "proxy": "",
@@ -30,14 +30,17 @@
     }
   },
   "agent": {
-    "name": "艾莉",
+    "name": "黑塔",
     "description": "Your AI assistant with file-based memory",
     "work_dir": ".anyclaw",
     "working_dir": "workflows",
     "permission_level": "limited",
     "require_confirmation_for_dangerous": true,
     "profiles": null,
-    "active_profile": ""
+    "active_profile": "",
+    "lang": "CN",
+    "work_focus": "通用",
+    "behavior_style": "简洁"
   },
   "providers": [
     {
@@ -55,7 +58,7 @@
       "type": "qwen",
       "provider": "qwen",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "api_key": "",
+      "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
       "default_model": "qwen-max",
       "enabled": true
     }
@@ -214,7 +217,10 @@
       "C:\\Users\\Lenovo\\NTUSER.DAT"
     ],
     "command_timeout_seconds": 30,
-    "risk_acknowledged": true
+    "risk_acknowledged": true,
+    "pairing_enabled": false,
+    "pairing_ttl_hours": 0,
+    "pairing_max_devices": 0
   },
   "orchestrator": {
     "enabled": true,

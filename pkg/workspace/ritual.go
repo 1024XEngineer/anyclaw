@@ -40,19 +40,19 @@ type BootstrapRitualOptions struct {
 var bootstrapQuestions = []BootstrapQuestion{
 	{
 		ID:     "user_profile",
-		Prompt: "Question 1/4: What should I call you in this workspace, and which language should I default to?",
+		Prompt: "Question 1/4: What should I call you, and what language should I default to when we work together?",
 	},
 	{
 		ID:     "workspace_focus",
-		Prompt: "Question 2/4: What kind of work should I mainly help with in this workspace?",
+		Prompt: "Question 2/4: What kind of work do you mainly want help with in this workspace?",
 	},
 	{
 		ID:     "assistant_style",
-		Prompt: "Question 3/4: How should I behave by default? You can mention tone, speed vs thoroughness, and how proactive I should be.",
+		Prompt: "Question 3/4: How should I usually behave: tone, level of detail, speed, and how proactive I should be?",
 	},
 	{
 		ID:     "constraints",
-		Prompt: "Question 4/4: Any constraints, preferences, or hard boundaries I should follow?",
+		Prompt: "Question 4/4: Are there any constraints, preferences, or red lines I should always follow?",
 	},
 }
 
@@ -115,9 +115,9 @@ func AdvanceBootstrapRitual(dir string, userInput string, opts BootstrapRitualOp
 		}
 		response := "Workspace bootstrap complete. I updated the workspace identity files and removed BOOTSTRAP.md."
 		if strings.TrimSpace(state.PendingUserPrompt) != "" {
-			response += fmt.Sprintf("\n\nI did not execute your original request yet: %s\n\nSend it again and I will continue with the new workspace profile.", state.PendingUserPrompt)
+			response += fmt.Sprintf("\n\nI have not executed your earlier request yet: %s\n\nSend it again and I will continue with the new workspace profile.", state.PendingUserPrompt)
 		} else {
-			response += "\n\nYou can continue with your actual task now."
+			response += "\n\nYou can continue with your real task now."
 		}
 		return &BootstrapAdvanceResult{
 			Active:    true,
@@ -157,7 +157,7 @@ func currentBootstrapQuestion(state *BootstrapState) (*BootstrapAdvanceResult, e
 	if state.CurrentIndex < 0 || state.CurrentIndex >= len(bootstrapQuestions) {
 		return nil, fmt.Errorf("bootstrap question index out of range")
 	}
-	intro := "This workspace is new, so I need a short one-time bootstrap before normal work."
+	intro := "Hello. I am AnyClaw, a local execution-oriented AI assistant.\n\nI can help with files, code search, commands, browser automation, desktop control, channel integrations, and repeatable workflows.\n\nThis workspace is brand new, so I need a quick setup before we start."
 	if state.CurrentIndex > 0 {
 		intro = ""
 	}

@@ -119,11 +119,26 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 	currentProvider := firstNonEmpty(cfg.LLM.Provider, "openai")
 	sameProvider := false
 
-	fmt.Fprintln(output, "Step 1/7: Choose provider")
+	fmt.Fprintln(output, "")
+	fmt.Fprintln(output, "=== AnyClaw 设置向导 ===")
+	fmt.Fprintln(output, "")
+	fmt.Fprintln(output, "Step 1/8: 选择语言")
+	langPrompt := "语言 [zh-CN]"
+	langChoice, err := prompt(reader, output, langPrompt)
+	if err != nil {
+		return err
+	}
+	langChoice = strings.TrimSpace(langChoice)
+	if langChoice == "" {
+		langChoice = "zh-CN"
+	}
+	cfg.Agent.Lang = langChoice
+
+	fmt.Fprintln(output, "Step 2/8: 选择 LLM 提供商")
 	for idx, option := range ProviderOptions() {
 		fmt.Fprintf(output, "  %d. %s (%s)\n", idx+1, option.Label, option.ID)
 	}
-	providerChoice, err := prompt(reader, output, fmt.Sprintf("Provider [%s]", currentProvider))
+	providerChoice, err := prompt(reader, output, fmt.Sprintf("提供商 [%s]", currentProvider))
 	if err != nil {
 		return err
 	}
@@ -135,14 +150,14 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 
 	availableModels := AvailableModelsForProvider(selectedProvider)
 	if len(availableModels) > 0 {
-		fmt.Fprintln(output, "  Available models:")
+		fmt.Fprintln(output, "  可用模型:")
 		for _, m := range availableModels {
 			fmt.Fprintf(output, "    - %s\n", m)
 		}
 	}
 
 	currentModel := firstNonEmpty(cfg.LLM.Model, DefaultModelForProvider(selectedProvider))
-	modelChoice, err := prompt(reader, output, fmt.Sprintf("Model [%s]", currentModel))
+	modelChoice, err := prompt(reader, output, fmt.Sprintf("模型 [%s]", currentModel))
 	if err != nil {
 		return err
 	}
@@ -167,7 +182,7 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 	}
 	if ProviderNeedsAPIKey(selectedProvider) {
 		fmt.Fprintf(output, "%s\n", ProviderHint(selectedProvider))
-		apiKey, err = prompt(reader, output, "API key [press Enter to keep current]")
+		apiKey, err = prompt(reader, output, "API key [回车保持当前]")
 		if err != nil {
 			return err
 		}
@@ -177,13 +192,13 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 	}
 
 	workspacePrompt := firstNonEmpty(cfg.Agent.WorkingDir, "workflows/default")
-	workingDir, err := prompt(reader, output, fmt.Sprintf("Workspace [%s]", workspacePrompt))
+	workingDir, err := prompt(reader, output, fmt.Sprintf("工作区目录 [%s]", workspacePrompt))
 	if err != nil {
 		return err
 	}
 
 	namePrompt := firstNonEmpty(cfg.Agent.Name, "AnyClaw")
-	agentName, err := prompt(reader, output, fmt.Sprintf("Agent name [%s]", namePrompt))
+	agentName, err := prompt(reader, output, fmt.Sprintf("Agent 名称 [%s]", namePrompt))
 	if err != nil {
 		return err
 	}
@@ -203,13 +218,39 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 	}
 	EnsurePrimaryProviderProfile(cfg, selectedProvider, selectedModel, cfg.LLM.APIKey, cfg.LLM.BaseURL)
 
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Step 6/7: Channel security defaults")
-	fmt.Fprintln(output, "  DM policy: allow-list (only allowed users can DM)")
-	fmt.Fprintln(output, "  Group policy: mention-only (bot responds only when @mentioned)")
-	fmt.Fprintln(output, "  Mention gate: enabled")
-	fmt.Fprintln(output, "  Default deny DM: enabled")
-	secChoice, err := prompt(reader, output, "Accept security defaults? [Y/n]")
+	fmt.Fprintln(output, "")
+	fmt.Fprintln(output, "Step 7/8: 工作偏好设置")
+	fmt.Fprintln(output, "  你希望我主要帮你做什么类型的工作？")
+	fmt.Fprintln(output, "  例如：编程、文档写作、日常任务、浏览器自动化等")
+	workFocus, err := prompt(reader, output, "工作方向 [通用]")
+	if err != nil {
+		return err
+	}
+	cfg.Agent.WorkFocus = firstNonEmpty(workFocus, "通用")
+
+	fmt.Fprintln(output, "  你希望我默认的行为方式是怎样的？")
+	fmt.Fprintln(output, "  例如：简洁快速 / 详细解释 / 主动建议")
+	behaviorStyle, err := prompt(reader, output, "行为风格 [简洁]")
+	if err != nil {
+		return err
+	}
+	cfg.Agent.BehaviorStyle = firstNonEmpty(behaviorStyle, "简洁")
+
+	fmt.Fprintln(output, "  有什么需要遵守的约束或偏好吗？")
+	fmt.Fprintln(output, "  例如：不要删除文件 / 只读模式 / 确认后执行")
+	constraints, err := prompt(reader, output, "约束偏好 [无]")
+	if err != nil {
+		return err
+	}
+	cfg.Agent.Constraints = strings.TrimSpace(constraints)
+
+	fmt.Fprintln(output, "")
+	fmt.Fprintln(output, "Step 8/8: 安全设置")
+	fmt.Fprintln(output, "  DM 策略: allow-list (仅允许的用户可以发私信)")
+	fmt.Fprintln(output, "  群组策略: mention-only (仅 @mention 时响应)")
+	fmt.Fprintln(output, "  提及门控: 启用")
+	fmt.Fprintln(output, "  默认拒绝私信: 启用")
+	secChoice, err := prompt(reader, output, "接受安全默认设置？[Y/n]")
 	if err != nil {
 		return err
 	}
@@ -222,17 +263,20 @@ func runInteractiveOnboarding(cfg *config.Config, input io.Reader, output io.Wri
 		cfg.Security.RiskAcknowledged = true
 	}
 
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "Step 7/7: Risk acknowledgement")
-	fmt.Fprintln(output, "  AnyClaw can execute commands on your system.")
-	fmt.Fprintln(output, "  By acknowledging, you accept responsibility for agent actions.")
-	riskChoice, err := prompt(reader, output, "Acknowledge risks? [Y/n]")
+	fmt.Fprintln(output, "")
+	fmt.Fprintln(output, "风险提示")
+	fmt.Fprintln(output, "  AnyClaw 可以在你的系统上执行命令。")
+	fmt.Fprintln(output, "  确认后，你将对 agent 的行为负责。")
+	riskChoice, err := prompt(reader, output, "确认风险？[Y/n]")
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(strings.ToLower(riskChoice)) != "n" {
 		cfg.Security.RiskAcknowledged = true
 	}
+
+	fmt.Fprintln(output, "")
+	fmt.Fprintln(output, "设置完成！")
 
 	return nil
 }

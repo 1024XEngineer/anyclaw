@@ -114,6 +114,13 @@ var openClawWSMethods = []string{
 	"nodes.get",
 	"nodes.invoke",
 	"node_invoke",
+	"device.pairing.generate",
+	"device.pairing.validate",
+	"device.pairing.pair",
+	"device.pairing.unpair",
+	"device.pairing.list",
+	"device.pairing.status",
+	"device.pairing.renew",
 	"config.get",
 	"config.set",
 	"config.patch",
@@ -506,68 +513,105 @@ func (c *openClawWSConn) handleRequest(ctx context.Context, frame openClawWSFram
 			return err
 		}
 		return c.writeResponse(frame.ID, true, result, "")
-	case "canvas.list":
-		if c.server.canvasStore == nil {
-			return c.writeResponse(frame.ID, true, []any{}, "")
+
+	case "device.pairing.generate":
+		if c.server.devicePairing == nil {
+			return c.writeResponse(frame.ID, false, nil, "device pairing not initialized")
 		}
-		return c.writeResponse(frame.ID, true, c.server.canvasStore.List(), "")
-	case "canvas.get":
-		if c.server.canvasStore == nil {
-			return c.writeResponse(frame.ID, false, nil, "canvas not initialized")
+		deviceName := mapString(frame.Params, "device_name")
+		deviceType := mapString(frame.Params, "device_type")
+		if deviceType == "" {
+			deviceType = "cli"
 		}
-		id := mapString(frame.Params, "id")
-		if id == "" {
-			return c.writeResponse(frame.ID, false, nil, "id is required")
-		}
-		entry, ok := c.server.canvasStore.Get(id)
-		if !ok {
-			return c.writeResponse(frame.ID, false, nil, "canvas entry not found")
-		}
-		return c.writeResponse(frame.ID, true, entry, "")
-	case "canvas.push":
-		if c.server.canvasStore == nil {
-			return c.writeResponse(frame.ID, false, nil, "canvas not initialized")
-		}
-		content := mapString(frame.Params, "content")
-		if content == "" {
-			return c.writeResponse(frame.ID, false, nil, "content is required")
-		}
-		id := mapString(frame.Params, "id")
-		name := mapString(frame.Params, "name")
-		contentType := mapString(frame.Params, "type")
-		agent := mapString(frame.Params, "agent")
-		reset, _ := frame.Params["reset"].(bool)
-		if reset && id != "" {
-			_ = c.server.canvasStore.Reset(id)
-		}
-		entry, err := c.server.canvasStore.Push(id, name, content, contentType, agent)
+		code, err := c.server.devicePairing.GeneratePairingCode(deviceName, deviceType)
 		if err != nil {
 			return c.writeResponse(frame.ID, false, nil, err.Error())
 		}
-		c.server.broadcastCanvasUpdate(entry)
-		return c.writeResponse(frame.ID, true, entry, "")
-	case "canvas.reset":
-		if c.server.canvasStore == nil {
-			return c.writeResponse(frame.ID, false, nil, "canvas not initialized")
+		return c.writeResponse(frame.ID, true, map[string]any{
+			"code":    code.Code,
+			"expires": code.ExpiresAt.Format(time.RFC3339),
+			"device":  code.DeviceName,
+			"type":    code.DeviceType,
+		}, "")
+
+	case "device.pairing.validate":
+		if c.server.devicePairing == nil {
+			return c.writeResponse(frame.ID, false, nil, "device pairing not initialized")
 		}
-		id := mapString(frame.Params, "id")
-		if id == "" {
-			return c.writeResponse(frame.ID, false, nil, "id is required")
+		code := mapString(frame.Params, "code")
+		if code == "" {
+			return c.writeResponse(frame.ID, false, nil, "code is required")
 		}
-		if err := c.server.canvasStore.Reset(id); err != nil {
+		codeObj, err := c.server.devicePairing.ValidatePairingCode(code)
+		if err != nil {
 			return c.writeResponse(frame.ID, false, nil, err.Error())
 		}
-		return c.writeResponse(frame.ID, true, map[string]any{"ok": true, "id": id}, "")
-	case "canvas.versions":
-		if c.server.canvasStore == nil {
-			return c.writeResponse(frame.ID, false, nil, "canvas not initialized")
+		return c.writeResponse(frame.ID, true, map[string]any{
+			"valid":       true,
+			"device_name": codeObj.DeviceName,
+			"device_type": codeObj.DeviceType,
+			"expires":     codeObj.ExpiresAt.Format(time.RFC3339),
+		}, "")
+
+	case "device.pairing.pair":
+		if c.server.devicePairing == nil {
+			return c.writeResponse(frame.ID, false, nil, "device pairing not initialized")
 		}
-		id := mapString(frame.Params, "id")
-		if id == "" {
-			return c.writeResponse(frame.ID, false, nil, "id is required")
+		code := mapString(frame.Params, "code")
+		deviceID := mapString(frame.Params, "device_id")
+		deviceName := mapString(frame.Params, "device_name")
+		if code == "" || deviceID == "" {
+			return c.writeResponse(frame.ID, false, nil, "code and device_id are required")
 		}
-		limit := mapInt(frame.Params, "limit", 10)
-		return c.writeResponse(frame.ID, true, c.server.canvasStore.GetVersions(id, limit), "")
+		pairing, err := c.server.devicePairing.CompletePairing(code, deviceID)
+		if err != nil {
+			return c.writeResponse(frame.ID, false, nil, err.Error())
+		}
+		if deviceName != "" {
+			pairing.DeviceName = deviceName
+		}
+		return c.writeResponse(frame.ID, true, pairing, "")
+
+	case "device.pairing.unpair":
+		if c.server.devicePairing == nil {
+			return c.writeResponse(frame.ID, false, nil, "device pairing not initialized")
+		}
+		deviceID := mapString(frame.Params, "device_id")
+		if deviceID == "" {
+			return c.writeResponse(frame.ID, false, nil, "device_id is required")
+		}
+		if err := c.server.devicePairing.Unpair(deviceID); err != nil {
+			return c.writeResponse(frame.ID, false, nil, err.Error())
+		}
+		return c.writeResponse(frame.ID, true, map[string]any{"ok": true}, "")
+
+	case "device.pairing.list":
+		if c.server.devicePairing == nil {
+			return c.writeResponse(frame.ID, false, nil, "device pairing not initialized")
+		}
+		devices := c.server.devicePairing.ListPaired()
+		return c.writeResponse(frame.ID, true, map[string]any{"devices": devices}, "")
+
+	case "device.pairing.status":
+		if c.server.devicePairing == nil {
+			return c.writeResponse(frame.ID, false, nil, "device pairing not initialized")
+		}
+		return c.writeResponse(frame.ID, true, c.server.devicePairing.GetStatus(), "")
+
+	case "device.pairing.renew":
+		if c.server.devicePairing == nil {
+			return c.writeResponse(frame.ID, false, nil, "device pairing not initialized")
+		}
+		deviceID := mapString(frame.Params, "device_id")
+		if deviceID == "" {
+			return c.writeResponse(frame.ID, false, nil, "device_id is required")
+		}
+		pairing, err := c.server.devicePairing.RenewPairing(deviceID)
+		if err != nil {
+			return c.writeResponse(frame.ID, false, nil, err.Error())
+		}
+		return c.writeResponse(frame.ID, true, pairing, "")
+
 	default:
 		return fmt.Errorf("unsupported method: %s", method)
 	}

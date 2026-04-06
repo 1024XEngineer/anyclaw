@@ -82,8 +82,8 @@ func runGatewayServer(ctx context.Context, args []string) error {
 	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
 	printInfo("Gateway workers: %d", app.Config.Gateway.WorkerCount)
 	printSuccess("Gateway listening on %s", appRuntime.GatewayAddress(app.Config))
-	printInfo("Health: %s/healthz", appRuntime.GatewayURL(app.Config))
-	printInfo("Status: %s/status", appRuntime.GatewayURL(app.Config))
+	printInfo("Health: %s/healthz", gatewayHTTPBaseURL(app.Config))
+	printInfo("Status: %s/status", gatewayHTTPBaseURL(app.Config))
 
 	if app.Config.Gateway.WorkerCount > 1 {
 		return gateway.RunWithWorkers(ctx, app)
@@ -143,7 +143,7 @@ func runGatewayStatus(args []string) error {
 
 	var status gateway.Status
 	if err := doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/status", nil, &status); err != nil {
-		return fmt.Errorf("gateway not reachable at %s: %w", appRuntime.GatewayURL(cfg), err)
+		return fmt.Errorf("gateway not reachable at %s: %w", gatewayHTTPBaseURL(cfg), err)
 	}
 
 	printSuccess("Gateway is %s", status.Status)
@@ -210,7 +210,7 @@ func runGatewayEvents(args []string) error {
 		return err
 	}
 
-	baseURL := appRuntime.GatewayURL(cfg)
+	baseURL := gatewayHTTPBaseURL(cfg)
 	if *stream {
 		url := fmt.Sprintf("%s/events/stream?replay=%d", baseURL, *replay)
 		printInfo("Streaming events from %s", url)

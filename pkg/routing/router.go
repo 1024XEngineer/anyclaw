@@ -560,32 +560,6 @@ func (r *Router) routeWithLargeModel(ctx context.Context, intent TaskIntent) (*R
 // getRules 获取规则列表
 func (r *Router) getRules() []RoutingRule {
 	return []RoutingRule{
-		{Name: "qq-message", Pattern: "发.*消息", Plugin: "qq-local", Workflow: "send-message", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "qq-message-cn", Pattern: "给.*发.*消息", Plugin: "qq-local", Workflow: "send-message", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "open-folder", Pattern: "打开.*文件夹", Plugin: "file-manager", Workflow: "open_folder", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "new-folder", Pattern: "新建.*文件夹|创建.*文件夹", Plugin: "file-manager", Workflow: "new_folder", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "copy-file", Pattern: "复制.*文件|拷贝.*文件", Plugin: "file-manager", Workflow: "copy", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "move-file", Pattern: "移动.*文件|剪切.*文件", Plugin: "file-manager", Workflow: "move", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "delete-file", Pattern: "删除.*文件", Plugin: "file-manager", Workflow: "delete", RequiresApproval: true, RiskLevel: "medium"},
-		{Name: "open-url", Pattern: "打开.*网址|访问.*网站", Plugin: "web-browser", Workflow: "open_url", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "web-search", Pattern: "搜索.*|百度.*", Plugin: "web-browser", Workflow: "search", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "browser-screenshot", Pattern: "浏览器.*截图", Plugin: "web-browser", Workflow: "screenshot", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "open-notepad", Pattern: "打开.*记事本|打开.*文本", Plugin: "notepad", Workflow: "open_file", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "write-notepad", Pattern: "写.*文字|输入.*内容", Plugin: "notepad", Workflow: "type_text", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "save-file", Pattern: "保存.*文件", Plugin: "notepad", Workflow: "save", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "run-command", Pattern: "执行.*命令|运行.*命令", Plugin: "terminal", Workflow: "execute_command", RequiresApproval: true, RiskLevel: "high"},
-		{Name: "ping", Pattern: "ping.*", Plugin: "terminal", Workflow: "execute_command", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "screenshot", Pattern: "截图", Plugin: "desktop-tools", Workflow: "screenshot", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "click", Pattern: "点击.*按钮", Plugin: "desktop-tools", Workflow: "click", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "type-text", Pattern: "输入.*文字|打字", Plugin: "desktop-tools", Workflow: "type", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "hotkey", Pattern: "按.*快捷键", Plugin: "desktop-tools", Workflow: "hotkey", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "open-app", Pattern: "打开.*应用", Plugin: "desktop-tools", Workflow: "open", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "minimize-window", Pattern: "最小化.*窗口", Plugin: "desktop-tools", Workflow: "window_minimize", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "maximize-window", Pattern: "最大化.*窗口", Plugin: "desktop-tools", Workflow: "window_maximize", RequiresApproval: false, RiskLevel: "low"},
-		{Name: "close-window", Pattern: "关闭.*窗口", Plugin: "desktop-tools", Workflow: "window_close", RequiresApproval: false, RiskLevel: "low"},
-	}
-
-	return []RoutingRule{
 		// QQ消息
 		{Name: "qq-message", Pattern: "发.*消息", Plugin: "qq-local", Workflow: "send-message", RequiresApproval: false, RiskLevel: "low"},
 		{Name: "qq-message-cn", Pattern: "给.*发.*消息", Plugin: "qq-local", Workflow: "send-message", RequiresApproval: false, RiskLevel: "low"},
@@ -648,48 +622,6 @@ func (rule RoutingRule) Matches(input string) bool {
 
 // getTemplates 获取模板列表
 func (r *Router) getTemplates() []WorkflowTemplate {
-	return []WorkflowTemplate{
-		{
-			ID:               "file-copy-template",
-			Name:             "文件复制",
-			Description:      "从一个位置复制文件到另一个位置",
-			DefaultPlugin:    "file-manager",
-			DefaultWorkflow:  "copy-files",
-			Tags:             []string{"文件", "复制", "移动"},
-			Platforms:        []string{"windows", "linux"},
-			Confidence:       0.8,
-			RequiresApproval: false,
-			RiskLevel:        "low",
-			EstimatedTokens:  100,
-		},
-		{
-			ID:               "web-search-template",
-			Name:             "网页搜索",
-			Description:      "在浏览器中搜索信息并保存结果",
-			DefaultPlugin:    "browser-local",
-			DefaultWorkflow:  "search-and-save",
-			Tags:             []string{"网页", "搜索", "浏览器"},
-			Platforms:        []string{"windows", "linux"},
-			Confidence:       0.7,
-			RequiresApproval: false,
-			RiskLevel:        "low",
-			EstimatedTokens:  150,
-		},
-		{
-			ID:               "document-edit-template",
-			Name:             "文档编辑",
-			Description:      "打开文档编辑器并编辑内容",
-			DefaultPlugin:    "office-local",
-			DefaultWorkflow:  "edit-document",
-			Tags:             []string{"文档", "编辑", "文字"},
-			Platforms:        []string{"windows"},
-			Confidence:       0.6,
-			RequiresApproval: false,
-			RiskLevel:        "low",
-			EstimatedTokens:  200,
-		},
-	}
-
 	return []WorkflowTemplate{
 		{
 			ID:               "file-copy-template",

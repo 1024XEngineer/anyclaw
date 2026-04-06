@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AnyClaw Web 控制台</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    :root{
+      color-scheme:dark;--bg:#0a0e17;--bg2:#0d1525;--panel:rgba(13,22,40,.85);--panel2:rgba(18,29,48,.96);
+      --line:rgba(127,156,201,.14);--line2:rgba(127,156,201,.28);--text:#f0f4ff;--muted:#8da3c8;--muted2:#657196;
+      --accent:#3b9eff;--accent2:#5eeac8;--green:#4ce890;--amber:#ffb847;--red:#ff6b6b;
+      --shadow:0 20px 60px rgba(0,0,0,.35);--shadow-glow:0 0 40px rgba(59,158,255,.15);
+      --r-xl:24px;--r-lg:18px;--r-md:14px;--r-sm:10px
+    }
+    *{box-sizing:border-box} html,body{margin:0;min-height:100%}
+    body{
+      font-family:"Manrope","Segoe UI Variable","Segoe UI",sans-serif;color:var(--text);overflow:hidden;
+      background:
+        radial-gradient(ellipse at 20% 0%,rgba(59,158,255,.18) 0%,transparent 50%),
+        radial-gradient(ellipse at 85% 10%,rgba(94,234,200,.12) 0%,transparent 45%),
+        radial-gradient(ellipse at 15% 85%,rgba(255,184,71,.08) 0%,transparent 40%),
+        linear-gradient(180deg,#080c16 0%,#0d1422 100%)
+    }
+    body::before{
+      content:"";position:fixed;inset:0;pointer-events:none;
+      background-image:linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);
+      background-size:48px 48px;mask-image:radial-gradient(circle at center,rgba(0,0,0,.7),transparent 92%)
+    }
+    .app-shell{position:relative;z-index:1;display:grid;grid-template-columns:280px minmax(0,1fr);min-height:100vh}
+    .sidebar{
+      display:flex;flex-direction:column;padding:20px 16px;border-right:1px solid var(--line);
+      background:rgba(8,12,24,.78);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);gap:16px
+    }
+    .brand,.gateway-card,.metric-card,.panel,.hero{
+      border:1px solid var(--line);box-shadow:var(--shadow);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)
+    }
+    .brand{
+      padding:16px;border-radius:var(--r-lg);
+      background:linear-gradient(135deg,rgba(59,158,255,.12),rgba(94,234,200,.08)),rgba(12,20,38,.92);
+      border-color:rgba(94,234,200,.12)
+    }
+    .brand-mark{display:inline-flex;align-items:center;gap:10px;font-size:20px;font-weight:800;letter-spacing:.01em}
+    .paw{
+      width:38px;height:38px;border-radius:12px;display:grid;place-items:center;
+      background:linear-gradient(135deg,rgba(59,158,255,.28),rgba(94,234,200,.32));font-size:20px;
+      box-shadow:inset 0 0 0 1px rgba(255,255,255,.06),0 4px 16px rgba(59,158,255,.2)
+    }
+    .brand p{margin:10px 0 0;color:var(--muted);line-height:1.5;font-size:12px}
+    .section-label{padding:0 10px;font-size:10px;font-weight:700;letter-spacing:.2em;color:var(--muted2);text-transform:uppercase;margin-bottom:4px}
+    .nav-group{display:grid;gap:6px}
+    .nav-item{
+      display:grid;grid-template-columns:36px minmax(0,1fr);gap:10px;align-items:center;padding:10px 12px;border-radius:14px;
+      color:inherit;text-decoration:none;border:1px solid transparent;transition:all .18s ease
+    }
+    .nav-item:hover,.nav-item.active{transform:translateX(3px);background:rgba(19,31,52,.78);border-color:rgba(59,158,255,.16)}
+    .nav-item.active{background:rgba(59,158,255,.1);border-color:rgba(59,158,255,.22)}
+    .nav-item.active .nav-icon{background:linear-gradient(135deg,rgba(59,158,255,.32),rgba(94,234,200,.28));color:#fff;box-shadow:0 4px 12px rgba(59,158,255,.25)}
+    .nav-icon,.metric-icon,.tool-icon,.timeline-dot,.power,.user-pill,.icon-btn,.terminal-input .badge{
+      display:grid;place-items:center;border-radius:12px
+    }
+    .nav-icon{width:36px;height:36px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.04);font-size:16px;transition:all .18s ease}
+    .nav-title{font-size:13px;font-weight:700}.nav-copy{display:block;margin-top:2px;color:var(--muted);font-size:10px;line-height:1.35}
+    .gateway-card{margin-top:auto;padding:14px;border-radius:var(--r-lg);background:var(--panel)}
+    .gateway-row,.topbar,.metric-head,.panel-head,.footer-note{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .status-dot{position:relative;width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 0 6px rgba(76,232,144,.14)}
+    .status-dot::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1px solid rgba(76,232,144,.36);animation:pulse 2s infinite}
+    @keyframes pulse{from{transform:scale(.85);opacity:.6}to{transform:scale(1.6);opacity:0}}
+    @keyframes borderGlow{from{opacity:.5}to{opacity:1}}
+    @keyframes fadeInUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+    .gateway-meta strong{display:block;font-size:12px}.gateway-meta span{color:var(--muted);font-size:10px;font-family:"JetBrains Mono",Consolas,monospace}
+    .power,.icon-btn,.terminal-input .badge{width:36px;height:36px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);color:var(--muted);transition:all .16s ease}
+    .power:hover,.icon-btn:hover{background:rgba(59,158,255,.12);color:var(--accent);transform:scale(1.05)}
+    .main{min-width:0;display:flex;flex-direction:column;background:linear-gradient(180deg,rgba(8,12,24,.12),rgba(8,12,24,.38))}
+    .topbar{
+      padding:16px 24px;border-bottom:1px solid var(--line);background:rgba(9,14,26,.52);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)
+    }
+    .crumbs,.metric-sub,.pill,.tool-copy span,.approval-item span,.timeline-item span,.panel-meta,.footer-note{color:var(--muted)}
+    .crumbs{display:flex;align-items:center;gap:8px;font-size:13px}.crumbs strong{color:var(--text)}
+    .top-actions,.hero-actions,.hero-pills,.approval-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .user-pill{
+      width:38px;height:38px;border-radius:14px;font-weight:800;font-size:15px;background:linear-gradient(135deg,rgba(59,158,255,.92),rgba(94,234,200,.58));
+      box-shadow:0 8px 24px rgba(59,158,255,.28)
+    }
+    .scroll{flex:1;overflow:auto;padding:24px}.scroll::-webkit-scrollbar{width:6px;height:6px}.scroll::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(142,162,197,.24)}
+    .content{max-width:1400px;margin:0 auto;display:grid;gap:20px}
+    .hero{
+      display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:24px 26px;border-radius:var(--r-xl);
+      background:radial-gradient(circle at 90% 10%,rgba(94,234,200,.1),transparent 35%),linear-gradient(135deg,rgba(10,18,34,.96),rgba(11,21,38,.88));
+      position:relative;overflow:hidden
+    }
+    .hero::before{
+      content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;
+      background:linear-gradient(135deg,rgba(59,158,255,.4),rgba(94,234,200,.3),rgba(255,184,71,.2));
+      -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
+      -webkit-mask-composite:xor;mask-composite:exclude;animation:borderGlow 4s ease-in-out infinite alternate
+    }
+    .hero::after{content:"";position:absolute;width:320px;height:320px;right:-100px;top:-130px;border-radius:50%;background:radial-gradient(circle,rgba(59,158,255,.2),transparent 70%);pointer-events:none}
+    .hero h1{margin:0 0 6px;font-size:clamp(24px,2.8vw,34px);line-height:1.1;font-weight:800}.hero p{margin:0;max-width:680px;color:var(--muted);line-height:1.6;font-size:13px}
+    .primary-btn,.ghost-btn,.approve,.deny{
+      border:1px solid transparent;border-radius:12px;font:inherit;font-weight:600;cursor:pointer;transition:all .18s ease
+    }
+    .primary-btn:hover,.ghost-btn:hover,.approve:hover,.deny:hover,.icon-btn:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.25)}
+    .primary-btn,.ghost-btn{padding:10px 16px;font-size:13px}
+    .primary-btn{color:#080c16;background:linear-gradient(135deg,var(--accent2),#8fffe8);box-shadow:0 12px 32px rgba(94,234,200,.22)}
+    .ghost-btn{color:var(--text);background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.06)}
+    .pill,.label{
+      display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.04);
+      border:1px solid rgba(255,255,255,.06);font-size:11px;font-weight:500
+    }
+    .dot{width:6px;height:6px;border-radius:50%;background:currentColor}.green{color:var(--green)}.blue{color:var(--accent)}.amber{color:var(--amber)}
+    .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+    .metric-card{padding:16px;border-radius:var(--r-lg);background:var(--panel);position:relative;overflow:hidden;min-height:130px;transition:all .2s ease}
+    .metric-card:hover{transform:translateY(-3px);box-shadow:var(--shadow),var(--shadow-glow)}
+    .metric-card::before{content:"";position:absolute;inset:auto auto 0 -15%;width:60%;height:60%;opacity:.4;background:radial-gradient(circle,rgba(255,255,255,.1),transparent 68%)}
+    .metric-label{margin:0 0 2px;font-size:10px;text-transform:uppercase;letter-spacing:.18em;color:var(--muted2);font-weight:700}
+    .metric-value{margin:0;font-size:26px;font-weight:800;line-height:1.2}.metric-sub{display:flex;align-items:center;gap:6px;font-size:11px}
+    .metric-icon{width:44px;height:44px;font-size:18px;border:1px solid rgba(255,255,255,.06)}
+    .tone-blue .metric-icon{background:rgba(59,158,255,.1);color:#7ac4ff}.tone-teal .metric-icon{background:rgba(94,234,200,.1);color:#8fffe8}
+    .tone-amber .metric-icon{background:rgba(255,184,71,.1);color:#ffcf7a}.tone-red .metric-icon{background:rgba(255,107,107,.1);color:#ff9a9a}
+    .workspace{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(320px,.9fr);gap:16px}
+    .terminal{display:flex;flex-direction:column;min-height:480px;overflow:hidden}
+    .panel{padding:16px;border-radius:var(--r-lg);background:var(--panel)}
+    .panel-head{margin-bottom:12px}.panel-title{font-size:14px;font-weight:700;margin:0}
+    .terminal-bar{
+      display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.02);
+      font-size:11px;color:var(--muted);font-family:"JetBrains Mono",Consolas,monospace
+    }
+    .traffic{display:flex;gap:6px}.traffic span{width:10px;height:10px;border-radius:50%;display:inline-block}.traffic span:nth-child(1){background:#ff6f74}.traffic span:nth-child(2){background:#ffbf4c}.traffic span:nth-child(3){background:#48d69a}
+    .terminal-body{
+      flex:1;padding:16px;background:linear-gradient(180deg,rgba(5,9,18,.94),rgba(8,14,22,.98));font-family:"JetBrains Mono",Consolas,monospace;
+      font-size:12px;line-height:1.75;overflow:auto
+    }
+    .terminal-line{color:#dbe4ff;margin-bottom:12px}.terminal-line.dim{color:#8098b8}.prompt{color:#4ce890}.path{color:#7ac4ff}.call{color:#ffcf7a}.thinking{color:#a5a8ff}
+    .typing::after{content:"█";color:var(--accent);animation:blink .8s step-end infinite}@keyframes blink{50%{opacity:0}}
+    .terminal-input{padding:14px 16px;border-top:1px solid var(--line);background:rgba(255,255,255,.02);display:flex;align-items:center;gap:10px}
+    .terminal-input input{
+      width:100%;border:1px solid rgba(255,255,255,.06);background:rgba(4,8,16,.98);color:var(--text);border-radius:12px;padding:11px 13px;
+      font:inherit;font-family:"JetBrains Mono",Consolas,monospace;outline:none;transition:all .16s ease
+    }
+    .terminal-input input:focus{border-color:rgba(59,158,255,.38);box-shadow:0 0 0 3px rgba(59,158,255,.1)}
+    .side-stack,.tool-list,.approval-list,.timeline{display:grid;gap:10px}
+    .tool-item,.approval-item,.timeline-item{padding:12px;border-radius:14px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.04);transition:all .16s ease}
+    .tool-item:hover,.approval-item:hover,.timeline-item:hover{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.08)}
+    .tool-item{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:10px;align-items:center}.tool-icon{width:38px;height:38px;font-size:16px}
+    .tool-copy strong,.approval-item strong,.timeline-item strong{display:block;font-size:12px;margin-bottom:3px}
+    .tool-toggle{width:44px;height:24px;border-radius:999px;background:linear-gradient(135deg,rgba(59,158,255,.72),rgba(94,234,200,.76));position:relative;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);cursor:pointer;transition:all .18s ease}
+    .tool-toggle:hover{transform:scale(1.05)}
+    .tool-toggle::after{content:"";position:absolute;width:18px;height:18px;top:3px;left:3px;border-radius:50%;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.2);transition:all .18s ease}
+    .tool-toggle.off{background:rgba(255,255,255,.1)}.tool-toggle.off::after{left:auto;right:3px}
+    .label{font-size:10px;font-weight:700}.label.warn,.approval-item{background:rgba(255,184,71,.05);border-color:rgba(255,184,71,.18)}.label.warn{color:#ffcf7a}
+    .approval-actions{display:grid;grid-template-columns:1fr 1fr;margin-top:10px}.approve{padding:9px 10px;background:rgba(76,232,144,.1);border-color:rgba(76,232,144,.22);color:#9affb8;font-size:12px}.deny{padding:9px 10px;background:rgba(255,107,107,.08);border-color:rgba(255,107,107,.2);color:#ffadad;font-size:12px}
+    .timeline-item{display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;align-items:start}.timeline-dot{width:30px;height:30px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);font-size:13px}
+    .footer-note{font-size:11px;padding:0 4px 6px;flex-wrap:wrap}.mobile-toggle{display:none}
+    @media (max-width:1200px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{grid-template-columns:1fr}}
+    @media (max-width:880px){
+      body{overflow:auto}.app-shell{grid-template-columns:1fr;min-height:auto}.sidebar{position:fixed;inset:0 auto 0 0;width:min(300px,82vw);transform:translateX(-100%);transition:transform .22s ease;z-index:10}
+      .app-shell.sidebar-open .sidebar{transform:translateX(0)}.main{min-height:100vh}.topbar{padding:14px 18px}.scroll{padding:18px}.mobile-toggle{display:inline-grid}.hero{padding:20px;flex-direction:column;align-items:flex-start}
+    }
+    @media (max-width:600px){
+      .metrics{grid-template-columns:1fr}.top-actions .icon-btn:nth-child(2),.top-actions .icon-btn:nth-child(3){display:none}.approval-actions{grid-template-columns:1fr}.terminal{min-height:420px}
+    }
+    @keyframes fadeInUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+    .app-shell{animation:fadeInUp .4s ease-out}
+    .sidebar>*{animation:fadeInUp .5s ease-out;animation-fill-mode:both}
+    .sidebar>*:nth-child(1){animation-delay:.05s}.sidebar>*:nth-child(2){animation-delay:.1s}
+    .sidebar>*:nth-child(3){animation-delay:.15s}.sidebar>*:nth-child(4){animation-delay:.2s}
+    .content>*{animation:fadeInUp .5s ease-out;animation-fill-mode:both}
+    .content>*:nth-child(1){animation-delay:.15s}.content>*:nth-child(2){animation-delay:.2s}.content>*:nth-child(3){animation-delay:.25s}
+  </style>
+</head>
+<body>
+  <div class="app-shell" id="appShell">
+    <aside class="sidebar">
+      <section class="brand">
+        <div class="brand-mark">
+          <span class="paw">✦</span>
+          <span>Any<span style="color:var(--accent)">Claw</span></span>
+        </div>
+        <p>面向本地代理、浏览器自动化、桌面控制和 CLI Hub 桥接的统一工作台。当前这版前端优先服务 <strong>/dashboard</strong> 与 <strong>/control</strong> 控制入口。</p>
+      </section>
+
+      <section>
+        <div class="section-label">Workspace</div>
+        <nav class="nav-group">
+          <a class="nav-item active" href="#overview"><div class="nav-icon">◫</div><div><div class="nav-title">控制台总览</div><span class="nav-copy">运行态概览、快捷动作和活跃上下文。</span></div></a>
+          <a class="nav-item" href="#agents"><div class="nav-icon">◎</div><div><div class="nav-title">代理节点</div><span class="nav-copy">会话状态、执行链路和代理编排。</span></div></a>
+          <a class="nav-item" href="#skills"><div class="nav-icon">⌘</div><div><div class="nav-title">技能中心</div><span class="nav-copy">已装载工具、热插拔桥接和能力分发。</span></div></a>
+          <a class="nav-item" href="#memory"><div class="nav-icon">◌</div><div><div class="nav-title">记忆与审计</div><span class="nav-copy">本地上下文、审计流和工作区记忆。</span></div></a>
+          <a class="nav-item" href="#clihub"><div class="nav-icon">&gt;</div><div><div class="nav-title">CLI Hub 桥接</div><span class="nav-copy">连接 CLI-Anything harness 与外部软件。</span></div></a>
+        </nav>
+      </section>
+
+      <section>
+        <div class="section-label">System</div>
+        <nav class="nav-group">
+          <a class="nav-item" href="#providers"><div class="nav-icon">⟡</div><div><div class="nav-title">模型提供商</div><span class="nav-copy">Provider 切换、连接状态和用量观察。</span></div></a>
+          <a class="nav-item" href="#security"><div class="nav-icon">⛨</div><div><div class="nav-title">安全与审批</div><span class="nav-copy">审批队列、风险门槛与 allowlist。</span></div></a>
+          <a class="nav-item" href="#settings"><div class="nav-icon">⚙</div><div><div class="nav-title">系统设置</div><span class="nav-copy">网关、工作区、桌面与浏览器默认项。</span></div></a>
+        </nav>
+      </section>
+
+      <section class="gateway-card">
+        <div class="gateway-row">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span class="status-dot" aria-hidden="true"></span>
+            <div class="gateway-meta">
+              <strong>Gateway 在线</strong>
+              <span id="gatewayAddress">http://127.0.0.1:18789</span>
+            </div>
+          </div>
+          <div class="power" title="Power">⏻</div>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="crumbs">
+          <button class="icon-btn mobile-toggle" id="sidebarToggle" type="button" aria-label="切换侧边栏">☰</button>
+          <span>工作区</span>
+          <span>›</span>
+          <strong>控制台总览</strong>
+        </div>
+        <div class="top-actions">
+          <button class="icon-btn" type="button" aria-label="通知">◔</button>
+          <button class="icon-btn" type="button" aria-label="搜索">⌕</button>
+          <button class="icon-btn" type="button" aria-label="刷新">↻</button>
+          <div class="user-pill">A</div>
+        </div>
+      </header>
+
+      <div class="scroll">
+        <div class="content">
+          <section class="hero" id="overview">
+            <div>
+              <h1>AnyClaw 本地控制台</h1>
+              <p>围绕会话调度、Browser 自动化、Windows 桌面控制与 CLI Hub 桥接设计的一体化前端。它不是简单的聊天皮肤，而是给 AnyClaw 的运行态、审批流和软件控制能力一个更清晰的操作面板。</p>
+              <div class="hero-pills">
+                <span class="pill"><span class="dot green"></span> Local-first 工作流</span>
+                <span class="pill"><span class="dot blue"></span> Browser + Desktop 控制</span>
+                <span class="pill"><span class="dot amber"></span> CLI-Anything 已接入</span>
+              </div>
+            </div>
+            <div class="hero-actions">
+              <button class="ghost-btn" type="button">环境检查</button>
+              <button class="primary-btn" type="button">新建会话</button>
+            </div>
+          </section>
+
+          <section class="metrics">
+            <article class="metric-card tone-blue">
+              <div class="metric-head"><div><p class="metric-label">当前模型</p><h2 class="metric-value">llama3.2</h2></div><div class="metric-icon">◈</div></div>
+              <div class="metric-sub"><span class="dot blue"></span><span>Provider: Ollama / 本地推理链路</span></div>
+            </article>
+            <article class="metric-card tone-teal">
+              <div class="metric-head"><div><p class="metric-label">已挂载能力</p><h2 class="metric-value">Browser · Desktop · CLI</h2></div><div class="metric-icon">⌘</div></div>
+              <div class="metric-sub"><span class="dot green"></span><span>支持 Web 自动化、OCR、CLI Hub 和工具审批。</span></div>
+            </article>
+            <article class="metric-card tone-amber" id="memory">
+              <div class="metric-head"><div><p class="metric-label">记忆状态</p><h2 class="metric-value">Fresh</h2></div><div class="metric-icon">◎</div></div>
+              <div class="metric-sub"><span class="dot amber"></span><span>当前工作区刚完成初始化，未保留 API 与历史记录。</span></div>
+            </article>
+            <article class="metric-card tone-red">
+              <div class="metric-head"><div><p class="metric-label">待处理事件</p><h2 class="metric-value">1</h2></div><div class="metric-icon">!</div></div>
+              <div class="metric-sub"><span class="dot amber"></span><span>1 个审批动作等待确认，2 个环境警告待处理。</span></div>
+            </article>
+          </section>
+
+          <section class="workspace">
+            <article class="panel terminal">
+              <div class="terminal-bar"><div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div><span>anyclaw-interactive-session ~ powershell</span></div>
+              <div class="terminal-body">
+                <div class="terminal-line dim">AnyClaw Console initialized. Dashboard build detected at <span class="path">dist/control-ui/</span>.</div>
+                <div class="terminal-line dim">Type <span class="call">/help</span> or issue a natural-language command to start a local workflow.</div>
+                <div class="terminal-line"><span class="prompt">➜</span> <span class="path">~/.anyclaw</span> <span>/provider</span></div>
+                <div class="terminal-line dim">Current provider: <span class="call">Ollama</span>. Base URL resolved to <span class="path">http://127.0.0.1:11434</span>.</div>
+                <div class="terminal-line"><span class="prompt">➜</span> <span class="path">~/.anyclaw</span> <span>帮我列出当前项目结构</span></div>
+                <div class="terminal-line dim"><span class="thinking">[Agent: Thinking]</span> calling <span class="call">fs.list_files</span> and <span class="call">workflow.scan</span>.</div>
+                <div class="terminal-line dim">发现主要目录：<span class="path">cmd/</span>、<span class="path">pkg/</span>、<span class="path">ui/</span>、<span class="path">workflows/</span>、<span class="path">dist/control-ui/</span>。</div>
+                <div class="terminal-line"><span class="prompt">➜</span> <span class="path">~/.anyclaw</span> <span>检查 CLI Hub 可用性</span></div>
+                <div class="terminal-line dim"><span class="thinking">[Agent: Routed]</span> intent matched <span class="call">clihub_capabilities</span>. CLI-Anything catalog 已发现并可调用。</div>
+                <div class="terminal-line"><span class="prompt">➜</span> <span class="path">~/.anyclaw</span> <span class="typing"></span></div>
+              </div>
+              <div class="terminal-input">
+                <div class="badge">⌨</div>
+                <input type="text" value="" placeholder="输入 / 指令，或直接描述你要 AnyClaw 完成的任务">
+              </div>
+            </article>
+
+            <div class="side-stack">
+              <section class="panel" id="skills">
+                <div class="panel-head"><h3 class="panel-title">热插拔工具</h3><span class="panel-meta">Bridge-ready</span></div>
+                <div class="tool-list">
+                  <div class="tool-item"><div class="tool-icon" style="background:rgba(71,164,255,.14);color:#8ecbff">◧</div><div class="tool-copy"><strong>Browser Auto</strong><span>DOM 解析、点击输入、截图、下载与导出。</span></div><div class="tool-toggle" aria-hidden="true"></div></div>
+                  <div class="tool-item"><div class="tool-icon" style="background:rgba(114,243,210,.14);color:#a4ffe8">◌</div><div class="tool-copy"><strong>Vision / OCR</strong><span>屏幕截图、图像定位、桌面文本识别与点选。</span></div><div class="tool-toggle" aria-hidden="true"></div></div>
+                  <div class="tool-item" id="clihub"><div class="tool-icon" style="background:rgba(255,188,88,.14);color:#ffd48a">&gt;</div><div class="tool-copy"><strong>CLI Hub</strong><span>面向 CLI-Anything harness 的统一桥接与意图路由。</span></div><div class="tool-toggle" aria-hidden="true"></div></div>
+                </div>
+              </section>
+
+              <section class="panel" id="security">
+                <div class="panel-head"><h3 class="panel-title">等待审批</h3><span class="label warn">1 个任务</span></div>
+                <div class="approval-list">
+                  <div class="approval-item">
+                    <span class="label warn">Action Request · fs.write_file</span>
+                    <strong style="margin-top:10px">写入 UI 草稿到 workflows/personal/ui_draft.html</strong>
+                    <span>这个面板模拟 AnyClaw 的审批流入口，适合后续接到真实 audit / approval API。</span>
+                    <div class="approval-actions"><button class="approve" type="button">允许</button><button class="deny" type="button">拒绝</button></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel" id="agents">
+                <div class="panel-head"><h3 class="panel-title">运行时间线</h3><span class="panel-meta" id="clock">--:--:--</span></div>
+                <div class="timeline">
+                  <div class="timeline-item"><div class="timeline-dot">↺</div><div><strong>Dashboard UI 已切换到 dist/control-ui 构建产物</strong><span>网关会优先服务这个静态目录，缺失时再回退到 Go 内嵌旧版控制台。</span></div></div>
+                  <div class="timeline-item"><div class="timeline-dot">⌂</div><div><strong>工作区已处于 clean init 状态</strong><span>API key 和历史记录已清空，适合继续做本地模式的 onboarding 和 UI 验证。</span></div></div>
+                  <div class="timeline-item"><div class="timeline-dot">⋈</div><div><strong>CLI-Anything catalog 可用</strong><span>AnyClaw 已支持发现、列出并执行可桥接的软件能力。</span></div></div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <div class="footer-note">
+            <span>建议下一步：把这个静态页拆成真正的控制台模块，并接入会话、工具、审批和 Gateway 实时状态接口。</span>
+            <span>UI build root: <strong>dist/control-ui/index.html</strong></span>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script>
+    (function () {
+      const shell = document.getElementById("appShell");
+      const toggle = document.getElementById("sidebarToggle");
+      const clock = document.getElementById("clock");
+      if (toggle) {
+        toggle.addEventListener("click", function () {
+          shell.classList.toggle("sidebar-open");
+        });
+      }
+      function updateClock() {
+        const now = new Date();
+        const parts = [
+          String(now.getHours()).padStart(2, "0"),
+          String(now.getMinutes()).padStart(2, "0"),
+          String(now.getSeconds()).padStart(2, "0")
+        ];
+        if (clock) {
+          clock.textContent = parts.join(":");
+        }
+      }
+      updateClock();
+      window.setInterval(updateClock, 1000);
+    }());
+  </script>
+</body>
+</html>

@@ -41,11 +41,20 @@ var (
 )
 
 func Banner(version string) {
+	purple := lipgloss.Color("#8B5CF6")
+	gray := lipgloss.Color("#6B7280")
+
+	bannerStyle := lipgloss.NewStyle().Foreground(purple).Bold(true).Padding(0, 1)
+	subStyle := lipgloss.NewStyle().Foreground(gray).Padding(0, 1)
+
 	fmt.Printf("\n")
-	fmt.Printf("  %s\n", Bold.Sprint("AnyClaw"))
-	fmt.Printf("  %s\n", Dim.Sprint("File-first AI agent workspace"))
+	fmt.Printf("    %s%s%s\n", bannerStyle.Render("╔══════════════════════════════════╗"), "  ", bannerStyle.Render("🤖 AnyClaw"))
+	fmt.Printf("    %s%s%s\n", subStyle.Render("║  Gateway-First AI Agent          ║"), "  ", subStyle.Render("中文智能助手"))
+	fmt.Printf("    %s%s%s\n", subStyle.Render("║  File-first Workspace             ║"), "  ", subStyle.Render("文件优先工作区"))
 	if version != "" {
-		fmt.Printf("  %s\n", Dim.Sprint("v"+version))
+		fmt.Printf("    %s  %s\n", subStyle.Render("╚══════════════════════════════════╝"), subStyle.Render("v"+version))
+	} else {
+		fmt.Printf("    %s\n", subStyle.Render("╚══════════════════════════════════╝"))
 	}
 	fmt.Printf("\n")
 }

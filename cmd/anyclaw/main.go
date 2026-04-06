@@ -15,6 +15,7 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/audit"
 	"github.com/anyclaw/anyclaw/pkg/config"
 	"github.com/anyclaw/anyclaw/pkg/consoleio"
+	"github.com/anyclaw/anyclaw/pkg/gateway"
 	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/routing"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
@@ -36,6 +37,8 @@ type RuntimeState struct {
 	configPath string
 	workDir    string
 	workingDir string
+	gatewayURL string
+	client     *gateway.WSClient
 }
 
 func main() {
@@ -106,12 +109,10 @@ func run(ctx context.Context, args []string) error {
 			return runTaskCommand(ctx, args[1:])
 		case "mcp":
 			return runMCPCommand(args[1:])
-		case "tui":
-			return runTUICommand(args[1:])
 		}
 	}
 
-	return runRootCommand(ctx, args)
+	return runRootCommandGatewayFirst(ctx, args)
 }
 
 func normalizeRootCommand(name string) string {
@@ -142,7 +143,7 @@ func normalizeRootCommand(name string) string {
 }
 
 func runRootCommand(ctx context.Context, args []string) error {
-	return runRootCommandStable(ctx, args)
+	return runRootCommandGatewayFirst(ctx, args)
 }
 
 func runDoctorCommand(args []string) error {
@@ -209,6 +210,39 @@ func printInfo(format string, args ...any) {
 	fmt.Printf("%s\n", ui.Info.Sprint("i ")+fmt.Sprintf(format, args...))
 }
 
+func printWarn(format string, args ...any) {
+	fmt.Printf("%s\n", ui.Warning.Sprint("! Warning: ")+fmt.Sprintf(format, args...))
+}
+
+func cliSectionDivider(width int) string {
+	if width <= 0 {
+		width = 60
+	}
+	return strings.Repeat("-", width)
+}
+
+func printInteractiveHeader(title string, lines ...string) {
+	fmt.Println()
+	fmt.Println(ui.Dim.Sprint(cliSectionDivider(60)))
+	fmt.Printf("%s\n", ui.Bold.Sprint(title))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fmt.Println(line)
+	}
+	fmt.Println("  Press Enter to send. Type /help for commands.")
+	fmt.Println(ui.Dim.Sprint(cliSectionDivider(60)))
+	printInteractiveHelp()
+	fmt.Println(ui.Dim.Sprint(cliSectionDivider(60)))
+	fmt.Println()
+}
+
+func printUnknownInteractiveCommand(input string) {
+	fmt.Printf("%sUnknown command:%s %s\n", ui.Error.Sprint(""), ui.Reset.Sprint(""), input)
+	fmt.Printf("Type %s/help%s to see the available commands.\n", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
+}
+
 func bootProgress(ev appRuntime.BootEvent) {
 	clear := ""
 	if terminalInteractive() {
@@ -222,7 +256,7 @@ func bootProgress(ev appRuntime.BootEvent) {
 	case "warn":
 		fmt.Printf("%s  %s %-12s %s %s\n", clear, ui.Yellow.Sprint("WARN"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
 	case "skip":
-		fmt.Printf("%s  %s %-12s %s %s\n", clear, ui.Dim.Sprint("SKIP"), ui.Cyan.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
+		fmt.Printf("%s  %s %-12s %s %s\n", clear, ui.Dim.Sprint("SKIP"), ui.Dim.Sprint(string(ev.Phase)), ev.Message, ui.Dim.Sprint(ev.Dur.Round(time.Millisecond)))
 	case "fail":
 		errMsg := ""
 		if ev.Err != nil {
@@ -233,7 +267,7 @@ func bootProgress(ev appRuntime.BootEvent) {
 }
 
 func runSetupWizard(cfg *config.Config) {
-	runSetupWizardStable(cfg)
+	runSetupWizardGateway(cfg)
 }
 
 func getDefaultModel(provider string) string {
@@ -264,15 +298,85 @@ func getProviderHint(provider string) string {
 }
 
 func runInteractive(ctx context.Context, state *RuntimeState) {
-	runInteractiveStable(ctx, state)
+	if state.client != nil && state.client.Connected() {
+		runGatewayClientInteractive(ctx, state)
+	} else {
+		runInteractiveLocal(ctx, state)
+	}
 }
 
-func rebindBuiltins(state *RuntimeState) {
-	rebindBuiltinsStable(state)
+func runGatewayClientInteractive(ctx context.Context, state *RuntimeState) {
+	lines := []string{
+		fmt.Sprintf("  Gateway: %s", state.gatewayURL),
+		fmt.Sprintf("  Agent:   %s", state.cfg.Agent.Name),
+	}
+	if state.workingDir != "" {
+		lines = append(lines, fmt.Sprintf("  Dir:     %s", state.workingDir))
+	}
+	printInteractiveHeader("Interactive Mode", lines...)
+
+	reader := consoleio.NewReader(os.Stdin)
+	for {
+		fmt.Print("> ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if strings.HasPrefix(line, "/") {
+			if handleGatewayClientCommand(ctx, state, line) {
+				break
+			}
+			continue
+		}
+
+		fmt.Println()
+		resp, err := state.client.SendMessage(ctx, line)
+		if err != nil {
+			printError("%v", err)
+			continue
+		}
+		fmt.Printf("%s\n\n", ui.Bold.Sprint(resp))
+	}
 }
 
-func applyLLMRoute(state *RuntimeState, input string) string {
-	return applyLLMRouteStable(state, input)
+func handleGatewayClientCommand(ctx context.Context, state *RuntimeState, input string) bool {
+	commandText := strings.ToLower(strings.TrimSpace(input))
+
+	switch {
+	case commandText == "/exit", commandText == "/quit", commandText == "/q":
+		fmt.Println()
+		printSuccess("Bye")
+		return true
+	case commandText == "/help", commandText == "/?":
+		fmt.Println()
+		printInteractiveHelp()
+		return false
+	case commandText == "/clear":
+		printSuccess("Chat history cleared (Gateway mode)")
+		return false
+	case commandText == "/status":
+		status, err := state.client.GetStatus(ctx)
+		if err != nil {
+			printError("%v", err)
+		} else {
+			fmt.Printf("Gateway: %s\n", status.Status)
+			fmt.Printf("Provider: %s\n", status.Provider)
+			fmt.Printf("Model: %s\n", status.Model)
+			fmt.Printf("Sessions: %d\n", status.Sessions)
+		}
+		return false
+	case commandText == "/gateway":
+		fmt.Printf("Connected to: %s\n", state.gatewayURL)
+		return false
+	default:
+		printUnknownInteractiveCommand(input)
+		return false
+	}
 }
 
 func showAgentProfiles(state *RuntimeState) {
@@ -303,7 +407,93 @@ func showModelsForProvider(provider string) {
 	showModelsForProviderStable(provider)
 }
 
-func runRootCommandStable(ctx context.Context, args []string) error {
+func loadRootRuntimeConfig(ctx context.Context, configPath string) (*config.Config, error) {
+	if err := ensureConfigOnboarded(ctx, configPath, true); err != nil {
+		return nil, err
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+	return cfg, nil
+}
+
+func applyRootConfigOverrides(cfg *config.Config, configPath string, provider string, model string, apiKey string) error {
+	if provider != "" {
+		cfg.LLM.Provider = provider
+	}
+	if model != "" {
+		cfg.LLM.Model = model
+	}
+	if apiKey != "" {
+		cfg.LLM.APIKey = apiKey
+	}
+	if err := cfg.Save(configPath); err != nil {
+		return err
+	}
+	printSuccess("Config updated: %s", configPath)
+	return nil
+}
+
+func resolveGatewayRuntimeURL(cfg *config.Config, override string) string {
+	if strings.TrimSpace(override) != "" {
+		return strings.TrimSpace(override)
+	}
+	return appRuntime.GatewayURL(cfg)
+}
+
+func connectGatewayClient(ctx context.Context, gatewayURL string, token string) (*gateway.WSClient, error) {
+	client := gateway.NewWSClient(gatewayURL, token)
+	if client == nil {
+		return nil, fmt.Errorf("failed to create Gateway client")
+	}
+
+	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if err := client.Connect(connectCtx); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to connect to Gateway at %s: %w\nPlease ensure Gateway is running: anyclaw gateway run", gatewayURL, err)
+	}
+	return client, nil
+}
+
+func newGatewayRuntimeState(cfg *config.Config, configPath string, gatewayURL string, client *gateway.WSClient) *RuntimeState {
+	return &RuntimeState{
+		llmClient:  nil,
+		cfg:        cfg,
+		agent:      nil,
+		skills:     nil,
+		audit:      nil,
+		reader:     consoleio.NewReader(os.Stdin),
+		configPath: configPath,
+		workDir:    "",
+		workingDir: "",
+		gatewayURL: gatewayURL,
+		client:     client,
+	}
+}
+
+func runGatewayRootSession(ctx context.Context, state *RuntimeState, interactive bool, messageText string) error {
+	if state == nil || state.client == nil {
+		return fmt.Errorf("gateway runtime state is not initialized")
+	}
+
+	if messageText != "" && !interactive {
+		resp, err := state.client.SendMessage(ctx, messageText)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\n", ui.Bold.Sprint(resp))
+		return nil
+	}
+
+	runGatewayClientInteractive(ctx, state)
+	return nil
+}
+
+func runRootCommandGatewayFirst(ctx context.Context, args []string) error {
 	rootFS := flag.NewFlagSet("anyclaw", flag.ContinueOnError)
 	rootFS.SetOutput(os.Stdout)
 
@@ -315,6 +505,7 @@ func runRootCommandStable(ctx context.Context, args []string) error {
 	interactiveFlag := rootFS.Bool("i", false, "interactive mode")
 	setupFlag := rootFS.Bool("setup", false, "run setup wizard")
 	configPathFlag := rootFS.String("config", "anyclaw.json", "path to config file")
+	gatewayFlag := rootFS.String("gateway", "", "gateway URL (e.g., ws://127.0.0.1:18789)")
 
 	if err := rootFS.Parse(args); err != nil {
 		return err
@@ -324,7 +515,7 @@ func runRootCommandStable(ctx context.Context, args []string) error {
 
 	if *versionFlag {
 		fmt.Printf("%sAnyClaw version %s%s\n", ui.Cyan.Sprint(""), version, ui.Reset.Sprint(""))
-		fmt.Printf("%sFile-first AI agent workspace%s\n", ui.Bold.Sprint(""), ui.Reset.Sprint(""))
+		fmt.Printf("%sGateway-first AI agent workspace%s\n", ui.Bold.Sprint(""), ui.Reset.Sprint(""))
 		return nil
 	}
 
@@ -346,154 +537,49 @@ func runRootCommandStable(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := ensureConfigOnboarded(ctx, *configPathFlag, true); err != nil {
+	cfg, err := loadRootRuntimeConfig(ctx, *configPathFlag)
+	if err != nil {
 		return err
 	}
 
-	cfg, err := config.Load(*configPathFlag)
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
 	if *setProviderFlag != "" || *setModelFlag != "" || *setAPIKeyFlag != "" {
-		if *setProviderFlag != "" {
-			cfg.LLM.Provider = *setProviderFlag
-		}
-		if *setModelFlag != "" {
-			cfg.LLM.Model = *setModelFlag
-		}
-		if *setAPIKeyFlag != "" {
-			cfg.LLM.APIKey = *setAPIKeyFlag
-		}
-		if err := cfg.Save(*configPathFlag); err != nil {
-			return err
-		}
-		printSuccess("Config updated: %s", *configPathFlag)
-		return nil
+		return applyRootConfigOverrides(cfg, *configPathFlag, *setProviderFlag, *setModelFlag, *setAPIKeyFlag)
 	}
 
-	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
-		ConfigPath: *configPathFlag,
-		Progress:   bootProgress,
-	})
+	gatewayURL := resolveGatewayRuntimeURL(cfg, *gatewayFlag)
+	printInfo("Connecting to Gateway: %s", gatewayURL)
+
+	client, err := connectGatewayClient(ctx, gatewayURL, cfg.Security.APIToken)
 	if err != nil {
-		return fmt.Errorf("failed to bootstrap runtime: %w", err)
+		return err
 	}
+	defer client.Close()
 
-	state := &RuntimeState{
-		llmClient:  app.LLM,
-		cfg:        app.Config,
-		agent:      app.Agent,
-		skills:     app.Skills,
-		audit:      app.Audit,
-		reader:     consoleio.NewReader(os.Stdin),
-		configPath: *configPathFlag,
-		workDir:    app.WorkDir,
-		workingDir: app.WorkingDir,
-	}
-	rebindBuiltinsStable(state)
+	printSuccess("Connected to Gateway")
 
-	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
-
+	state := newGatewayRuntimeState(cfg, *configPathFlag, gatewayURL, client)
 	messageText := strings.TrimSpace(strings.Join(rootFS.Args(), " "))
-	if messageText != "" && !*interactiveFlag {
-		routeLabel := applyLLMRouteStable(state, messageText)
-		responseText, err := state.agent.Run(ctx, messageText)
-		if err != nil {
-			return err
-		}
-		if routeLabel != "" {
-			fmt.Printf("%s%s%s\n", ui.Dim.Sprint(""), routeLabel, ui.Reset.Sprint(""))
-		}
-		fmt.Printf("%s\n", ui.Bold.Sprint(responseText))
-		return nil
-	}
-
-	runInteractiveStable(ctx, state)
-	return nil
+	return runGatewayRootSession(ctx, state, *interactiveFlag, messageText)
 }
 
-func runSetupWizardStable(cfg *config.Config) {
-	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
-	fmt.Printf("%s\n\n", ui.Bold.Sprint("Setup Wizard"))
-
-	wizardReader := consoleio.NewReader(os.Stdin)
-
-	fmt.Printf("%s\n\n", ui.Bold.Sprint("Step 1/5: Choose provider"))
-	showAvailableProvidersStable()
-	fmt.Printf("%s\nProvider > %s", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
-
-	selectedProvider, _ := wizardReader.ReadString('\n')
-	selectedProvider = strings.TrimSpace(strings.ToLower(selectedProvider))
-	if selectedProvider == "" {
-		selectedProvider = "qwen"
+func runInteractiveLocal(ctx context.Context, state *RuntimeState) {
+	lines := []string{
+		fmt.Sprintf("  Agent:   %s", state.cfg.Agent.Name),
+		fmt.Sprintf("  Model:   %s / %s", state.cfg.LLM.Provider, state.cfg.LLM.Model),
 	}
-	if selectedProvider == "ali" || selectedProvider == "alibaba" {
-		selectedProvider = "qwen"
-	}
-	cfg.LLM.Provider = selectedProvider
-
-	fmt.Printf("\n%s\n\n", ui.Bold.Sprint("Step 2/5: Choose model"))
-	showModelsForProviderStable(selectedProvider)
-	fmt.Printf("%s\nModel > %s", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
-
-	selectedModel, _ := wizardReader.ReadString('\n')
-	selectedModel = strings.TrimSpace(strings.ToLower(selectedModel))
-	if selectedModel == "" {
-		selectedModel = getDefaultModel(selectedProvider)
-	}
-	cfg.LLM.Model = selectedModel
-
-	fmt.Printf("\n%s\n", ui.Bold.Sprint("Step 3/5: API key"))
-	fmt.Printf("%s\n", getProviderHint(selectedProvider))
-	fmt.Printf("%sAPI key: %s", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
-
-	enteredAPIKey, _ := wizardReader.ReadString('\n')
-	cfg.LLM.APIKey = strings.TrimSpace(enteredAPIKey)
-
-	fmt.Printf("\n%s", ui.Bold.Sprint("Step 4/5: Proxy"))
-	fmt.Printf("%s (optional, press Enter to skip)%s", ui.Yellow.Sprint(""), ui.Reset.Sprint(""))
-	fmt.Printf("%s\n> %s", ui.Green.Sprint(""), ui.Reset.Sprint(""))
-
-	enteredProxy, _ := wizardReader.ReadString('\n')
-	cfg.LLM.Proxy = strings.TrimSpace(enteredProxy)
-
-	fmt.Printf("\n%s", ui.Bold.Sprint("Step 5/5: Agent name"))
-	fmt.Printf("%s (default: AnyClaw)%s", ui.Yellow.Sprint(""), ui.Reset.Sprint(""))
-	fmt.Printf("%s\n> %s", ui.Green.Sprint(""), ui.Reset.Sprint(""))
-
-	agentName, _ := wizardReader.ReadString('\n')
-	agentName = strings.TrimSpace(agentName)
-	if agentName != "" {
-		cfg.Agent.Name = agentName
-	}
-
-	fmt.Println()
-	printSuccess("Config saved")
-	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
-}
-
-func runInteractiveStable(ctx context.Context, state *RuntimeState) {
-	fmt.Println()
-	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
-	fmt.Printf("%s\n", ui.Bold.Sprint("Interactive mode"))
-	fmt.Printf("  Agent: %s\n", state.cfg.Agent.Name)
-	fmt.Printf("  LLM:   %s / %s\n", state.cfg.LLM.Provider, state.cfg.LLM.Model)
 	if state.workingDir != "" {
-		fmt.Printf("  Dir:   %s\n", state.workingDir)
+		lines = append(lines, fmt.Sprintf("  Dir:     %s", state.workingDir))
 	}
-	fmt.Println("  Type /help to list commands.")
-	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
-	printInteractiveHelp()
-	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
-	fmt.Println()
+	if state.gatewayURL != "" {
+		lines = append(lines, fmt.Sprintf("  Gateway: %s (optional via --gateway)", state.gatewayURL))
+	}
+	printInteractiveHeader("Interactive Mode", lines...)
 
 	for {
 		line, err := readInteractiveLineStable(state)
 		if err != nil {
 			break
 		}
-		line = strings.TrimPrefix(line, "\ufeff")
 		if line == "" {
 			continue
 		}
@@ -525,7 +611,9 @@ func readInteractiveLineStable(state *RuntimeState) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(line), nil
+	line = strings.TrimSpace(line)
+	line = strings.TrimPrefix(line, "\ufeff")
+	return line, nil
 }
 
 func rebindBuiltinsStable(state *RuntimeState) {
@@ -662,17 +750,14 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 		fmt.Println()
 		printSuccess("Bye")
 		return true
-
 	case commandText == "/help", commandText == "/?":
 		fmt.Println()
 		printInteractiveHelp()
 		return false
-
 	case commandText == "/clear":
 		state.agent.ClearHistory()
 		printSuccess("Chat history cleared")
 		return false
-
 	case commandText == "/memory":
 		mem, _ := state.agent.ShowMemory()
 		fmt.Println()
@@ -680,7 +765,6 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 		fmt.Println(mem)
 		fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 40)))
 		return false
-
 	case commandText == "/skills":
 		loadedSkills := state.agent.ListSkills()
 		fmt.Println()
@@ -693,7 +777,6 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 			fmt.Printf("  - %s: %s\n", skill.Name, skill.Description)
 		}
 		return false
-
 	case commandText == "/tools":
 		registeredTools := state.agent.ListTools()
 		fmt.Println()
@@ -702,7 +785,6 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 			fmt.Printf("  - %s: %s\n", tool.Name, tool.Description)
 		}
 		return false
-
 	case commandText == "/provider":
 		fmt.Println()
 		fmt.Printf("Provider:   %s\n", state.cfg.LLM.Provider)
@@ -710,15 +792,12 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 		fmt.Printf("Temp:       %.1f\n", state.cfg.LLM.Temperature)
 		fmt.Printf("Permission: %s\n", state.cfg.Agent.PermissionLevel)
 		return false
-
 	case commandText == "/agents":
 		showAgentProfilesStable(state)
 		return false
-
 	case commandText == "/audit":
 		showAuditLogStable(state)
 		return false
-
 	case strings.HasPrefix(commandText, "/agent use "):
 		targetName := strings.TrimSpace(strings.TrimPrefix(input, "/agent use "))
 		if err := switchAgentProfileStable(state, targetName); err != nil {
@@ -727,12 +806,10 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 			printSuccess("Switched to agent: %s", targetName)
 		}
 		return false
-
 	case commandText == "/providers":
 		fmt.Println()
 		showAvailableProvidersStable()
 		return false
-
 	case strings.HasPrefix(commandText, "/models"):
 		parts := strings.Fields(input)
 		providerName := state.cfg.LLM.Provider
@@ -742,15 +819,19 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 		fmt.Println()
 		showModelsForProviderStable(providerName)
 		return false
-
 	case strings.HasPrefix(commandText, "/set"):
 		fmt.Println()
 		handleSetCommandStable(state, input)
 		return false
-
+	case commandText == "/gateway":
+		if state.gatewayURL != "" {
+			fmt.Printf("Gateway: %s\n", state.gatewayURL)
+		} else {
+			fmt.Println("No gateway configured")
+		}
+		return false
 	default:
-		fmt.Printf("%sUnknown command:%s %s\n", ui.Error.Sprint(""), ui.Reset.Sprint(""), input)
-		fmt.Printf("Type %s/help%s to see the available commands.\n", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
+		printUnknownInteractiveCommand(input)
 		return false
 	}
 }
@@ -821,11 +902,11 @@ func handleSetCommandStable(state *RuntimeState, input string) {
 }
 
 func showAvailableProvidersStable() {
-	fmt.Printf("%s\n\n", ui.Bold.Sprint("Available providers"))
+	fmt.Printf("%s\n\n", ui.Bold.Sprint("Available Providers"))
 	fmt.Printf("  %sopenai%s      - OpenAI (GPT-4, GPT-3.5)\n", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
 	fmt.Printf("  %santhropic%s   - Anthropic (Claude)\n", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
-	fmt.Printf("  %sqwen%s        - Qwen (DashScope / Tongyi)\n", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
-	fmt.Printf("  %sollama%s      - Ollama (local models)\n", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
+	fmt.Printf("  %sqwen%s        - Qwen via DashScope\n", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
+	fmt.Printf("  %sollama%s      - Ollama local models\n", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
 	fmt.Printf("  %scompatible%s  - OpenAI-compatible API\n", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
 	fmt.Println()
 }
@@ -865,27 +946,88 @@ func showModelsForProviderStable(provider string) {
 }
 
 func printInteractiveHelp() {
-	fmt.Printf("%s\n", ui.Bold.Sprint("Commands:"))
-	fmt.Println("  /exit, /quit, /q   - exit")
-	fmt.Println("  /clear             - clear chat history")
-	fmt.Println("  /memory            - show memory")
-	fmt.Println("  /skills            - list skills")
-	fmt.Println("  /tools             - list tools")
-	fmt.Println("  /provider          - current provider/model")
-	fmt.Println("  /providers         - available providers")
-	fmt.Println("  /models <name>     - models for provider")
-	fmt.Println("  /agents            - show agent profiles")
-	fmt.Println("  /agent use <name>  - switch active agent")
-	fmt.Println("  /audit             - recent audit log")
-	fmt.Println("  /set provider <v>  - set provider")
-	fmt.Println("  /set model <v>     - set model")
-	fmt.Println("  /set apikey <v>    - set API key")
-	fmt.Println("  /set temp <v>      - set temperature (0.0-2.0)")
-	fmt.Println("  /help, /?          - help")
+	fmt.Printf("%s\n", ui.Bold.Sprint("Commands"))
+	fmt.Println("  /exit, /quit, /q     - exit")
+	fmt.Println("  /clear               - clear chat history")
+	fmt.Println("  /memory              - show memory")
+	fmt.Println("  /skills              - list skills")
+	fmt.Println("  /tools               - list tools")
+	fmt.Println("  /provider            - show current provider and model")
+	fmt.Println("  /providers           - list available providers")
+	fmt.Println("  /models <name>       - list models for a provider")
+	fmt.Println("  /agents              - show agent profiles")
+	fmt.Println("  /agent use <name>    - switch active agent")
+	fmt.Println("  /audit               - show recent audit log")
+	fmt.Println("  /gateway             - show current gateway address")
+	fmt.Println("  /set provider <v>    - set provider")
+	fmt.Println("  /set model <v>       - set model")
+	fmt.Println("  /set apikey <v>      - set API key")
+	fmt.Println("  /set temp <v>        - set temperature (0.0-2.0)")
+	fmt.Println("  /help, /?            - show help")
 }
 
 func saveRuntimeConfig(state *RuntimeState) {
 	if err := state.cfg.Save(state.configPath); err != nil {
 		printError("Failed to save config: %v", err)
 	}
+}
+
+func runSetupWizardGateway(cfg *config.Config) {
+	fmt.Println(ui.Dim.Sprint(cliSectionDivider(60)))
+	fmt.Printf("%s\n\n", ui.Bold.Sprint("Setup Wizard"))
+
+	wizardReader := consoleio.NewReader(os.Stdin)
+
+	fmt.Printf("%s\n\n", ui.Bold.Sprint("Step 1/5: Choose provider"))
+	showAvailableProvidersStable()
+	fmt.Printf("%s\nProvider > %s", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
+
+	selectedProvider, _ := wizardReader.ReadString('\n')
+	selectedProvider = strings.TrimSpace(strings.ToLower(selectedProvider))
+	if selectedProvider == "" {
+		selectedProvider = "qwen"
+	}
+	if selectedProvider == "ali" || selectedProvider == "alibaba" {
+		selectedProvider = "qwen"
+	}
+	cfg.LLM.Provider = selectedProvider
+
+	fmt.Printf("\n%s\n\n", ui.Bold.Sprint("Step 2/5: Choose model"))
+	showModelsForProviderStable(selectedProvider)
+	fmt.Printf("%s\nModel > %s", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
+
+	selectedModel, _ := wizardReader.ReadString('\n')
+	selectedModel = strings.TrimSpace(strings.ToLower(selectedModel))
+	if selectedModel == "" {
+		selectedModel = getDefaultModel(selectedProvider)
+	}
+	cfg.LLM.Model = selectedModel
+
+	fmt.Printf("\n%s\n", ui.Bold.Sprint("Step 3/5: API key"))
+	fmt.Printf("%s\n", getProviderHint(selectedProvider))
+	fmt.Printf("%sAPI key: %s", ui.Cyan.Sprint(""), ui.Reset.Sprint(""))
+
+	enteredAPIKey, _ := wizardReader.ReadString('\n')
+	cfg.LLM.APIKey = strings.TrimSpace(enteredAPIKey)
+
+	fmt.Printf("\n%s", ui.Bold.Sprint("Step 4/5: Proxy"))
+	fmt.Printf("%s (optional, press Enter to skip)%s", ui.Yellow.Sprint(""), ui.Reset.Sprint(""))
+	fmt.Printf("%s\n> %s", ui.Green.Sprint(""), ui.Reset.Sprint(""))
+
+	enteredProxy, _ := wizardReader.ReadString('\n')
+	cfg.LLM.Proxy = strings.TrimSpace(enteredProxy)
+
+	fmt.Printf("\n%s", ui.Bold.Sprint("Step 5/5: Agent name"))
+	fmt.Printf("%s (default: AnyClaw)%s", ui.Yellow.Sprint(""), ui.Reset.Sprint(""))
+	fmt.Printf("%s\n> %s", ui.Green.Sprint(""), ui.Reset.Sprint(""))
+
+	agentName, _ := wizardReader.ReadString('\n')
+	agentName = strings.TrimSpace(agentName)
+	if agentName != "" {
+		cfg.Agent.Name = agentName
+	}
+
+	fmt.Println()
+	printSuccess("Config saved")
+	fmt.Println(ui.Dim.Sprint(cliSectionDivider(50)))
 }

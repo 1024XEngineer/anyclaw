@@ -102,6 +102,14 @@ func (p *VoiceWakeProcessor) Start() error {
 func (p *VoiceWakeProcessor) onVoiceWakeEvent(event VoiceWakeEvent) {
 	switch event.Type {
 	case VoiceWakeEventWakeDetected:
+		p.mu.Lock()
+		if p.isProcessing {
+			p.mu.Unlock()
+			log.Printf("voicewake-processor: already processing, skipping wake event")
+			return
+		}
+		p.isProcessing = true
+		p.mu.Unlock()
 		go p.handleWakeDetected(event)
 
 	case VoiceWakeEventError:
@@ -114,18 +122,11 @@ func (p *VoiceWakeProcessor) onVoiceWakeEvent(event VoiceWakeEvent) {
 }
 
 func (p *VoiceWakeProcessor) handleWakeDetected(event VoiceWakeEvent) {
-	p.mu.Lock()
-	if p.isProcessing {
-		p.mu.Unlock()
-		log.Printf("voicewake-processor: already processing, skipping wake event")
-		return
-	}
-	p.isProcessing = true
-	p.mu.Unlock()
-
 	defer func() {
 		p.mu.Lock()
 		p.isProcessing = false
+		p.conversationCtx = nil
+		p.conversationCancel = nil
 		p.mu.Unlock()
 	}()
 

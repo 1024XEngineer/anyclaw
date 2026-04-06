@@ -50,7 +50,7 @@ func runChannelsList(args []string) error {
 	}
 
 	if !reachable {
-		printInfo("Gateway not reachable at %s; showing configured channels only", gatewayURL(cfg, ""))
+		printInfo("Gateway not reachable at %s; showing configured channels only", gatewayHTTPBaseURL(cfg))
 	}
 	printSuccess("Found %d channel(s)", len(items))
 	printChannelStatuses(items)

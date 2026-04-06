@@ -21,8 +21,23 @@ func gatewayHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout}
 }
 
+func gatewayHTTPBaseURL(cfg *config.Config) string {
+	baseURL := strings.TrimSpace(appRuntime.GatewayURL(cfg))
+	baseURL = strings.TrimRight(baseURL, "/")
+	switch {
+	case strings.HasPrefix(baseURL, "ws://"):
+		baseURL = "http://" + strings.TrimPrefix(baseURL, "ws://")
+	case strings.HasPrefix(baseURL, "wss://"):
+		baseURL = "https://" + strings.TrimPrefix(baseURL, "wss://")
+	}
+	if strings.HasSuffix(baseURL, "/ws") {
+		baseURL = strings.TrimSuffix(baseURL, "/ws")
+	}
+	return baseURL
+}
+
 func gatewayURL(cfg *config.Config, path string) string {
-	baseURL := strings.TrimRight(appRuntime.GatewayURL(cfg), "/")
+	baseURL := strings.TrimRight(gatewayHTTPBaseURL(cfg), "/")
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}

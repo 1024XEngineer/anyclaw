@@ -18,7 +18,6 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/agent"
 	"github.com/anyclaw/anyclaw/pkg/agentstore"
-	"github.com/anyclaw/anyclaw/pkg/canvas"
 	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/chat"
 	"github.com/anyclaw/anyclaw/pkg/config"
@@ -95,8 +94,7 @@ type Server struct {
 	channelPolicy  *channel.ChannelPolicy
 	presenceMgr    *channel.PresenceManager
 	contactDir     *channel.ContactDirectory
-	canvasStore    *canvas.CanvasStore
-	canvasHub      *CanvasHub
+	devicePairing  *DevicePairing
 }
 
 var titleCase = cases.Title(language.English)
@@ -150,6 +148,10 @@ func New(app *runtime.App) *Server {
 		jobMaxAttempts: app.Config.Gateway.JobMaxAttempts,
 		webhooks:       NewWebhookHandler(),
 		nodes:          NewNodeManager(),
+		devicePairing:  NewDevicePairing(app.Config.Security.PairingTTLHours),
+	}
+	if app.Config.Security.PairingEnabled {
+		server.devicePairing.SetEnabled(true)
 	}
 	server.approvals = newApprovalManager(store)
 
@@ -862,7 +864,6 @@ func (s *Server) Run(ctx context.Context) error {
 	s.initMCP(ctx)
 	s.initMarketStore()
 	s.initDiscovery(ctx)
-	s.initCanvas()
 	if err := s.ensureDefaultWorkspace(); err != nil {
 		return err
 	}
@@ -966,12 +967,6 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/v1/models", s.wrap("/v1/models", s.handleOpenAIModels))
 	mux.HandleFunc("/v1/responses", s.wrap("/v1/responses", s.handleOpenAIResponses))
 
-	// WebChat and Dashboard UI
-	mux.HandleFunc("/webchat", s.wrap("/webchat", s.handleWebChat))
-	s.registerDashboardRoutes(mux)
-	mux.HandleFunc("/api/webchat/status", s.wrap("/api/webchat/status", s.handleWebChatStatus))
-	mux.HandleFunc("/market", s.wrap("/market", s.handleMarketUI))
-
 	// Webhook endpoints
 	mux.HandleFunc("/webhooks/", s.rateLimit.Wrap(s.handleWebhookIncoming))
 
@@ -980,24 +975,16 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/nodes/", s.wrap("/nodes/", s.handleNodeByID))
 	mux.HandleFunc("/nodes/invoke", s.wrap("/nodes/invoke", requirePermission("nodes.write", s.handleNodeInvoke)))
 
+	// Device pairing
+	mux.HandleFunc("/device/pairing", s.wrap("/device/pairing", s.handleDevicePairing))
+	mux.HandleFunc("/device/pairing/code", s.wrap("/device/pairing/code", s.handleDevicePairingCode))
+
 	// LAN Discovery
 	mux.HandleFunc("/discovery/instances", s.wrap("/discovery/instances", s.handleDiscoveryInstances))
 	mux.HandleFunc("/discovery/query", s.wrap("/discovery/query", s.handleDiscoveryQuery))
-	mux.HandleFunc("/discovery", s.wrap("/discovery", s.handleDiscoveryUI))
 
 	// Cron jobs
 	cron.RegisterUIHandler(mux, cronScheduler, "/cron")
-
-	// Canvas
-	mux.HandleFunc("/canvas", s.handleCanvasUI)
-	mux.HandleFunc("/canvas/", s.handleCanvasUI)
-	mux.HandleFunc("/api/canvas", s.wrap("/api/canvas", s.handleCanvasList))
-	mux.HandleFunc("/api/canvas/", s.wrap("/api/canvas/", s.handleCanvasRoute))
-	mux.HandleFunc("/ws/canvas", s.handleCanvasWS)
-
-	// Static file hosting for canvas and a2ui
-	mux.HandleFunc("/__openclaw__/canvas/", s.handleCanvasStatic)
-	mux.HandleFunc("/__openclaw__/a2ui/", s.handleA2UIStatic)
 
 	mux.HandleFunc("/", s.handleRootAPI)
 
@@ -1127,221 +1114,243 @@ func (s *Server) processChannelMessageStream(ctx context.Context, sessionID stri
 	return session.ID, nil
 }
 
-func (s *Server) runOrCreateChannelSession(ctx context.Context, source string, sessionID string, message string, meta map[string]string) (string, *Session, error) {
+func (s *Server) resolveChannelRouteDecision(source string, sessionID string, message string, meta map[string]string) channel.RouteDecision {
 	decision := channel.RouteDecision{}
 	routeSource := sessionID
-	if strings.TrimSpace(meta["reply_target"]) != "" {
-		routeSource = strings.TrimSpace(meta["reply_target"])
+	if replyTarget := strings.TrimSpace(meta["reply_target"]); replyTarget != "" {
+		routeSource = replyTarget
 	}
 	if s.router != nil {
-		decision = s.router.Decide(channel.RouteRequest{Channel: source, Source: routeSource, Text: message, ThreadID: meta["thread_id"], IsGroup: meta["is_group"] == "true", GroupID: meta["guild_id"]})
+		decision = s.router.Decide(channel.RouteRequest{
+			Channel:  source,
+			Source:   routeSource,
+			Text:     message,
+			ThreadID: meta["thread_id"],
+			IsGroup:  meta["is_group"] == "true",
+			GroupID:  meta["guild_id"],
+		})
 	}
-	if strings.TrimSpace(sessionID) == "" {
-		agentName := s.app.Config.ResolveMainAgentName()
-		orgID, projectID, workspaceID := defaultResourceIDs(s.app.WorkingDir)
-		if decision.Agent != "" {
-			agentName = decision.Agent
-		}
-		if decision.Org != "" {
-			orgID = decision.Org
-		}
-		if decision.Project != "" {
-			projectID = decision.Project
-		}
-		if decision.Workspace != "" {
-			workspaceID = decision.Workspace
-		}
-		org, project, workspace, err := s.validateResourceSelection(orgID, projectID, workspaceID)
-		if err != nil {
-			return "", nil, err
-		}
-		title := strings.TrimSpace(decision.Title)
-		if title == "" {
-			title = titleCase.String(source) + " session"
-		}
-		createOpts := SessionCreateOptions{
-			Title:         title,
-			AgentName:     agentName,
-			Org:           org.ID,
-			Project:       project.ID,
-			Workspace:     workspace.ID,
-			SessionMode:   normalizeSingleAgentSessionMode(decision.SessionMode, "channel-dm"),
-			QueueMode:     decision.QueueMode,
-			ReplyBack:     decision.ReplyBack,
-			SourceChannel: source,
-			SourceID:      firstNonEmpty(strings.TrimSpace(meta["user_id"]), strings.TrimSpace(meta["reply_target"]), sessionID),
-		}
-		if createOpts.SessionMode == "" {
-			createOpts.SessionMode = "main"
-		}
-		session, err := s.sessions.CreateWithOptions(createOpts)
-		if err != nil {
-			return "", nil, err
-		}
-		sessionID = session.ID
-		payload := map[string]any{"title": session.Title, "source": source}
-		for k, v := range meta {
-			if strings.TrimSpace(v) != "" {
-				payload[k] = v
-			}
-		}
-		s.appendEvent("session.created", sessionID, payload)
+	return decision
+}
+
+func (s *Server) ensureChannelSession(source string, sessionID string, decision channel.RouteDecision, meta map[string]string, streaming bool) (string, error) {
+	if strings.TrimSpace(sessionID) != "" {
+		return sessionID, nil
 	}
+
+	agentName := s.app.Config.ResolveMainAgentName()
+	orgID, projectID, workspaceID := defaultResourceIDs(s.app.WorkingDir)
+	if decision.Agent != "" {
+		agentName = decision.Agent
+	}
+	if decision.Org != "" {
+		orgID = decision.Org
+	}
+	if decision.Project != "" {
+		projectID = decision.Project
+	}
+	if decision.Workspace != "" {
+		workspaceID = decision.Workspace
+	}
+
+	org, project, workspace, err := s.validateResourceSelection(orgID, projectID, workspaceID)
+	if err != nil {
+		return "", err
+	}
+
+	title := strings.TrimSpace(decision.Title)
+	if title == "" {
+		title = titleCase.String(source) + " session"
+	}
+
+	createOpts := SessionCreateOptions{
+		Title:         title,
+		AgentName:     agentName,
+		Org:           org.ID,
+		Project:       project.ID,
+		Workspace:     workspace.ID,
+		SessionMode:   normalizeSingleAgentSessionMode(decision.SessionMode, "channel-dm"),
+		QueueMode:     decision.QueueMode,
+		ReplyBack:     decision.ReplyBack,
+		SourceChannel: source,
+		SourceID:      channelSourceID(meta, sessionID),
+	}
+	if createOpts.SessionMode == "" {
+		createOpts.SessionMode = "main"
+	}
+
+	session, err := s.sessions.CreateWithOptions(createOpts)
+	if err != nil {
+		return "", err
+	}
+
+	sessionID = session.ID
+	payload := channelMetaPayload(map[string]any{
+		"title":  session.Title,
+		"source": source,
+	}, meta)
+	if streaming {
+		payload["streaming"] = true
+	}
+	s.appendEvent("session.created", sessionID, payload)
+	return sessionID, nil
+}
+
+func (s *Server) prepareChannelExecution(ctx context.Context, source string, sessionID string, message string, decision channel.RouteDecision, meta map[string]string, streaming bool) (*Session, *runtime.App, context.Context, error) {
 	if _, err := s.sessions.EnqueueTurn(sessionID); err == nil {
-		s.appendEvent("session.queue.updated", sessionID, map[string]any{"queue_mode": decision.QueueMode, "source": source, "reply_target": meta["reply_target"]})
+		s.appendEvent("session.queue.updated", sessionID, map[string]any{
+			"queue_mode":   decision.QueueMode,
+			"source":       source,
+			"reply_target": meta["reply_target"],
+		})
 	}
+
+	if _, err := s.sessions.SetUserMapping(
+		sessionID,
+		meta["user_id"],
+		firstNonEmpty(meta["username"], meta["user_name"]),
+		meta["reply_target"],
+		meta["thread_id"],
+		channelTransportMeta(meta),
+	); err == nil {
+		s.appendEvent("session.user_mapped", sessionID, map[string]any{
+			"source":       source,
+			"user_id":      meta["user_id"],
+			"user_name":    firstNonEmpty(meta["username"], meta["user_name"]),
+			"reply_target": meta["reply_target"],
+		})
+	}
+
+	if _, err := s.sessions.SetPresence(sessionID, "typing", true); err == nil {
+		s.appendEvent("session.typing", sessionID, map[string]any{
+			"typing":  true,
+			"source":  source,
+			"user_id": meta["user_id"],
+		})
+	}
+
+	startedPayload := channelMetaPayload(map[string]any{
+		"message": message,
+		"source":  source,
+	}, meta)
+	if streaming {
+		startedPayload["streaming"] = true
+	}
+	s.appendEvent("chat.started", sessionID, startedPayload)
+
+	session, ok := s.sessions.Get(sessionID)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("session not found: %s", sessionID)
+	}
+	if s.runtimePool == nil {
+		return nil, nil, nil, fmt.Errorf("runtime pool not initialized")
+	}
+
+	targetApp, err := s.runtimePool.GetOrCreate(session.Agent, session.Org, session.Project, session.Workspace)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	targetApp.Agent.SetHistory(session.History)
+
+	execCtx := tools.WithBrowserSession(ctx, sessionID)
+	execCtx = tools.WithSandboxScope(execCtx, tools.SandboxScope{SessionID: sessionID, Channel: source})
+	return session, targetApp, execCtx, nil
+}
+
+func (s *Server) finalizeChannelExecution(sessionID string, source string, message string, response string, meta map[string]string, targetApp *runtime.App, streaming bool) (*Session, error) {
+	updatedSession, err := s.sessions.AddExchange(sessionID, message, response)
+	if err != nil {
+		return nil, err
+	}
+	if updatedSession.ReplyBack {
+		s.appendEvent("session.reply_back", sessionID, map[string]any{
+			"enabled":      true,
+			"source":       source,
+			"reply_target": meta["reply_target"],
+		})
+	}
+	if _, err := s.sessions.SetPresence(sessionID, "idle", false); err == nil {
+		s.appendEvent("session.presence", sessionID, map[string]any{
+			"presence": "idle",
+			"source":   source,
+			"user_id":  meta["user_id"],
+		})
+	}
+
+	if targetApp != nil {
+		s.recordSessionToolActivities(updatedSession, targetApp.Agent.GetLastToolActivities())
+	}
+
+	completedPayload := channelMetaPayload(map[string]any{
+		"message":         message,
+		"response_length": len(response),
+		"source":          source,
+	}, meta)
+	if streaming {
+		completedPayload["streaming"] = true
+	}
+	s.appendEvent("chat.completed", sessionID, completedPayload)
+	return updatedSession, nil
+}
+
+func channelMetaPayload(base map[string]any, meta map[string]string) map[string]any {
+	payload := make(map[string]any, len(base)+len(meta))
+	for k, v := range base {
+		payload[k] = v
+	}
+	for k, v := range meta {
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			payload[k] = trimmed
+		}
+	}
+	return payload
+}
+
+func channelTransportMeta(meta map[string]string) map[string]string {
 	transportMeta := map[string]string{}
 	for _, key := range []string{"channel_id", "chat_id", "guild_id", "attachment_count"} {
 		if v := strings.TrimSpace(meta[key]); v != "" {
 			transportMeta[key] = v
 		}
 	}
-	if _, err := s.sessions.SetUserMapping(sessionID, meta["user_id"], firstNonEmpty(meta["username"], meta["user_name"]), meta["reply_target"], meta["thread_id"], transportMeta); err == nil {
-		s.appendEvent("session.user_mapped", sessionID, map[string]any{"source": source, "user_id": meta["user_id"], "user_name": firstNonEmpty(meta["username"], meta["user_name"]), "reply_target": meta["reply_target"]})
-	}
-	if _, err := s.sessions.SetPresence(sessionID, "typing", true); err == nil {
-		s.appendEvent("session.typing", sessionID, map[string]any{"typing": true, "source": source, "user_id": meta["user_id"]})
-	}
-	startedPayload := map[string]any{"message": message, "source": source}
-	for k, v := range meta {
-		if strings.TrimSpace(v) != "" {
-			startedPayload[k] = v
-		}
-	}
-	startedEvent := NewEvent("chat.started", sessionID, startedPayload)
-	_ = s.store.AppendEvent(startedEvent)
-	s.bus.Publish(startedEvent)
-	session, ok := s.sessions.Get(sessionID)
-	if !ok {
-		return "", nil, fmt.Errorf("session not found: %s", sessionID)
-	}
-	targetApp, err := s.runtimePool.GetOrCreate(session.Agent, session.Org, session.Project, session.Workspace)
+	return transportMeta
+}
+
+func channelSourceID(meta map[string]string, fallback string) string {
+	return firstNonEmpty(strings.TrimSpace(meta["user_id"]), strings.TrimSpace(meta["reply_target"]), fallback)
+}
+
+func (s *Server) runOrCreateChannelSession(ctx context.Context, source string, sessionID string, message string, meta map[string]string) (string, *Session, error) {
+	decision := s.resolveChannelRouteDecision(source, sessionID, message, meta)
+	sessionID, err := s.ensureChannelSession(source, sessionID, decision, meta, false)
 	if err != nil {
 		return "", nil, err
 	}
-	targetApp.Agent.SetHistory(session.History)
-	execCtx := tools.WithBrowserSession(ctx, sessionID)
-	execCtx = tools.WithSandboxScope(execCtx, tools.SandboxScope{SessionID: sessionID, Channel: source})
+	_, targetApp, execCtx, err := s.prepareChannelExecution(ctx, source, sessionID, message, decision, meta, false)
+	if err != nil {
+		return "", nil, err
+	}
 	response, err := targetApp.Agent.Run(execCtx, message)
 	if err != nil {
 		return "", nil, err
 	}
-	updatedSession, err := s.sessions.AddExchange(sessionID, message, response)
+	updatedSession, err := s.finalizeChannelExecution(sessionID, source, message, response, meta, targetApp, false)
 	if err != nil {
 		return "", nil, err
 	}
-	if updatedSession.ReplyBack {
-		s.appendEvent("session.reply_back", sessionID, map[string]any{"enabled": true, "source": source, "reply_target": meta["reply_target"]})
-	}
-	if _, err := s.sessions.SetPresence(sessionID, "idle", false); err == nil {
-		s.appendEvent("session.presence", sessionID, map[string]any{"presence": "idle", "source": source, "user_id": meta["user_id"]})
-	}
-	s.recordSessionToolActivities(updatedSession, targetApp.Agent.GetLastToolActivities())
-	completedPayload := map[string]any{"message": message, "response_length": len(response), "source": source}
-	for k, v := range meta {
-		if strings.TrimSpace(v) != "" {
-			completedPayload[k] = v
-		}
-	}
-	s.appendEvent("chat.completed", sessionID, completedPayload)
 	return response, updatedSession, nil
 }
 
 func (s *Server) runOrCreateChannelSessionStream(ctx context.Context, source string, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, *Session, error) {
-	decision := channel.RouteDecision{}
-	routeSource := sessionID
-	if strings.TrimSpace(meta["reply_target"]) != "" {
-		routeSource = strings.TrimSpace(meta["reply_target"])
-	}
-	if s.router != nil {
-		decision = s.router.Decide(channel.RouteRequest{Channel: source, Source: routeSource, Text: message, ThreadID: meta["thread_id"], IsGroup: meta["is_group"] == "true", GroupID: meta["guild_id"]})
-	}
-	if strings.TrimSpace(sessionID) == "" {
-		agentName := s.app.Config.ResolveMainAgentName()
-		orgID, projectID, workspaceID := defaultResourceIDs(s.app.WorkingDir)
-		if decision.Agent != "" {
-			agentName = decision.Agent
-		}
-		if decision.Org != "" {
-			orgID = decision.Org
-		}
-		if decision.Project != "" {
-			projectID = decision.Project
-		}
-		if decision.Workspace != "" {
-			workspaceID = decision.Workspace
-		}
-		org, project, workspace, err := s.validateResourceSelection(orgID, projectID, workspaceID)
-		if err != nil {
-			return "", nil, err
-		}
-		title := strings.TrimSpace(decision.Title)
-		if title == "" {
-			title = titleCase.String(source) + " session"
-		}
-		createOpts := SessionCreateOptions{
-			Title:         title,
-			AgentName:     agentName,
-			Org:           org.ID,
-			Project:       project.ID,
-			Workspace:     workspace.ID,
-			SessionMode:   normalizeSingleAgentSessionMode(decision.SessionMode, "channel-dm"),
-			QueueMode:     decision.QueueMode,
-			ReplyBack:     decision.ReplyBack,
-			SourceChannel: source,
-			SourceID:      firstNonEmpty(strings.TrimSpace(meta["user_id"]), strings.TrimSpace(meta["reply_target"]), sessionID),
-		}
-		if createOpts.SessionMode == "" {
-			createOpts.SessionMode = "main"
-		}
-		session, err := s.sessions.CreateWithOptions(createOpts)
-		if err != nil {
-			return "", nil, err
-		}
-		sessionID = session.ID
-		payload := map[string]any{"title": session.Title, "source": source, "streaming": true}
-		for k, v := range meta {
-			if strings.TrimSpace(v) != "" {
-				payload[k] = v
-			}
-		}
-		s.appendEvent("session.created", sessionID, payload)
-	}
-	if _, err := s.sessions.EnqueueTurn(sessionID); err == nil {
-		s.appendEvent("session.queue.updated", sessionID, map[string]any{"queue_mode": decision.QueueMode, "source": source, "reply_target": meta["reply_target"]})
-	}
-	transportMeta := map[string]string{}
-	for _, key := range []string{"channel_id", "chat_id", "guild_id", "attachment_count"} {
-		if v := strings.TrimSpace(meta[key]); v != "" {
-			transportMeta[key] = v
-		}
-	}
-	if _, err := s.sessions.SetUserMapping(sessionID, meta["user_id"], firstNonEmpty(meta["username"], meta["user_name"]), meta["reply_target"], meta["thread_id"], transportMeta); err == nil {
-		s.appendEvent("session.user_mapped", sessionID, map[string]any{"source": source, "user_id": meta["user_id"], "user_name": firstNonEmpty(meta["username"], meta["user_name"]), "reply_target": meta["reply_target"]})
-	}
-	if _, err := s.sessions.SetPresence(sessionID, "typing", true); err == nil {
-		s.appendEvent("session.typing", sessionID, map[string]any{"typing": true, "source": source, "user_id": meta["user_id"]})
-	}
-	startedPayload := map[string]any{"message": message, "source": source, "streaming": true}
-	for k, v := range meta {
-		if strings.TrimSpace(v) != "" {
-			startedPayload[k] = v
-		}
-	}
-	startedEvent := NewEvent("chat.started", sessionID, startedPayload)
-	_ = s.store.AppendEvent(startedEvent)
-	s.bus.Publish(startedEvent)
-	session, ok := s.sessions.Get(sessionID)
-	if !ok {
-		return "", nil, fmt.Errorf("session not found: %s", sessionID)
-	}
-	targetApp, err := s.runtimePool.GetOrCreate(session.Agent, session.Org, session.Project, session.Workspace)
+	decision := s.resolveChannelRouteDecision(source, sessionID, message, meta)
+	sessionID, err := s.ensureChannelSession(source, sessionID, decision, meta, true)
 	if err != nil {
 		return "", nil, err
 	}
-	targetApp.Agent.SetHistory(session.History)
-	execCtx := tools.WithBrowserSession(ctx, sessionID)
-	execCtx = tools.WithSandboxScope(execCtx, tools.SandboxScope{SessionID: sessionID, Channel: source})
+	_, targetApp, execCtx, err := s.prepareChannelExecution(ctx, source, sessionID, message, decision, meta, true)
+	if err != nil {
+		return "", nil, err
+	}
 
 	var responseText strings.Builder
 	err = targetApp.Agent.RunStream(execCtx, message, func(chunk string) {
@@ -1353,31 +1362,24 @@ func (s *Server) runOrCreateChannelSessionStream(ctx context.Context, source str
 	}
 
 	response := responseText.String()
-	updatedSession, err := s.sessions.AddExchange(sessionID, message, response)
+	updatedSession, err := s.finalizeChannelExecution(sessionID, source, message, response, meta, targetApp, true)
 	if err != nil {
 		return "", nil, err
 	}
-	if updatedSession.ReplyBack {
-		s.appendEvent("session.reply_back", sessionID, map[string]any{"enabled": true, "source": source, "reply_target": meta["reply_target"]})
-	}
-	if _, err := s.sessions.SetPresence(sessionID, "idle", false); err == nil {
-		s.appendEvent("session.presence", sessionID, map[string]any{"presence": "idle", "source": source, "user_id": meta["user_id"]})
-	}
-	s.recordSessionToolActivities(updatedSession, targetApp.Agent.GetLastToolActivities())
-	completedPayload := map[string]any{"message": message, "response_length": len(response), "source": source, "streaming": true}
-	for k, v := range meta {
-		if strings.TrimSpace(v) != "" {
-			completedPayload[k] = v
-		}
-	}
-	s.appendEvent("chat.completed", sessionID, completedPayload)
 	return response, updatedSession, nil
 }
 
 func (s *Server) appendEvent(eventType string, sessionID string, payload map[string]any) {
+	if s == nil {
+		return
+	}
 	event := NewEvent(eventType, sessionID, payload)
-	_ = s.store.AppendEvent(event)
-	s.bus.Publish(event)
+	if s.store != nil {
+		_ = s.store.AppendEvent(event)
+	}
+	if s.bus != nil {
+		s.bus.Publish(event)
+	}
 }
 
 func (s *Server) appendToolActivity(sessionID string, activity ToolActivityRecord) {
@@ -1708,11 +1710,6 @@ func (s *Server) handleRootAPI(w http.ResponseWriter, r *http.Request) {
 			"health":     "/healthz",
 			"status":     "/status",
 			"chat":       "/chat",
-			"webchat":    "/webchat",
-			"dashboard":  s.controlUIBasePath(),
-			"canvas":     "/canvas",
-			"canvas_api": "/api/canvas",
-			"canvas_ws":  "/ws/canvas",
 			"agents":     "/agents",
 			"tasks":      "/tasks",
 			"sessions":   "/sessions",
@@ -1727,6 +1724,7 @@ func (s *Server) handleRootAPI(w http.ResponseWriter, r *http.Request) {
 			"webhooks":   "/webhooks/",
 			"nodes":      "/nodes",
 			"cron":       "/cron",
+			"pairing":    "/device/pairing",
 		},
 	})
 }
@@ -3580,6 +3578,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			resolvedParticipants = append(resolvedParticipants, resolvedName)
 		}
 		resolvedParticipants = normalizeParticipants(agentName, resolvedParticipants)
+		if req.IsGroup || strings.TrimSpace(req.GroupKey) != "" || isGroupSessionMode(req.SessionMode) || len(resolvedParticipants) > 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "multi-agent session creation is not supported on /sessions; use single-agent sessions only",
+			})
+			return
+		}
 		orgID, projectID, workspaceID := s.resolveResourceSelection(r)
 		org, project, workspace, err := s.validateResourceSelection(orgID, projectID, workspaceID)
 		if err != nil {
@@ -3612,11 +3616,19 @@ func normalizeSingleAgentSessionMode(mode string, fallback string) string {
 	if mode == "" {
 		return fallback
 	}
-	switch mode {
-	case "group", "group-shared", "channel-group":
+	if isGroupSessionMode(mode) {
 		return fallback
 	}
 	return mode
+}
+
+func isGroupSessionMode(mode string) bool {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case "group", "group-shared", "channel-group":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
@@ -4268,9 +4280,11 @@ func runWorker(ctx context.Context, app *runtime.App) error {
 	mux.HandleFunc("/skills", server.wrap("/skills", requirePermission("skills.read", server.handleSkills)))
 	mux.HandleFunc("/tools/activity", server.wrap("/tools/activity", requirePermission("tools.read", server.handleToolActivity)))
 	mux.HandleFunc("/tools", server.wrap("/tools", requirePermission("tools.read", server.handleTools)))
-	mux.HandleFunc("/webchat", server.wrap("/webchat", server.handleWebChat))
-	server.registerDashboardRoutes(mux)
-	mux.HandleFunc("/api/webchat/status", server.wrap("/api/webchat/status", server.handleWebChatStatus))
+
+	// Device pairing
+	mux.HandleFunc("/device/pairing", server.wrap("/device/pairing", server.handleDevicePairing))
+	mux.HandleFunc("/device/pairing/code", server.wrap("/device/pairing/code", server.handleDevicePairingCode))
+
 	mux.HandleFunc("/channels/whatsapp/webhook", server.rateLimit.Wrap(server.handleWhatsAppWebhook))
 	mux.HandleFunc("/channels/discord/interactions", server.rateLimit.Wrap(server.handleDiscordInteractions))
 	mux.HandleFunc("/ingress/web", server.rateLimit.Wrap(server.handleSignedIngress))
@@ -4822,7 +4836,7 @@ func (s *Server) handleMarketUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleDiscoveryInstances(w http.ResponseWriter, r *http.Request) {
@@ -4865,7 +4879,7 @@ func (s *Server) handleDiscoveryUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 func (s *Server) handleMentionGate(w http.ResponseWriter, r *http.Request) {

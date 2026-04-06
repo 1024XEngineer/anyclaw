@@ -1,0 +1,245 @@
+{
+  "sessions": [],
+  "events": [
+    {
+      "id": "evt_1775449801002343000_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T04:30:01.002343Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775449801009359300_2",
+      "type": "canvas.init.ok",
+      "timestamp": "2026-04-06T04:30:01.0093593Z",
+      "payload": {
+        "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\anyclaw\\.anyclaw\\canvas"
+      }
+    },
+    {
+      "id": "evt_1775450395870066800_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T04:39:55.8700668Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775450395878999900_2",
+      "type": "canvas.init.ok",
+      "timestamp": "2026-04-06T04:39:55.8789999Z",
+      "payload": {
+        "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\anyclaw\\.anyclaw\\canvas"
+      }
+    },
+    {
+      "id": "evt_1775461301127612700_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T07:41:41.1276127Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775461855393826900_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T07:50:55.3938269Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775462334934691600_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T07:58:54.9346916Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775462575119240900_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T08:02:55.1192409Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775462776954722900_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T08:06:16.9547229Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775462981404734700_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T08:09:41.4047347Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775463077383606600_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T08:11:17.3836066Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775463284186405400_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T08:14:44.1864054Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775463328957663600_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T08:15:28.9576636Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775463349399577200_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T08:15:49.3995772Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775463368855881900_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T08:16:08.8558819Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    },
+    {
+      "id": "evt_1775464096419206600_1",
+      "type": "security.init",
+      "timestamp": "2026-04-06T08:28:16.4192066Z",
+      "payload": {
+        "allow_from": 0,
+        "dm_policy": "allow-list",
+        "group_policy": "mention-only",
+        "mention_gate": true,
+        "pairing_enabled": false,
+        "risk_acknowledged": true
+      }
+    }
+  ],
+  "tools": [],
+  "audit": [
+    {
+      "id": "aud_1775461319301147900_2",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "status.read",
+      "target": "status",
+      "timestamp": "2026-04-06T07:41:59.3011479Z"
+    },
+    {
+      "id": "aud_1775461319301675400_3",
+      "actor": "local-admin",
+      "role": "admin",
+      "action": "agents.read",
+      "target": "agents",
+      "timestamp": "2026-04-06T07:41:59.3016754Z"
+    }
+  ],
+  "orgs": [
+    {
+      "id": "org-local",
+      "name": "Local Org"
+    }
+  ],
+  "projects": [
+    {
+      "id": "project-local",
+      "org_id": "org-local",
+      "name": "Local Project"
+    }
+  ],
+  "workspaces": [
+    {
+      "id": "ws-d--anyclaw-anyclaw-anyclaw-anyclaw3-anyclaw-workflows",
+      "project_id": "project-local",
+      "name": "workflows",
+      "path": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw3\\anyclaw\\workflows"
+    }
+  ],
+  "jobs": [],
+  "updated": "2026-04-06T08:28:16.4267713Z"
+}

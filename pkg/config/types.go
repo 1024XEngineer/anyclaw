@@ -65,6 +65,10 @@ type AgentConfig struct {
 	Skills                          []AgentSkillRef `json:"skills,omitempty"`
 	Profiles                        []AgentProfile  `json:"profiles"`
 	ActiveProfile                   string          `json:"active_profile"`
+	Lang                            string          `json:"lang,omitempty"`
+	WorkFocus                       string          `json:"work_focus,omitempty"`
+	BehaviorStyle                   string          `json:"behavior_style,omitempty"`
+	Constraints                     string          `json:"constraints,omitempty"`
 }
 
 type AgentProfile struct {
@@ -265,6 +269,9 @@ type SecurityConfig struct {
 	CommandTimeoutSeconds    int            `json:"command_timeout_seconds"`
 	RiskAcknowledged         bool           `json:"risk_acknowledged"`
 	SecurityAudit            []string       `json:"security_audit,omitempty"`
+	PairingEnabled           bool           `json:"pairing_enabled"`
+	PairingTTLHours          int            `json:"pairing_ttl_hours"`
+	PairingMaxDevices        int            `json:"pairing_max_devices"`
 }
 
 type OrchestratorConfig struct {
