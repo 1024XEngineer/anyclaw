@@ -244,7 +244,7 @@ func (c *client) chatOpenAICompatible(ctx context.Context, messages []Message, t
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content   string     `json:"content"`
+				Content   json.RawMessage `json:"content"`
 				ToolCalls []ToolCall `json:"tool_calls"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
@@ -263,8 +263,13 @@ func (c *client) chatOpenAICompatible(ctx context.Context, messages []Message, t
 		return nil, fmt.Errorf("no response from API")
 	}
 
+	content := extractOpenAICompatibleContent(result.Choices[0].Message.Content)
+	if strings.TrimSpace(content) == "" && len(result.Choices[0].Message.ToolCalls) == 0 {
+		return nil, fmt.Errorf("empty response content from API; provider/model may be incompatible with chat/completions")
+	}
+
 	return &Response{
-		Content:     result.Choices[0].Message.Content,
+		Content:     content,
 		ToolCalls:   result.Choices[0].Message.ToolCalls,
 		RawResponse: result,
 		Usage: Usage{
@@ -322,6 +327,38 @@ func (c *client) streamOpenAICompatible(ctx context.Context, messages []Message,
 	}
 
 	return nil
+}
+
+func extractOpenAICompatibleContent(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return ""
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+
+	var blocks []map[string]any
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return ""
+	}
+
+	var parts []string
+	for _, block := range blocks {
+		if s, ok := block["text"].(string); ok && strings.TrimSpace(s) != "" {
+			parts = append(parts, s)
+			continue
+		}
+		if textObj, ok := block["text"].(map[string]any); ok {
+			if s, ok := textObj["value"].(string); ok && strings.TrimSpace(s) != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+
+	return strings.Join(parts, "")
 }
 
 func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
