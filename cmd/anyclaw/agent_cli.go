@@ -137,39 +137,74 @@ func runAgentChat(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
-	reader := consoleio.NewReader(os.Stdin)
+	state := &RuntimeState{
+		llmClient:  app.LLM,
+		cfg:        app.Config,
+		agent:      app.Agent,
+		skills:     app.Skills,
+		audit:      app.Audit,
+		reader:     consoleio.NewReader(os.Stdin),
+		configPath: app.ConfigPath,
+		workDir:    app.WorkDir,
+		workingDir: app.WorkingDir,
+		gatewayURL: appRuntime.GatewayURL(app.Config),
+	}
 
-	fmt.Println()
-	printSuccess("Chatting with [%s] (/exit to quit, /clear to reset)", *agentName)
-	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
-	fmt.Println()
+	lines := []string{
+		ui.KeyValue("agent", state.cfg.Agent.Name),
+		ui.KeyValue("model", fmt.Sprintf("%s / %s", state.cfg.LLM.Provider, state.cfg.LLM.Model)),
+	}
+	if state.workingDir != "" {
+		lines = append(lines, ui.KeyValue("dir", state.workingDir))
+	}
+	if state.gatewayURL != "" {
+		lines = append(lines, ui.KeyValue("gateway", state.gatewayURL+" (configured)"))
+	}
+	lines = append(lines, ui.KeyValue("output", interactiveOutputMode(state)))
+	printInteractiveHeaderWithHelp("Agent Chat", nil, lines...)
 
 	for {
-		fmt.Printf("%s%s > %s", ui.Dim.Sprint("["), ui.Bold.Sprint(*agentName), ui.Reset.Sprint(""))
-		input, err := reader.ReadString('\n')
+		input, err := readInteractiveLineStable(state)
 		if err != nil {
 			break
 		}
-		input = strings.TrimSpace(input)
 		if input == "" {
 			continue
 		}
-		if input == "/exit" || input == "/quit" {
-			printSuccess("Bye")
-			break
-		}
-		if input == "/clear" {
-			app.Agent.ClearHistory()
-			printSuccess("Chat history cleared")
+
+		if strings.HasPrefix(input, "/") {
+			if handleAgentChatCommand(ctx, state, input) {
+				break
+			}
 			continue
 		}
 
-		resp, err := app.Agent.Run(ctx, input)
+		fmt.Println()
+		routeLabel := applyLLMRouteStable(state, input)
+		resp, err := state.agent.Run(ctx, input)
 		if err != nil {
 			printError("%v", err)
 			continue
 		}
-		fmt.Printf("\n%s\n\n", ui.Bold.Sprint(resp))
+		if routeLabel != "" {
+			fmt.Printf("%s%s%s\n", ui.Dim.Sprint(""), routeLabel, ui.Reset.Sprint(""))
+		}
+		printAssistantResponse(state, resp)
 	}
 	return nil
+}
+
+func printAgentChatHelp() {
+	printInteractiveHelpSections("  /gateway             - show configured gateway address")
+}
+
+func handleAgentChatCommand(ctx context.Context, state *RuntimeState, input string) bool {
+	commandText := strings.ToLower(strings.TrimSpace(input))
+	switch commandText {
+	case "/help", "/?":
+		fmt.Println()
+		printAgentChatHelp()
+		return false
+	}
+	return handleCommandStable(ctx, state, input)
 }

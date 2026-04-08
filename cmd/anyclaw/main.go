@@ -39,6 +39,7 @@ type RuntimeState struct {
 	workingDir string
 	gatewayURL string
 	client     *gateway.WSClient
+	rawOutput  bool
 }
 
 func main() {
@@ -222,19 +223,20 @@ func cliSectionDivider(width int) string {
 }
 
 func printInteractiveHeader(title string, lines ...string) {
+	printInteractiveHeaderWithHelp(title, nil, lines...)
+}
+
+func printInteractiveHeaderWithHelp(title string, helpPrinter func(), lines ...string) {
 	fmt.Println()
-	fmt.Println(ui.Dim.Sprint(cliSectionDivider(60)))
-	fmt.Printf("%s\n", ui.Bold.Sprint(title))
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		fmt.Println(line)
+	fmt.Println(ui.InteractivePanel(title, lines, []string{
+		"Enter sends your message",
+		"/help shows all commands",
+		"/quit exits",
+	}))
+	if helpPrinter != nil {
+		fmt.Println()
+		helpPrinter()
 	}
-	fmt.Println("  Press Enter to send. Type /help for commands.")
-	fmt.Println(ui.Dim.Sprint(cliSectionDivider(60)))
-	printInteractiveHelp()
-	fmt.Println(ui.Dim.Sprint(cliSectionDivider(60)))
 	fmt.Println()
 }
 
@@ -307,22 +309,20 @@ func runInteractive(ctx context.Context, state *RuntimeState) {
 
 func runGatewayClientInteractive(ctx context.Context, state *RuntimeState) {
 	lines := []string{
-		fmt.Sprintf("  Gateway: %s", state.gatewayURL),
-		fmt.Sprintf("  Agent:   %s", state.cfg.Agent.Name),
+		ui.KeyValue("gateway", state.gatewayURL),
+		ui.KeyValue("agent", state.cfg.Agent.Name),
 	}
 	if state.workingDir != "" {
-		lines = append(lines, fmt.Sprintf("  Dir:     %s", state.workingDir))
+		lines = append(lines, ui.KeyValue("dir", state.workingDir))
 	}
+	lines = append(lines, ui.KeyValue("output", interactiveOutputMode(state)))
 	printInteractiveHeader("Interactive Mode", lines...)
 
-	reader := consoleio.NewReader(os.Stdin)
 	for {
-		fmt.Print("> ")
-		line, err := reader.ReadString('\n')
+		line, err := readInteractiveLineStable(state)
 		if err != nil {
 			break
 		}
-		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -340,7 +340,7 @@ func runGatewayClientInteractive(ctx context.Context, state *RuntimeState) {
 			printError("%v", err)
 			continue
 		}
-		fmt.Printf("%s\n\n", ui.Bold.Sprint(resp))
+		printAssistantResponse(state, resp)
 	}
 }
 
@@ -358,6 +358,12 @@ func handleGatewayClientCommand(ctx context.Context, state *RuntimeState, input 
 		return false
 	case commandText == "/clear":
 		printSuccess("Chat history cleared (Gateway mode)")
+		return false
+	case commandText == "/markdown":
+		printSuccess("Output mode: %s", interactiveOutputMode(state))
+		return false
+	case strings.HasPrefix(commandText, "/markdown "):
+		handleMarkdownCommand(state, input)
 		return false
 	case commandText == "/status":
 		status, err := state.client.GetStatus(ctx)
@@ -564,15 +570,16 @@ func runRootCommandGatewayFirst(ctx context.Context, args []string) error {
 
 func runInteractiveLocal(ctx context.Context, state *RuntimeState) {
 	lines := []string{
-		fmt.Sprintf("  Agent:   %s", state.cfg.Agent.Name),
-		fmt.Sprintf("  Model:   %s / %s", state.cfg.LLM.Provider, state.cfg.LLM.Model),
+		ui.KeyValue("agent", state.cfg.Agent.Name),
+		ui.KeyValue("model", fmt.Sprintf("%s / %s", state.cfg.LLM.Provider, state.cfg.LLM.Model)),
 	}
 	if state.workingDir != "" {
-		lines = append(lines, fmt.Sprintf("  Dir:     %s", state.workingDir))
+		lines = append(lines, ui.KeyValue("dir", state.workingDir))
 	}
 	if state.gatewayURL != "" {
-		lines = append(lines, fmt.Sprintf("  Gateway: %s (optional via --gateway)", state.gatewayURL))
+		lines = append(lines, ui.KeyValue("gateway", state.gatewayURL+" (optional via --gateway)"))
 	}
+	lines = append(lines, ui.KeyValue("output", interactiveOutputMode(state)))
 	printInteractiveHeader("Interactive Mode", lines...)
 
 	for {
@@ -601,13 +608,17 @@ func runInteractiveLocal(ctx context.Context, state *RuntimeState) {
 		if routeLabel != "" {
 			fmt.Printf("%s%s%s\n", ui.Dim.Sprint(""), routeLabel, ui.Reset.Sprint(""))
 		}
-		fmt.Printf("%s\n\n", ui.Bold.Sprint(answer))
+		printAssistantResponse(state, answer)
 	}
 }
 
 func readInteractiveLineStable(state *RuntimeState) (string, error) {
-	fmt.Print("> ")
-	line, err := state.reader.ReadString('\n')
+	fmt.Printf("%s ", ui.PromptPrefix("you"))
+	reader := state.reader
+	if reader == nil {
+		reader = consoleio.NewReader(os.Stdin)
+	}
+	line, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
@@ -768,6 +779,12 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 			printSuccess("Chat history cleared (Gateway mode)")
 		}
 		return false
+	case commandText == "/markdown":
+		printSuccess("Output mode: %s", interactiveOutputMode(state))
+		return false
+	case strings.HasPrefix(commandText, "/markdown "):
+		handleMarkdownCommand(state, input)
+		return false
 	case commandText == "/memory":
 		if state.agent == nil {
 			printWarn("Memory not available in Gateway mode")
@@ -776,7 +793,7 @@ func handleCommandStable(ctx context.Context, state *RuntimeState, input string)
 		mem, _ := state.agent.ShowMemory()
 		fmt.Println()
 		fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 40)))
-		fmt.Println(mem)
+		fmt.Println(renderInteractiveOutput(state, mem))
 		fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 40)))
 		return false
 	case commandText == "/skills":
@@ -988,24 +1005,124 @@ func showModelsForProviderStable(provider string) {
 }
 
 func printInteractiveHelp() {
-	fmt.Printf("%s\n", ui.Bold.Sprint("Commands"))
-	fmt.Println("  /exit, /quit, /q     - exit")
-	fmt.Println("  /clear               - clear chat history")
-	fmt.Println("  /memory              - show memory")
-	fmt.Println("  /skills              - list skills")
-	fmt.Println("  /tools               - list tools")
-	fmt.Println("  /provider            - show current provider and model")
-	fmt.Println("  /providers           - list available providers")
-	fmt.Println("  /models <name>       - list models for a provider")
-	fmt.Println("  /agents              - show agent profiles")
-	fmt.Println("  /agent use <name>    - switch active agent")
-	fmt.Println("  /audit               - show recent audit log")
-	fmt.Println("  /gateway             - show current gateway address")
-	fmt.Println("  /set provider <v>    - set provider")
-	fmt.Println("  /set model <v>       - set model")
-	fmt.Println("  /set apikey <v>      - set API key")
-	fmt.Println("  /set temp <v>        - set temperature (0.0-2.0)")
-	fmt.Println("  /help, /?            - show help")
+	printInteractiveHelpSections("  /gateway             - show current gateway address")
+}
+
+func printInteractiveQuickHelp() {
+	printInteractiveHelpLines(
+		"Quick Start",
+		"  Chat normally        - talk to the assistant",
+		"  /help                - full command list",
+		"  /markdown on|off     - switch rich output",
+		"  /clear               - clear history",
+		"  /quit                - exit the session",
+	)
+}
+
+func printInteractiveHelpLines(title string, lines ...string) {
+	fmt.Printf("%s\n", ui.SectionTitle(title))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fmt.Println(line)
+	}
+}
+
+func printInteractiveHelpSections(gatewayLine string) {
+	printInteractiveHelpLines(
+		"Chat",
+		"  /exit, /quit, /q     - exit",
+		"  /clear               - clear chat history",
+		"  /markdown            - show current output mode",
+		"  /markdown on|off     - toggle markdown rendering",
+		"  /help, /?            - show help",
+	)
+	fmt.Println()
+	printInteractiveHelpLines(
+		"Inspect",
+		"  /memory              - show memory",
+		"  /skills              - list skills",
+		"  /tools               - list tools",
+		"  /provider            - show current provider and model",
+		"  /providers           - list available providers",
+		"  /models <name>       - list models for a provider",
+		"  /agents              - show agent profiles",
+		"  /audit               - show recent audit log",
+		gatewayLine,
+	)
+	fmt.Println()
+	printInteractiveHelpLines(
+		"Configure",
+		"  /agent use <name>    - switch active agent",
+		"  /set provider <v>    - set provider",
+		"  /set model <v>       - set model",
+		"  /set apikey <v>      - set API key",
+		"  /set temp <v>        - set temperature (0.0-2.0)",
+	)
+}
+
+func interactiveOutputModeRaw(rawOutput bool) string {
+	if rawOutput {
+		return "raw"
+	}
+	return "markdown"
+}
+
+func interactiveOutputMode(state *RuntimeState) string {
+	return interactiveOutputModeRaw(state != nil && state.rawOutput)
+}
+
+func renderChatOutput(rawOutput bool, content string) string {
+	if rawOutput {
+		return content
+	}
+	return ui.RenderMarkdown(content)
+}
+
+func renderInteractiveOutput(state *RuntimeState, content string) string {
+	return renderChatOutput(state != nil && state.rawOutput, content)
+}
+
+func printChatResponse(label string, rawOutput bool, content string) {
+	if strings.TrimSpace(label) == "" {
+		label = "assistant"
+	}
+
+	fmt.Printf("%s\n", ui.ChatHeader(label))
+
+	rendered := renderChatOutput(rawOutput, content)
+	if strings.TrimSpace(rendered) == "" {
+		rendered = ui.Dim.Sprint("(empty response)")
+	}
+	fmt.Printf("%s\n\n", ui.ChatBody(rendered))
+}
+
+func printAssistantResponse(state *RuntimeState, content string) {
+	label := "assistant"
+	if state != nil && state.cfg != nil && strings.TrimSpace(state.cfg.Agent.Name) != "" {
+		label = state.cfg.Agent.Name
+	}
+	printChatResponse(label, state != nil && state.rawOutput, content)
+}
+
+func handleMarkdownCommand(state *RuntimeState, input string) {
+	parts := strings.Fields(strings.ToLower(strings.TrimSpace(input)))
+	if len(parts) < 2 {
+		printSuccess("Output mode: %s", interactiveOutputMode(state))
+		return
+	}
+
+	switch parts[1] {
+	case "on":
+		state.rawOutput = false
+		printSuccess("Markdown rendering enabled")
+	case "off":
+		state.rawOutput = true
+		printSuccess("Markdown rendering disabled; showing raw text")
+	default:
+		printError("Usage: /markdown [on|off]")
+	}
 }
 
 func saveRuntimeConfig(state *RuntimeState) {

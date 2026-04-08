@@ -38,25 +38,37 @@ var (
 	Error   = Style{style: lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444"))}
 	Info    = Style{style: lipgloss.NewStyle().Foreground(lipgloss.Color("#3B82F6"))}
 	Warning = Style{style: lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B"))}
+
+	bannerCardStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#155E75")).Padding(0, 1).Width(96)
+	bannerTitleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#E0F2FE"))
+	bannerLeadStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#67E8F9"))
+	bannerMetaStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#CBD5E1"))
+	bannerHintStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
+	bannerVersionStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0F172A")).Background(lipgloss.Color("#FDE68A")).Padding(0, 1)
+	panelStyle         = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#334155")).Padding(0, 1)
+	panelTitleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0F172A")).Background(lipgloss.Color("#7DD3FC")).Padding(0, 1)
+	sectionTitle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#67E8F9"))
+	keyStyle           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#94A3B8")).Width(10)
+	valueStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("#E2E8F0"))
+	promptLabelStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#0F172A")).Background(lipgloss.Color("#67E8F9"))
+	promptArrowStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
+	chatRoleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8FAFC")).Background(lipgloss.Color("#0F766E")).Padding(0, 1)
+	chatBodyStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#155E75")).Padding(0, 1).MarginLeft(2)
 )
 
 func Banner(version string) {
-	purple := lipgloss.Color("#8B5CF6")
-	gray := lipgloss.Color("#6B7280")
-
-	bannerStyle := lipgloss.NewStyle().Foreground(purple).Bold(true).Padding(0, 1)
-	subStyle := lipgloss.NewStyle().Foreground(gray).Padding(0, 1)
-
-	fmt.Printf("\n")
-	fmt.Printf("    %s%s%s\n", bannerStyle.Render("╔══════════════════════════════════╗"), "  ", bannerStyle.Render("🤖 AnyClaw"))
-	fmt.Printf("    %s%s%s\n", subStyle.Render("║  Gateway-First AI Agent          ║"), "  ", subStyle.Render("中文智能助手"))
-	fmt.Printf("    %s%s%s\n", subStyle.Render("║  File-first Workspace             ║"), "  ", subStyle.Render("文件优先工作区"))
+	title := bannerTitleStyle.Render("AnyClaw")
 	if version != "" {
-		fmt.Printf("    %s  %s\n", subStyle.Render("╚══════════════════════════════════╝"), subStyle.Render("v"+version))
-	} else {
-		fmt.Printf("    %s\n", subStyle.Render("╚══════════════════════════════════╝"))
+		title = lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", bannerVersionStyle.Render("v"+version))
 	}
-	fmt.Printf("\n")
+
+	content := []string{
+		lipgloss.JoinHorizontal(lipgloss.Center, title, "  ", bannerLeadStyle.Render("gateway-first AI agent")),
+		bannerMetaStyle.Render("chat, tools, files, automation / chinese assistant / file-first workspace"),
+		bannerHintStyle.Render("/help commands / /markdown on|off / /clear history / /quit exit"),
+	}
+
+	fmt.Printf("\n%s\n\n", bannerCardStyle.Render(strings.Join(content, "\n")))
 }
 
 type SpinnerModel struct {
@@ -138,4 +150,45 @@ func Confirm(label string) bool {
 	line, _ := reader.ReadString('\n')
 	val := strings.TrimSpace(strings.ToLower(line))
 	return val == "y" || val == "yes"
+}
+
+func KeyValue(label, value string) string {
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		keyStyle.Render(strings.ToLower(strings.TrimSpace(label))),
+		valueStyle.Render(strings.TrimSpace(value)),
+	)
+}
+
+func InteractivePanel(title string, lines []string, tips []string) string {
+	content := []string{panelTitleStyle.Render(title)}
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		content = append(content, line)
+	}
+	if len(tips) > 0 {
+		content = append(content, "", bannerHintStyle.Render(strings.Join(tips, "  /  ")))
+	}
+	return panelStyle.Render(strings.Join(content, "\n"))
+}
+
+func SectionTitle(text string) string {
+	return sectionTitle.Render(text)
+}
+
+func PromptPrefix(label string) string {
+	return promptLabelStyle.Render(strings.ToLower(strings.TrimSpace(label))) + " " + promptArrowStyle.Render(">")
+}
+
+func ChatHeader(label string) string {
+	if strings.TrimSpace(label) == "" {
+		label = "assistant"
+	}
+	return chatRoleStyle.Render(label)
+}
+
+func ChatBody(content string) string {
+	return chatBodyStyle.Render(content)
 }

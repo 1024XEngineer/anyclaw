@@ -70,7 +70,48 @@ func TestReadInteractiveLineStableUsesRuntimeReader(t *testing.T) {
 	if line != "from-state-reader" {
 		t.Fatalf("expected input from runtime reader, got %q", line)
 	}
-	if output != "> " {
+	if output != "you > " {
 		t.Fatalf("expected a single prompt marker, got %q", output)
+	}
+}
+
+func TestRenderInteractiveOutputHonorsMarkdownMode(t *testing.T) {
+	state := &RuntimeState{}
+
+	rendered := renderInteractiveOutput(state, "# Title")
+	if strings.Contains(rendered, "# Title") {
+		t.Fatalf("expected markdown mode to transform heading markers, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "Title") {
+		t.Fatalf("expected heading content to remain, got %q", rendered)
+	}
+
+	state.rawOutput = true
+	if got := renderInteractiveOutput(state, "# Title"); got != "# Title" {
+		t.Fatalf("expected raw mode to preserve content, got %q", got)
+	}
+}
+
+func TestHandleMarkdownCommandTogglesOutputMode(t *testing.T) {
+	state := &RuntimeState{}
+
+	output := captureStdout(t, func() {
+		handleMarkdownCommand(state, "/markdown off")
+	})
+	if !state.rawOutput {
+		t.Fatal("expected raw output mode to be enabled")
+	}
+	if !strings.Contains(output, "Markdown rendering disabled") {
+		t.Fatalf("expected disable confirmation, got %q", output)
+	}
+
+	output = captureStdout(t, func() {
+		handleMarkdownCommand(state, "/markdown on")
+	})
+	if state.rawOutput {
+		t.Fatal("expected markdown rendering to be re-enabled")
+	}
+	if !strings.Contains(output, "Markdown rendering enabled") {
+		t.Fatalf("expected enable confirmation, got %q", output)
 	}
 }

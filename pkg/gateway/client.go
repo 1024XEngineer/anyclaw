@@ -15,40 +15,52 @@ import (
 )
 
 type pendingRequest struct {
-	ch chan openClawWSFrame
+	ch   chan openClawWSFrame
+	conn *websocket.Conn
 }
 
 type WSClient struct {
-	url       string
-	token     string
-	conn      *websocket.Conn
-	connected bool
-	mu        sync.RWMutex
-	nonce     string
-	onEvent   func(event *Event)
-	pending   map[string]*pendingRequest
-	pendingMu sync.Mutex
-	closed    chan struct{}
-	closeOnce sync.Once
-	writeMu   sync.Mutex
+	url               string
+	token             string
+	conn              *websocket.Conn
+	connected         bool
+	mu                sync.RWMutex
+	connectMu         sync.Mutex
+	nonce             string
+	onEvent           func(event *Event)
+	pending           map[string]*pendingRequest
+	pendingMu         sync.Mutex
+	closed            chan struct{}
+	closeOnce         sync.Once
+	writeMu           sync.Mutex
+	keepAliveInterval time.Duration
+	keepAliveStarted  bool
 }
 
 func NewWSClient(url, token string) *WSClient {
 	return &WSClient{
-		url:     url,
-		token:   token,
-		pending: make(map[string]*pendingRequest),
-		closed:  make(chan struct{}),
+		url:               url,
+		token:             token,
+		pending:           make(map[string]*pendingRequest),
+		closed:            make(chan struct{}),
+		keepAliveInterval: 30 * time.Second,
 	}
 }
 
 func (c *WSClient) Connect(ctx context.Context) error {
-	c.mu.Lock()
-	if c.connected {
-		c.mu.Unlock()
+	if c.isClosed() {
+		return fmt.Errorf("gateway client is closed")
+	}
+
+	c.connectMu.Lock()
+	defer c.connectMu.Unlock()
+
+	c.mu.RLock()
+	if c.connected && c.conn != nil {
+		c.mu.RUnlock()
 		return nil
 	}
-	c.mu.Unlock()
+	c.mu.RUnlock()
 
 	header := http.Header{}
 	if c.token != "" {
@@ -64,33 +76,34 @@ func (c *WSClient) Connect(ctx context.Context) error {
 		return fmt.Errorf("failed to connect to gateway: %w", err)
 	}
 
-	c.mu.Lock()
-	c.conn = conn
-	c.nonce = uniqueID("client")
-	c.mu.Unlock()
-
-	if err := c.sendConnect(ctx); err != nil {
+	if err := c.sendConnect(ctx, conn); err != nil {
 		conn.Close()
-		c.mu.Lock()
-		c.connected = false
-		c.mu.Unlock()
 		return err
 	}
 
 	c.mu.Lock()
+	c.conn = conn
+	c.nonce = uniqueID("client")
 	c.connected = true
+	startKeepAlive := !c.keepAliveStarted
+	if startKeepAlive {
+		c.keepAliveStarted = true
+	}
 	c.mu.Unlock()
 
-	go c.readLoop()
+	if startKeepAlive {
+		go c.keepAliveLoop()
+	}
+	go c.readLoop(conn)
 
 	return nil
 }
 
-func (c *WSClient) sendConnect(ctx context.Context) error {
-	c.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+func (c *WSClient) sendConnect(ctx context.Context, conn *websocket.Conn) error {
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 
 	var challengeFrame openClawWSFrame
-	if err := c.conn.ReadJSON(&challengeFrame); err != nil {
+	if err := conn.ReadJSON(&challengeFrame); err != nil {
 		return fmt.Errorf("failed to read challenge: %w", err)
 	}
 
@@ -120,14 +133,14 @@ func (c *WSClient) sendConnect(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	err := c.conn.WriteJSON(frame)
+	err := conn.WriteJSON(frame)
 	if err != nil {
 		return err
 	}
 
-	c.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var resp openClawWSFrame
-	if err := c.conn.ReadJSON(&resp); err != nil {
+	if err := conn.ReadJSON(&resp); err != nil {
 		return err
 	}
 
@@ -138,45 +151,29 @@ func (c *WSClient) sendConnect(ctx context.Context) error {
 	return nil
 }
 
-func (c *WSClient) readLoop() {
-	defer func() {
-		c.mu.Lock()
-		if c.conn != nil {
-			c.conn.Close()
-		}
-		c.connected = false
-		c.mu.Unlock()
+func (c *WSClient) readLoop(conn *websocket.Conn) {
+	defer c.handleDisconnect(conn)
 
-		c.pendingMu.Lock()
-		for id, p := range c.pending {
-			select {
-			case p.ch <- openClawWSFrame{}:
-			default:
-			}
-			delete(c.pending, id)
-		}
-		c.pendingMu.Unlock()
-	}()
-
-	c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		return nil
 	})
 
 	for {
 		var frame openClawWSFrame
-		err := c.conn.ReadJSON(&frame)
+		err := conn.ReadJSON(&frame)
 		if err != nil {
 			return
 		}
 
-		c.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 
 		if frame.Type == "res" && frame.ID != "" {
 			c.pendingMu.Lock()
-			if p, ok := c.pending[frame.ID]; ok {
+			if p, ok := c.pending[frame.ID]; ok && p.conn == conn {
 				p.ch <- frame
+				close(p.ch)
 				delete(c.pending, frame.ID)
 			}
 			c.pendingMu.Unlock()
@@ -206,27 +203,25 @@ func (c *WSClient) readLoop() {
 }
 
 func (c *WSClient) call(ctx context.Context, frame openClawWSFrame) (openClawWSFrame, error) {
-	c.mu.RLock()
-	if !c.connected {
-		c.mu.RUnlock()
-		return openClawWSFrame{}, fmt.Errorf("not connected to gateway")
+	conn, err := c.ensureConnected(ctx)
+	if err != nil {
+		return openClawWSFrame{}, err
 	}
-	conn := c.conn
-	c.mu.RUnlock()
 
 	ch := make(chan openClawWSFrame, 1)
 
 	c.pendingMu.Lock()
-	c.pending[frame.ID] = &pendingRequest{ch: ch}
+	c.pending[frame.ID] = &pendingRequest{ch: ch, conn: conn}
 	c.pendingMu.Unlock()
 
 	c.writeMu.Lock()
-	err := conn.WriteJSON(frame)
+	err = conn.WriteJSON(frame)
 	c.writeMu.Unlock()
 	if err != nil {
 		c.pendingMu.Lock()
 		delete(c.pending, frame.ID)
 		c.pendingMu.Unlock()
+		c.handleDisconnect(conn)
 		return openClawWSFrame{}, err
 	}
 
@@ -256,13 +251,97 @@ func (c *WSClient) Close() error {
 	})
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn != nil {
-		err := c.conn.Close()
-		c.connected = false
-		return err
+	conn := c.conn
+	c.conn = nil
+	c.connected = false
+	c.mu.Unlock()
+
+	c.cleanupPending(nil)
+
+	if conn != nil {
+		return conn.Close()
 	}
 	return nil
+}
+
+func (c *WSClient) ensureConnected(ctx context.Context) (*websocket.Conn, error) {
+	c.mu.RLock()
+	conn := c.conn
+	connected := c.connected
+	c.mu.RUnlock()
+	if connected && conn != nil {
+		return conn, nil
+	}
+
+	if err := c.Connect(ctx); err != nil {
+		return nil, err
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.connected || c.conn == nil {
+		return nil, fmt.Errorf("not connected to gateway")
+	}
+	return c.conn, nil
+}
+
+func (c *WSClient) keepAliveLoop() {
+	interval := c.keepAliveInterval
+	if interval <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.closed:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = c.Ping(ctx)
+			cancel()
+		}
+	}
+}
+
+func (c *WSClient) handleDisconnect(conn *websocket.Conn) {
+	if conn == nil {
+		return
+	}
+
+	c.mu.Lock()
+	if c.conn == conn {
+		c.conn = nil
+		c.connected = false
+	}
+	c.mu.Unlock()
+
+	c.cleanupPending(conn)
+	_ = conn.Close()
+}
+
+func (c *WSClient) cleanupPending(conn *websocket.Conn) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+
+	for id, p := range c.pending {
+		if conn != nil && p.conn != conn {
+			continue
+		}
+		close(p.ch)
+		delete(c.pending, id)
+	}
+}
+
+func (c *WSClient) isClosed() bool {
+	select {
+	case <-c.closed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *WSClient) SendMessage(ctx context.Context, message string) (string, error) {
