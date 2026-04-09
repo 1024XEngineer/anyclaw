@@ -1,0 +1,26 @@
+[package]
+name = "anyclaw-desktop"
+version = "0.1.0"
+description = "AnyClaw Desktop Application"
+authors = ["AnyClaw Team"]
+edition = "2021"
+rust-version = "1.70"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.5", features = ["shell-sidecar", "shell-open", "system-tray", "dialog-all", "fs-all", "path-all", "process-all", "window-all"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "5.0"
+sysinfo = "0.30"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

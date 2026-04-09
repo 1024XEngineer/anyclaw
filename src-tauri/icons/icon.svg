@@ -1,0 +1,19 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366F1;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#8B5CF6;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="url(#bg)"/>
+
+  <!-- Paw print - main pad -->
+  <ellipse cx="256" cy="320" rx="80" ry="60" fill="white"/>
+
+  <!-- Paw print - toe beans -->
+  <ellipse cx="160" cy="200" rx="40" ry="50" fill="white"/>
+  <ellipse cx="210" cy="150" rx="35" ry="45" fill="white"/>
+  <ellipse cx="302" cy="150" rx="35" ry="45" fill="white"/>
+  <ellipse cx="352" cy="200" rx="40" ry="50" fill="white"/>
+</svg>

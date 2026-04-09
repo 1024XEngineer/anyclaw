@@ -1,0 +1,903 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"anyclaw/internal/logger"
+	"anyclaw/providers"
+	"go.uber.org/zap"
+)
+
+// Context keys for passing agent state through context
+type contextKey string
+
+const (
+	SessionKeyContextKey contextKey = "session_key"
+	AgentIDContextKey    contextKey = "agent_id"
+)
+
+// toolResultPair is used to pass tool execution results from goroutines
+type toolResultPair struct {
+	result *ToolResult
+	err    error
+}
+
+// Orchestrator manages the agent execution loop
+// Based on pi-mono's agent-loop.ts design
+//
+// Concurrency: Each Run() call creates a cloned state for isolation.
+// The original state stored in o.state is used only as a template.
+// Multiple Run() calls can execute concurrently safely.
+type Orchestrator struct {
+	config     *LoopConfig
+	state      *AgentState // Initial state, used as template for each Run
+	eventChan  chan *Event
+	cancelFunc context.CancelFunc
+}
+
+// NewOrchestrator creates a new agent orchestrator
+func NewOrchestrator(config *LoopConfig, initialState *AgentState) *Orchestrator {
+	return &Orchestrator{
+		config:    config,
+		state:     initialState,
+		eventChan: make(chan *Event, 1000),
+	}
+}
+
+// Run starts the agent loop with initial prompts
+func (o *Orchestrator) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
+	logger.Debug("=== Orchestrator Run Start ===",
+		zap.Int("prompts_count", len(prompts)))
+
+	ctx, cancel := context.WithCancel(ctx)
+	o.cancelFunc = cancel
+
+	// Initialize state with prompts
+	newMessages := make([]AgentMessage, len(prompts))
+	copy(newMessages, prompts)
+	currentState := o.state.Clone()
+	currentState.AddMessages(newMessages)
+
+	// Emit start event
+	o.emit(NewEvent(EventAgentStart))
+
+	// Main loop
+	finalMessages, err := o.runLoop(ctx, currentState)
+
+	logger.Debug("=== Orchestrator Run End ===",
+		zap.Int("final_messages_count", len(finalMessages)),
+		zap.Error(err))
+
+	// Emit end event
+	endEvent := NewEvent(EventAgentEnd)
+	if finalMessages != nil {
+		endEvent = NewEvent(EventAgentEnd).WithFinalMessages(finalMessages)
+	}
+	o.emit(endEvent)
+
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("agent loop failed: %w", err)
+	}
+
+	return finalMessages, nil
+}
+
+// runLoop implements the main agent loop logic
+func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentMessage, error) {
+	firstTurn := true
+	iteration := 0
+	maxIterations := o.config.MaxIterations
+	if maxIterations <= 0 {
+		maxIterations = 15 // default
+	}
+
+	// Initialize retry manager
+	retryManager := NewRetryManager(o.config.Retry, o.config.ErrorClassifier)
+
+	// Check for steering messages at start
+	pendingMessages := o.fetchSteeringMessages()
+
+	// Outer loop: continues when queued follow-up messages arrive
+	for {
+		hasMoreToolCalls := true
+		steeringAfterTools := false
+
+		// Inner loop: process tool calls and steering messages
+		for hasMoreToolCalls || len(pendingMessages) > 0 {
+			// Check context cancellation (timeout or stop)
+			select {
+			case <-ctx.Done():
+				logger.Warn("Agent loop interrupted", zap.Error(ctx.Err()))
+				return state.Messages, ctx.Err()
+			default:
+			}
+
+			// Check max iterations - give LLM a chance to respond
+			iteration++
+			if iteration > maxIterations {
+				logger.Warn("Max iterations reached, allowing final response", zap.Int("iterations", iteration), zap.Int("max", maxIterations))
+				// Add a system message to inform the LLM about the limit
+				finalPrompt := AgentMessage{
+					Role:      RoleUser,
+					Content:   []ContentBlock{TextContent{Text: fmt.Sprintf("\n\n[SYSTEM NOTICE: You have reached the maximum iteration limit (%d). Please provide a final response to the user based on the previous tool results. Do not make any further tool calls.]", maxIterations)}},
+					Timestamp: time.Now().UnixMilli(),
+				}
+				state.AddMessage(finalPrompt)
+				// Stream one final response without iteration check
+				assistantMsg, err := o.streamAssistantResponse(ctx, state)
+				if err != nil {
+					o.emitErrorEnd(state, err)
+					return state.Messages, err
+				}
+				state.AddMessage(assistantMsg)
+				// Return successfully with the final response
+				return state.Messages, nil
+			}
+
+			if !firstTurn {
+				o.emit(NewEvent(EventTurnStart))
+			} else {
+				firstTurn = false
+			}
+
+			// Process pending messages (inject before next assistant response)
+			if len(pendingMessages) > 0 {
+				for _, msg := range pendingMessages {
+					o.emit(NewEvent(EventMessageStart))
+					state.AddMessage(msg)
+					o.emit(NewEvent(EventMessageEnd))
+				}
+				pendingMessages = []AgentMessage{}
+			}
+
+			// Stream assistant response with retry mechanism
+			assistantMsg, err := o.streamAssistantResponseWithRetry(ctx, state, retryManager)
+			if err != nil {
+				o.emitErrorEnd(state, err)
+				return state.Messages, err
+			}
+
+			state.AddMessage(assistantMsg)
+
+			// Check for tool calls
+			toolCalls := extractToolCalls(assistantMsg)
+			hasMoreToolCalls = len(toolCalls) > 0
+
+			if hasMoreToolCalls {
+				results, steering := o.executeToolCalls(ctx, toolCalls, state)
+				steeringAfterTools = len(steering) > 0
+
+				// Add tool result messages
+				for _, result := range results {
+					state.AddMessage(result)
+				}
+
+				// If steering messages arrived, skip remaining tools
+				if steeringAfterTools {
+					pendingMessages = steering
+					break
+				}
+			}
+
+			o.emit(NewEvent(EventTurnEnd))
+
+			// Get steering messages after turn completes
+			if !steeringAfterTools && len(pendingMessages) == 0 {
+				pendingMessages = o.fetchSteeringMessages()
+			}
+		}
+
+		// Agent would stop here. Check for follow-up messages.
+		followUpMessages := o.fetchFollowUpMessages()
+		if len(followUpMessages) > 0 {
+			pendingMessages = append(pendingMessages, followUpMessages...)
+			continue
+		}
+
+		// No more messages, exit
+		break
+	}
+
+	return state.Messages, nil
+}
+
+// streamAssistantResponseWithRetry calls the LLM with retry mechanism
+func (o *Orchestrator) streamAssistantResponseWithRetry(ctx context.Context, state *AgentState, retryManager RetryManager) (AgentMessage, error) {
+	for {
+		assistantMsg, err := o.streamAssistantResponse(ctx, state)
+		if err == nil {
+			retryManager.RecordSuccess()
+			return assistantMsg, nil
+		}
+
+		// Get retry decision
+		decision := retryManager.RecordError(err)
+		if !decision.ShouldRetry {
+			return AgentMessage{}, err
+		}
+
+		// Execute recovery action
+		switch decision.Action {
+		case RecoveryActionRotateProfile:
+			o.emitRetryEvent(state, "rotate_profile", decision, retryManager.GetState().Attempt)
+			// Profile rotation is handled by RotationProvider internally
+			// We just need to retry with the same provider
+
+		case RecoveryActionCompressContext:
+			o.emitRetryEvent(state, "compress_context", decision, retryManager.GetState().Attempt)
+			state.Messages = o.compressMessages(state.Messages)
+		}
+
+		// Wait for backoff delay
+		if decision.Delay > 0 {
+			logger.Info("Waiting before retry",
+				zap.Duration("delay", decision.Delay),
+				zap.String("action", string(decision.Action)))
+
+			select {
+			case <-time.After(decision.Delay):
+			case <-ctx.Done():
+				return AgentMessage{}, ctx.Err()
+			}
+		}
+	}
+}
+
+// emitRetryEvent emits a retry event for logging
+func (o *Orchestrator) emitRetryEvent(state *AgentState, action string, decision RetryDecision, attempt int) {
+	logger.Info("Retrying LLM call",
+		zap.String("action", action),
+		zap.Int("attempt", attempt),
+		zap.String("reason", decision.Reason))
+}
+
+// compressMessages compresses message history to reduce context size
+func (o *Orchestrator) compressMessages(messages []AgentMessage) []AgentMessage {
+	if len(messages) <= 4 {
+		return messages
+	}
+
+	// Keep the most recent 4 messages
+	keepRecent := 4
+	summary := o.createMessageSummary(messages[:len(messages)-keepRecent])
+
+	// Create compressed message history
+	compressed := []AgentMessage{
+		{
+			Role:      RoleSystem,
+			Content:   []ContentBlock{TextContent{Text: summary}},
+			Timestamp: time.Now().UnixMilli(),
+		},
+	}
+	compressed = append(compressed, messages[len(messages)-keepRecent:]...)
+
+	logger.Info("Compressed message history",
+		zap.Int("original_count", len(messages)),
+		zap.Int("compressed_count", len(compressed)))
+
+	return compressed
+}
+
+// createMessageSummary creates a summary of messages for context compression
+func (o *Orchestrator) createMessageSummary(messages []AgentMessage) string {
+	var summary strings.Builder
+	summary.WriteString("[CONTEXT SUMMARY]\n")
+	summary.WriteString("Previous conversation history has been compressed.\n")
+
+	// Count message types
+	userCount := 0
+	assistantCount := 0
+	toolCount := 0
+
+	for _, msg := range messages {
+		switch msg.Role {
+		case RoleUser:
+			userCount++
+		case RoleAssistant:
+			assistantCount++
+		case RoleToolResult:
+			toolCount++
+		}
+	}
+
+	summary.WriteString(fmt.Sprintf("Messages: %d user, %d assistant, %d tool results.\n", userCount, assistantCount, toolCount))
+
+	// Try to extract key information from the last few messages
+	if len(messages) > 0 {
+		lastUserMsg := ""
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == RoleUser {
+				for _, block := range messages[i].Content {
+					if text, ok := block.(TextContent); ok {
+						lastUserMsg = text.Text
+						break
+					}
+				}
+				if lastUserMsg != "" {
+					break
+				}
+			}
+		}
+
+		if lastUserMsg != "" {
+			preview := truncateString(lastUserMsg, 200)
+			summary.WriteString(fmt.Sprintf("Last user message: %s\n", preview))
+		}
+	}
+
+	summary.WriteString("[END SUMMARY]\n")
+	return summary.String()
+}
+
+// streamAssistantResponse calls the LLM and streams the response
+func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *AgentState) (AgentMessage, error) {
+	logger.Debug("=== streamAssistantResponse Start ===",
+		zap.Int("message_count", len(state.Messages)),
+		zap.Strings("loaded_skills", state.LoadedSkills))
+
+	state.IsStreaming = true
+	defer func() { state.IsStreaming = false }()
+
+	// Apply context transform if configured
+	messages := state.Messages
+	if o.config.TransformContext != nil {
+		transformed, err := o.config.TransformContext(messages)
+		if err == nil {
+			messages = transformed
+		} else {
+			logger.Warn("Context transform failed, using original", zap.Error(err))
+		}
+	}
+
+	// Convert to provider messages
+	var providerMsgs []providers.Message
+	if o.config.ConvertToLLM != nil {
+		converted, err := o.config.ConvertToLLM(messages)
+		if err != nil {
+			return AgentMessage{}, fmt.Errorf("convert to LLM failed: %w", err)
+		}
+		providerMsgs = converted
+	} else {
+		// Default conversion
+		providerMsgs = convertToProviderMessages(messages)
+	}
+
+	// Prepare tool definitions
+	toolDefs := convertToToolDefinitions(state.Tools)
+
+	// Emit message start
+	o.emit(NewEvent(EventMessageStart))
+
+	// Call provider with system prompt as first message
+	fullMessages := []providers.Message{}
+
+	// Build system prompt with skills if context builder is available
+	if o.config.ContextBuilder != nil {
+		skillsContent := ""
+		if len(state.LoadedSkills) > 0 {
+			// Second phase: inject full content of loaded skills
+			skillsContent = o.config.ContextBuilder.buildSelectedSkills(state.LoadedSkills, o.config.Skills)
+		} else if len(o.config.Skills) > 0 {
+			// First phase: inject skill summary (available skills list)
+			skillsContent = o.config.ContextBuilder.buildSkillsPrompt(o.config.Skills, PromptModeFull)
+		}
+		systemPrompt := o.config.ContextBuilder.buildSystemPromptWithSkills(skillsContent, PromptModeFull)
+		fullMessages = append(fullMessages, providers.Message{
+			Role:    "system",
+			Content: systemPrompt,
+		})
+	} else if state.SystemPrompt != "" {
+		// Fallback to stored system prompt
+		fullMessages = append(fullMessages, providers.Message{
+			Role:    "system",
+			Content: state.SystemPrompt,
+		})
+	}
+	fullMessages = append(fullMessages, providerMsgs...)
+
+	logger.Info("=== Calling LLM ===",
+		zap.Int("messages_count", len(fullMessages)),
+		zap.Int("tools_count", len(toolDefs)),
+		zap.Bool("has_loaded_skills", len(state.LoadedSkills) > 0))
+
+	// Try streaming if provider supports it
+	if sp, ok := o.config.Provider.(providers.StreamingProvider); ok {
+		return o.callWithStreaming(ctx, sp, fullMessages, toolDefs)
+	}
+
+	// Fallback to non-streaming
+	response, err := o.config.Provider.Chat(ctx, fullMessages, toolDefs)
+	if err != nil {
+		logger.Error("LLM call failed", zap.Error(err))
+		return AgentMessage{}, fmt.Errorf("LLM call failed: %w", err)
+	}
+
+	logger.Info("=== LLM Response Received ===",
+		zap.Int("content_length", len(response.Content)),
+		zap.Int("tool_calls_count", len(response.ToolCalls)),
+		zap.String("content_preview", truncateString(response.Content, 200)))
+
+	// Emit message end
+	o.emit(NewEvent(EventMessageEnd))
+
+	// Convert response to agent message
+	assistantMsg := convertFromProviderResponse(response)
+
+	logger.Debug("=== streamAssistantResponse End ===",
+		zap.Bool("has_tool_calls", len(response.ToolCalls) > 0),
+		zap.Int("tool_calls_count", len(response.ToolCalls)))
+
+	return assistantMsg, nil
+}
+
+// callWithStreaming calls the LLM with streaming support
+func (o *Orchestrator) callWithStreaming(ctx context.Context, sp providers.StreamingProvider, messages []providers.Message, tools []providers.ToolDefinition) (AgentMessage, error) {
+	var contentBuilder, thinkingBuilder, finalBuilder strings.Builder
+	var toolCalls []providers.ToolCall
+	var streamErr error
+
+	err := sp.ChatStream(ctx, messages, tools, func(chunk providers.StreamChunk) {
+		if chunk.Error != nil {
+			streamErr = chunk.Error
+			return
+		}
+
+		// Handle different chunk types
+		if chunk.ToolCall != nil {
+			toolCalls = append(toolCalls, *chunk.ToolCall)
+		} else if chunk.IsThinking {
+			thinkingBuilder.WriteString(chunk.Content)
+			// Emit thinking stream event
+			o.emit(&Event{
+				Type:          EventStreamThinking,
+				StreamContent: chunk.Content,
+				Timestamp:     time.Now().UnixMilli(),
+			})
+		} else if chunk.IsFinal {
+			finalBuilder.WriteString(chunk.Content)
+			// Emit final stream event
+			o.emit(&Event{
+				Type:          EventStreamFinal,
+				StreamContent: chunk.Content,
+				Timestamp:     time.Now().UnixMilli(),
+			})
+		} else if chunk.Content != "" {
+			contentBuilder.WriteString(chunk.Content)
+			// Emit content stream event
+			o.emit(&Event{
+				Type:          EventStreamContent,
+				StreamContent: chunk.Content,
+				Timestamp:     time.Now().UnixMilli(),
+			})
+		}
+
+		// Emit done event when stream completes
+		if chunk.Done {
+			o.emit(&Event{
+				Type:      EventStreamDone,
+				Timestamp: time.Now().UnixMilli(),
+			})
+		}
+	})
+
+	if err != nil {
+		logger.Error("LLM streaming call failed", zap.Error(err))
+		return AgentMessage{}, fmt.Errorf("LLM streaming call failed: %w", err)
+	}
+	if streamErr != nil {
+		return AgentMessage{}, streamErr
+	}
+
+	// Build final content (thinking + content + final)
+	var fullContent strings.Builder
+	if thinkingBuilder.Len() > 0 {
+		fullContent.WriteString("<thinking>")
+		fullContent.WriteString(thinkingBuilder.String())
+		fullContent.WriteString("</thinking>")
+	}
+	fullContent.WriteString(contentBuilder.String())
+	if finalBuilder.Len() > 0 {
+		fullContent.WriteString("<final>")
+		fullContent.WriteString(finalBuilder.String())
+		fullContent.WriteString("</final>")
+	}
+
+	response := &providers.Response{
+		Content:      fullContent.String(),
+		ToolCalls:    toolCalls,
+		FinishReason: "stop",
+	}
+
+	logger.Info("=== LLM Streaming Response Complete ===",
+		zap.Int("content_length", fullContent.Len()),
+		zap.Int("tool_calls_count", len(toolCalls)))
+
+	// Emit message end
+	o.emit(NewEvent(EventMessageEnd))
+
+	assistantMsg := convertFromProviderResponse(response)
+
+	logger.Debug("=== streamAssistantResponse End ===",
+		zap.Bool("has_tool_calls", len(toolCalls) > 0),
+		zap.Int("tool_calls_count", len(toolCalls)))
+
+	return assistantMsg, nil
+}
+
+// executeToolCalls executes tool calls with interruption support
+func (o *Orchestrator) executeToolCalls(ctx context.Context, toolCalls []ToolCallContent, state *AgentState) ([]AgentMessage, []AgentMessage) {
+	results := make([]AgentMessage, 0, len(toolCalls))
+
+	logger.Info("=== Execute Tool Calls Start ===",
+		zap.Int("count", len(toolCalls)))
+	for _, tc := range toolCalls {
+		logger.Info("Tool call start",
+			zap.String("tool_id", tc.ID),
+			zap.String("tool_name", tc.Name),
+			zap.Any("arguments", tc.Arguments))
+
+		// Emit tool execution start
+		o.emit(NewEvent(EventToolExecutionStart).WithToolExecution(tc.ID, tc.Name, tc.Arguments))
+
+		// Find tool
+		var tool Tool
+		for _, t := range state.Tools {
+			if t.Name() == tc.Name {
+				tool = t
+				break
+			}
+		}
+
+		var result ToolResult
+		var err error
+
+		if tool == nil {
+			err = fmt.Errorf("tool %s not found", tc.Name)
+			result = ToolResult{
+				Content: []ContentBlock{TextContent{Text: fmt.Sprintf("Tool not found: %s", tc.Name)}},
+				Details: map[string]any{"error": err.Error()},
+			}
+			logger.Error("Tool not found",
+				zap.String("tool_name", tc.Name),
+				zap.String("tool_id", tc.ID))
+		} else {
+			state.AddPendingTool(tc.ID)
+
+			// Create context with session key for tools to access
+			toolCtx := context.WithValue(ctx, SessionKeyContextKey, state.SessionKey)
+
+			// Add timeout for tool execution (safety net in case tool doesn't handle its own timeout)
+			toolTimeout := o.config.ToolTimeout
+			if toolTimeout <= 0 {
+				toolTimeout = 3 * time.Minute // default 3 minutes
+			}
+			execCtx, execCancel := context.WithTimeout(toolCtx, toolTimeout)
+			defer execCancel()
+
+			// Execute tool with streaming support in a goroutine to handle timeout properly
+			resultCh := make(chan *toolResultPair, 1)
+			go func() {
+				r, e := tool.Execute(execCtx, tc.Arguments, func(partial ToolResult) {
+					// Emit update event
+					o.emit(NewEvent(EventToolExecutionUpdate).
+						WithToolExecution(tc.ID, tc.Name, tc.Arguments).
+						WithToolResult(&partial, false))
+				})
+				resultCh <- &toolResultPair{result: &r, err: e}
+			}()
+
+			// Wait for result or timeout
+			select {
+			case pair := <-resultCh:
+				if pair.result != nil {
+					result = *pair.result
+				}
+				err = pair.err
+			case <-execCtx.Done():
+				err = fmt.Errorf("tool execution timed out after %v", toolTimeout)
+				logger.Error("Tool execution timeout",
+					zap.String("tool_id", tc.ID),
+					zap.String("tool_name", tc.Name),
+					zap.Duration("timeout", toolTimeout))
+			}
+
+			state.RemovePendingTool(tc.ID)
+		}
+
+		// Log tool execution result
+		if err != nil {
+			logger.Error("Tool execution failed",
+				zap.String("tool_id", tc.ID),
+				zap.String("tool_name", tc.Name),
+				zap.Any("arguments", tc.Arguments),
+				zap.Error(err))
+		} else {
+			// Extract content for logging
+			contentText := extractToolResultContent(result.Content)
+			logger.Info("Tool execution success",
+				zap.String("tool_id", tc.ID),
+				zap.String("tool_name", tc.Name),
+				zap.Any("arguments", tc.Arguments),
+				zap.Int("result_length", len(contentText)),
+				zap.String("result_preview", truncateString(contentText, 200)))
+		}
+
+		// Convert result to message
+		resultMsg := AgentMessage{
+			Role:      RoleToolResult,
+			Content:   result.Content,
+			Timestamp: time.Now().UnixMilli(),
+			Metadata:  map[string]any{"tool_call_id": tc.ID, "tool_name": tc.Name},
+		}
+
+		if err != nil {
+			resultMsg.Metadata["error"] = err.Error()
+			result.Content = []ContentBlock{TextContent{Text: err.Error()}}
+		}
+
+		results = append(results, resultMsg)
+
+		// Check for use_skill and update LoadedSkills
+		if tc.Name == "use_skill" && err == nil {
+			if skillName, ok := tc.Arguments["skill_name"].(string); ok && skillName != "" {
+				// Add to LoadedSkills if not already present
+				alreadyLoaded := false
+				for _, loaded := range state.LoadedSkills {
+					if loaded == skillName {
+						alreadyLoaded = true
+						break
+					}
+				}
+				if !alreadyLoaded {
+					state.LoadedSkills = append(state.LoadedSkills, skillName)
+					logger.Debug("=== Skill Loaded ===",
+						zap.String("skill_name", skillName),
+						zap.Int("total_loaded", len(state.LoadedSkills)),
+						zap.Strings("loaded_skills", state.LoadedSkills))
+				}
+			}
+		}
+
+		// Emit tool execution end
+		event := NewEvent(EventToolExecutionEnd).
+			WithToolExecution(tc.ID, tc.Name, tc.Arguments).
+			WithToolResult(&result, err != nil)
+		o.emit(event)
+
+		// Check for steering messages (interruption)
+		steering := o.fetchSteeringMessages()
+		if len(steering) > 0 {
+			return results, steering
+		}
+	}
+
+	logger.Debug("=== Execute Tool Calls End ===",
+		zap.Int("count", len(results)))
+	return results, nil
+}
+
+// emit sends an event to the event channel (non-blocking)
+// If the channel is full, the event is dropped to avoid blocking
+func (o *Orchestrator) emit(event *Event) {
+	if o.eventChan != nil {
+		select {
+		case o.eventChan <- event:
+			// Event sent successfully
+		default:
+			// Channel full, drop event to avoid blocking
+			// This is acceptable as events are primarily for streaming/logging
+		}
+	}
+}
+
+// emitErrorEnd emits an error end event
+func (o *Orchestrator) emitErrorEnd(state *AgentState, err error) {
+	event := NewEvent(EventTurnEnd).WithStopReason(err.Error())
+	o.emit(event)
+}
+
+// fetchSteeringMessages gets steering messages from config
+func (o *Orchestrator) fetchSteeringMessages() []AgentMessage {
+	if o.config.GetSteeringMessages != nil {
+		msgs, _ := o.config.GetSteeringMessages()
+		return msgs
+	}
+	// Fall back to state queue
+	return o.state.DequeueSteeringMessages()
+}
+
+// fetchFollowUpMessages gets follow-up messages from config
+func (o *Orchestrator) fetchFollowUpMessages() []AgentMessage {
+	if o.config.GetFollowUpMessages != nil {
+		msgs, _ := o.config.GetFollowUpMessages()
+		return msgs
+	}
+	// Fall back to state queue
+	return o.state.DequeueFollowUpMessages()
+}
+
+// Stop stops the orchestrator
+// Safe to call multiple times
+func (o *Orchestrator) Stop() {
+	if o.cancelFunc != nil {
+		o.cancelFunc()
+		o.cancelFunc = nil
+	}
+	if o.eventChan != nil {
+		ch := o.eventChan
+		o.eventChan = nil
+		close(ch)
+	}
+}
+
+// Subscribe returns the event channel
+func (o *Orchestrator) Subscribe() <-chan *Event {
+	return o.eventChan
+}
+
+// Helper functions
+
+// convertToProviderMessages converts agent messages to provider messages
+func convertToProviderMessages(messages []AgentMessage) []providers.Message {
+	result := make([]providers.Message, 0, len(messages))
+
+	for _, msg := range messages {
+		// Skip system messages
+		if msg.Role == RoleSystem {
+			continue
+		}
+
+		// Skip tool messages that don't have a matching tool_call_id
+		if msg.Role == RoleToolResult {
+			toolCallID, hasID := msg.Metadata["tool_call_id"].(string)
+			toolName, hasName := msg.Metadata["tool_name"].(string)
+			if !hasID || !hasName || toolCallID == "" || toolName == "" {
+				logger.Warn("Skipping tool message without tool_call_id or tool_name",
+					zap.String("role", string(msg.Role)),
+					zap.Bool("has_id", hasID),
+					zap.Bool("has_name", hasName),
+					zap.String("tool_call_id", toolCallID),
+					zap.String("tool_name", toolName))
+				continue
+			}
+		}
+
+		providerMsg := providers.Message{
+			Role: string(msg.Role),
+		}
+
+		// Extract content
+		for _, block := range msg.Content {
+			switch b := block.(type) {
+			case TextContent:
+				if providerMsg.Content != "" {
+					providerMsg.Content += "\n" + b.Text
+				} else {
+					providerMsg.Content = b.Text
+				}
+			case ImageContent:
+				if b.Data != "" {
+					providerMsg.Images = append(providerMsg.Images, b.Data)
+				} else if b.URL != "" {
+					providerMsg.Images = append(providerMsg.Images, b.URL)
+				}
+			}
+		}
+
+		// Handle tool calls for assistant messages
+		if msg.Role == RoleAssistant {
+			var toolCalls []providers.ToolCall
+			for _, block := range msg.Content {
+				if tc, ok := block.(ToolCallContent); ok {
+					toolCalls = append(toolCalls, providers.ToolCall{
+						ID:     tc.ID,
+						Name:   tc.Name,
+						Params: convertMapAnyToInterface(tc.Arguments),
+					})
+				}
+			}
+			providerMsg.ToolCalls = toolCalls
+		}
+
+		// Handle tool_call_id and tool_name for tool result messages
+		if msg.Role == RoleToolResult {
+			if toolCallID, ok := msg.Metadata["tool_call_id"].(string); ok {
+				providerMsg.ToolCallID = toolCallID
+			}
+			if toolName, ok := msg.Metadata["tool_name"].(string); ok {
+				providerMsg.ToolName = toolName
+			}
+		}
+
+		result = append(result, providerMsg)
+	}
+
+	return result
+}
+
+// convertFromProviderResponse converts provider response to agent message
+func convertFromProviderResponse(response *providers.Response) AgentMessage {
+	content := []ContentBlock{TextContent{Text: response.Content}}
+
+	// Handle tool calls
+	for _, tc := range response.ToolCalls {
+		content = append(content, ToolCallContent{
+			ID:        tc.ID,
+			Name:      tc.Name,
+			Arguments: convertInterfaceToAny(tc.Params),
+		})
+	}
+
+	return AgentMessage{
+		Role:      RoleAssistant,
+		Content:   content,
+		Timestamp: time.Now().UnixMilli(),
+		Metadata:  map[string]any{"stop_reason": response.FinishReason},
+	}
+}
+
+// convertToToolDefinitions converts agent tools to provider tool definitions
+func convertToToolDefinitions(tools []Tool) []providers.ToolDefinition {
+	result := make([]providers.ToolDefinition, 0, len(tools))
+
+	for _, tool := range tools {
+		result = append(result, providers.ToolDefinition{
+			Name:        tool.Name(),
+			Description: tool.Description(),
+			Parameters:  convertMapAnyToInterface(tool.Parameters()),
+		})
+	}
+
+	return result
+}
+
+// extractToolCalls extracts tool calls from a message
+func extractToolCalls(msg AgentMessage) []ToolCallContent {
+	var toolCalls []ToolCallContent
+
+	for _, block := range msg.Content {
+		if tc, ok := block.(ToolCallContent); ok {
+			toolCalls = append(toolCalls, tc)
+		}
+	}
+
+	return toolCalls
+}
+
+// convertInterfaceToAny converts map[string]interface{} to map[string]any
+func convertInterfaceToAny(m map[string]interface{}) map[string]any {
+	result := make(map[string]any)
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
+// extractToolResultContent extracts text content from tool result
+func extractToolResultContent(content []ContentBlock) string {
+	var result strings.Builder
+	for _, block := range content {
+		if text, ok := block.(TextContent); ok {
+			if result.Len() > 0 {
+				result.WriteString("\n")
+			}
+			result.WriteString(text.Text)
+		}
+	}
+	return result.String()
+}
+
+// truncateString truncates a string to a maximum length
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen > 3 {
+		return s[:maxLen-3] + "..."
+	}
+	return s[:maxLen]
+}

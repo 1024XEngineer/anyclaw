@@ -1,0 +1,172 @@
+{
+  "workspace": {
+    "path": ""
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "qianfan/kimi-k2.5"
+      },
+      "max_iterations": 20,
+      "temperature": 0.7,
+      "max_tokens": 64000
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "qianfan": {
+        "baseUrl": "https://qianfan.baidubce.com/v2",
+        "apiKey": "QIANFAN_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "kimi-k2.5",
+            "name": "Kimi K2.5",
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "input": ["text", "image"]
+          }
+        ]
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "token": "",
+      "allowed_ids": []
+    },
+    "whatsapp": {
+      "enabled": false,
+      "bridge_url": "",
+      "allowed_ids": []
+    },
+    "feishu": {
+      "enabled": true,
+      "app_id": "cli_xxxxxxxx",
+      "app_secret": "xxxxxxx",
+      "domain": "feishu",
+      "groupPolicy": "open",
+      "dm_policy": "pairing"
+    },
+    "qq": {
+      "enabled": false,
+      "app_id": "",
+      "app_secret": "",
+      "allowed_ids": []
+    },
+    "wework": {
+      "enabled": false,
+      "corp_id": "",
+      "agent_id": "",
+      "secret": "",
+      "token": "",
+      "encoding_aes_key": ""
+    },
+    "dingtalk": {
+      "enabled": false,
+      "client_id": "",
+      "secret": "",
+      "allowed_ids": []
+    },
+    "infoflow": {
+      "enabled": false,
+      "webhook_url": "",
+      "token": "",
+      "aes_key": "",
+      "webhook_port": 18766,
+      "allowed_ids": []
+    }
+  },
+  "gateway": {
+    "host": "localhost",
+    "port": 8080,
+    "read_timeout": 30,
+    "write_timeout": 30,
+    "websocket": {
+      "host": "localhost",
+      "port": 28789,
+      "path": "/ws",
+      "enable_auth": false,
+      "auth_token": "",
+      "ping_interval": "30s",
+      "pong_timeout": "60s",
+      "read_timeout": "60s",
+      "write_timeout": "10s"
+    }
+  },
+  "tools": {
+    "filesystem": {
+      "allowed_paths": [],
+      "denied_paths": []
+    },
+    "shell": {
+      "enabled": true,
+      "allowed_cmds": [],
+      "denied_cmds": [
+        "rm -rf",
+        "dd",
+        "mkfs"
+      ],
+      "timeout": 30,
+      "working_dir": ""
+    },
+    "web": {
+      "search_api_key": "",
+      "search_engine": "travily",
+      "timeout": 10
+    },
+    "browser": {
+      "enabled": true,
+      "headless": true,
+      "timeout": 30
+    },
+    "cron": {
+      "enabled": true,
+      "store_path": "~/.anyclaw/cron/jobs.json"
+    }
+  },
+  "memory": {
+    "backend": "builtin",
+    "builtin": {
+      "enabled": true,
+      "database_path": "",
+      "auto_index": true
+    },
+    "qmd": {
+      "command": "qmd",
+      "enabled": false,
+      "include_default": true,
+      "paths": [
+        {
+          "name": "notes",
+          "path": "~/notes",
+          "pattern": "**/*.md"
+        },
+        {
+          "name": "docs",
+          "path": "~/Documents",
+          "pattern": "**/*.md"
+        }
+      ],
+      "sessions": {
+        "enabled": false,
+        "export_dir": "~/.anyclaw/sessions/export",
+        "retention_days": 30
+      },
+      "update": {
+        "interval": "5m",
+        "on_boot": true,
+        "embed_interval": "60m",
+        "command_timeout": "30s",
+        "update_timeout": "120s"
+      },
+      "limits": {
+        "max_results": 6,
+        "max_snippet_chars": 700,
+        "timeout_ms": 4000
+      }
+    }
+  }
+}

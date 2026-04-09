@@ -1,0 +1,28 @@
+version: 2
+
+builds:
+  - id: anyclaw
+    binary: anyclaw
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    # Name your archive with a sensible pattern, including the project name, OS, and architecture.
+    # The .Format directive is already used by goreleaser so no need to specify it.
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+
+checksum:
+  name_template: 'checksums.txt'
+
+release:
+  # Remote release publishing is disabled so the project stays host-neutral.
+  disable: true

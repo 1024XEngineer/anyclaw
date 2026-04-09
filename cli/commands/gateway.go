@@ -1,0 +1,970 @@
+package commands
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"text/template"
+	"time"
+
+	"anyclaw/config"
+	"anyclaw/internal/start"
+	"github.com/spf13/cobra"
+)
+
+var (
+	gatewayPort    int
+	gatewayVerbose bool
+	gatewayParams  string
+)
+
+// GatewayCommand returns the gateway command
+func GatewayCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "gateway",
+		Short: "Manage WebSocket Gateway",
+		Long:  `Run and manage the anyclaw WebSocket gateway server.`,
+	}
+	runCmd := &cobra.Command{
+		Use:   "run",
+		Short: "Run anyclaw Agent with Gateway (same as anyclaw start)",
+		Run:   runGateway,
+	}
+	// Note: Only --verbose is supported now. For other settings, please use the config file.
+	runCmd.Flags().BoolVarP(&gatewayVerbose, "verbose", "v", false, "Verbose output")
+
+	// Gateway status command
+	statusCmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show gateway status",
+		Run:   runGatewayStatus,
+	}
+
+	// Gateway health command
+	healthCmd := &cobra.Command{
+		Use:   "health",
+		Short: "Check gateway health",
+		Run:   runGatewayHealth,
+	}
+
+	// Gateway probe command
+	probeCmd := &cobra.Command{
+		Use:   "probe",
+		Short: "Probe gateway connectivity",
+		Run:   runGatewayProbe,
+	}
+
+	// Gateway install command
+	installCmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install anyclaw Agent as service (configure port in config file)",
+		Run:   runGatewayInstall,
+	}
+
+	uninstallCmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Uninstall gateway service",
+		Run:   runGatewayUninstall,
+	}
+
+	// Gateway start command
+	startCmd := &cobra.Command{
+		Use:   "start",
+		Short: "Start gateway service",
+		Run:   runGatewayStart,
+	}
+
+	// Gateway stop command
+	stopCmd := &cobra.Command{
+		Use:   "stop",
+		Short: "Stop gateway service",
+		Run:   runGatewayStop,
+	}
+
+	// Gateway restart command
+	restartCmd := &cobra.Command{
+		Use:   "restart",
+		Short: "Restart gateway service",
+		Run:   runGatewayRestart,
+	}
+
+	// Gateway call command
+	callCmd := &cobra.Command{
+		Use:   "call <method>",
+		Short: "Make RPC call to gateway",
+		Args:  cobra.ExactArgs(1),
+		Run:   runGatewayCall,
+	}
+	callCmd.Flags().StringVarP(&gatewayParams, "params", "p", "{}", "Parameters as JSON")
+
+	cmd.AddCommand(runCmd, statusCmd, healthCmd, probeCmd)
+	cmd.AddCommand(installCmd, uninstallCmd, startCmd, stopCmd, restartCmd)
+	cmd.AddCommand(callCmd)
+
+	return cmd
+}
+
+// runGateway runs the gateway server with full agent support
+func runGateway(cmd *cobra.Command, args []string) {
+	// Set log level from flags
+	logLevel := "info"
+	if gatewayVerbose {
+		logLevel = "debug"
+	}
+
+	// Start the full agent with all components
+	// This provides the same functionality as `anyclaw start`
+	if err := start.StartAgent(&start.Config{LogLevel: logLevel}); err != nil {
+		os.Exit(1)
+	}
+}
+
+// runGatewayStatus shows gateway status
+func runGatewayStatus(cmd *cobra.Command, args []string) {
+	// Load config to get default port
+	cfg, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to load config: %v\n", err)
+	}
+
+	port := gatewayPort
+	if port == 0 {
+		port = config.GetGatewayHTTPPort(cfg)
+	}
+
+	// Try to connect to local gateway
+	url := fmt.Sprintf("http://localhost:%d/health", port)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Printf("Gateway status: offline\n")
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var health map[string]interface{}
+	_ = json.Unmarshal(body, &health)
+
+	fmt.Println("Gateway status: online")
+	if status, ok := health["status"]; ok {
+		fmt.Printf("  Status: %v\n", status)
+	}
+	if version, ok := health["version"]; ok {
+		fmt.Printf("  Version: %v\n", version)
+	}
+	if timestamp, ok := health["time"]; ok {
+		fmt.Printf("  Timestamp: %v\n", timestamp)
+	}
+}
+
+// runGatewayHealth checks gateway health
+func runGatewayHealth(cmd *cobra.Command, args []string) {
+	// Load config to get default port
+	cfg, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to load config: %v\n", err)
+	}
+
+	port := gatewayPort
+	if port == 0 {
+		port = config.GetGatewayHTTPPort(cfg)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/health", port)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Printf("Health check failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("Health check failed: status %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Printf("Health: OK\n")
+	fmt.Printf("Response: %s\n", string(body))
+}
+
+// runGatewayProbe probes gateway connectivity
+func runGatewayProbe(cmd *cobra.Command, args []string) {
+	// Load config to get default port
+	cfg, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to load config: %v\n", err)
+	}
+
+	port := config.GetGatewayHTTPPort(cfg)
+	if gatewayPort != 0 {
+		port = gatewayPort
+	}
+
+	fmt.Println("Probing for gateway...")
+	url := fmt.Sprintf("http://localhost:%d/health", port)
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	resp, err := client.Get(url)
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			fmt.Printf("Found gateway on port %d\n", port)
+			body, _ := io.ReadAll(resp.Body)
+			var health map[string]interface{}
+			_ = json.Unmarshal(body, &health)
+			if version, ok := health["version"]; ok {
+				fmt.Printf("  Version: %v\n", version)
+			}
+			return
+		}
+	}
+
+	fmt.Println("No gateway found")
+	os.Exit(1)
+}
+
+// runGatewayInstall installs gateway as service
+func runGatewayInstall(cmd *cobra.Command, args []string) {
+	fmt.Println("Installing anyclaw Agent service...")
+
+	// Get the executable path
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath, err = filepath.Abs(os.Args[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Cannot determine executable path: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// Verify executable exists
+	if _, err := os.Stat(execPath); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error: Executable not found at %s\n", execPath)
+		os.Exit(1)
+	}
+
+	switch runtime.GOOS {
+	case "darwin":
+		installMacOSService(execPath)
+	case "linux":
+		installLinuxService(execPath)
+	case "windows":
+		installWindowsService(execPath)
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unsupported operating system: %s\n", runtime.GOOS)
+		fmt.Println("Please run gateway manually with: anyclaw gateway run")
+		os.Exit(1)
+	}
+}
+
+// runGatewayUninstall uninstalls gateway service
+func runGatewayUninstall(cmd *cobra.Command, args []string) {
+	fmt.Println("Uninstalling anyclaw Agent service...")
+
+	switch runtime.GOOS {
+	case "darwin":
+		uninstallMacOSService()
+	case "linux":
+		uninstallLinuxService()
+	case "windows":
+		uninstallWindowsService()
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unsupported operating system: %s\n", runtime.GOOS)
+		os.Exit(1)
+	}
+}
+
+// runGatewayStart starts gateway service
+func runGatewayStart(cmd *cobra.Command, args []string) {
+	fmt.Println("Starting anyclaw Agent service...")
+
+	switch runtime.GOOS {
+	case "darwin":
+		startMacOSService()
+	case "linux":
+		startLinuxService()
+	case "windows":
+		startWindowsService()
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unsupported operating system: %s\n", runtime.GOOS)
+		os.Exit(1)
+	}
+}
+
+// runGatewayStop stops gateway service
+func runGatewayStop(cmd *cobra.Command, args []string) {
+	fmt.Println("Stopping anyclaw Agent service...")
+
+	switch runtime.GOOS {
+	case "darwin":
+		stopMacOSService()
+	case "linux":
+		stopLinuxService()
+	case "windows":
+		stopWindowsService()
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unsupported operating system: %s\n", runtime.GOOS)
+		os.Exit(1)
+	}
+}
+
+// runGatewayRestart restarts gateway service
+func runGatewayRestart(cmd *cobra.Command, args []string) {
+	fmt.Println("Restarting anyclaw Agent service...")
+
+	switch runtime.GOOS {
+	case "darwin":
+		restartMacOSService()
+	case "linux":
+		restartLinuxService()
+	case "windows":
+		restartWindowsService()
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unsupported operating system: %s\n", runtime.GOOS)
+		os.Exit(1)
+	}
+}
+
+// Service name constants
+const (
+	serviceName        = "anyclaw-gateway"
+	macOSDomainStyle   = "com.anyclaw.gateway"
+	macOSPlistDir      = "Library/LaunchAgents"
+	macOSPlistFile     = "com.anyclaw.gateway.plist"
+	linuxServiceDir    = ".config/systemd/user"
+	linuxServiceFile   = "anyclaw-gateway.service"
+	windowsServiceName = "AnyClawGateway"
+)
+
+// macOS service functions
+
+func installMacOSService(execPath string) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	plistDir := filepath.Join(homeDir, macOSPlistDir)
+	plistPath := filepath.Join(plistDir, macOSPlistFile)
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(plistDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot create directory %s: %v\n", plistDir, err)
+		os.Exit(1)
+	}
+
+	// Check if service already exists
+	if _, err := os.Stat(plistPath); err == nil {
+		fmt.Printf("Service already installed at %s\n", plistPath)
+		fmt.Println("Use 'anyclaw gateway uninstall' first to remove it")
+		os.Exit(1)
+	}
+
+	// Get working directory (use the directory containing the executable)
+	workDir := filepath.Dir(execPath)
+
+	// Create plist content
+	plistContent := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{.Label}}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{.ExecPath}}</string>
+        <string>gateway</string>
+        <string>run</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>WorkingDirectory</key>
+    <string>{{.WorkDir}}</string>
+    <key>StandardOutPath</key>
+    <string>{{.HomeDir}}/.anyclaw/logs/gateway.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{.HomeDir}}/.anyclaw/logs/gateway.stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
+`
+
+	// Create template
+	tmpl, err := template.New("plist").Parse(plistContent)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot create plist template: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Ensure log directory exists
+	logDir := filepath.Join(homeDir, ".anyclaw/logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot create log directory %s: %v\n", logDir, err)
+		os.Exit(1)
+	}
+
+	// Execute template
+	plistFile, err := os.Create(plistPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot create plist file %s: %v\n", plistPath, err)
+		os.Exit(1)
+	}
+	defer plistFile.Close()
+
+	data := struct {
+		Label    string
+		ExecPath string
+		WorkDir  string
+		HomeDir  string
+		Port     int
+	}{
+		Label:    macOSDomainStyle,
+		ExecPath: execPath,
+		WorkDir:  workDir,
+		HomeDir:  homeDir,
+	}
+
+	if err := tmpl.Execute(plistFile, data); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot write plist file: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Load the service
+	fmt.Println("Loading service...")
+	if err := exec.Command("launchctl", "load", plistPath).Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot load service: %v\n", err)
+		fmt.Println("Note: You may need to run: launchctl load", plistPath)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Gateway service installed successfully\n")
+	fmt.Printf("  Config: %s\n", plistPath)
+	fmt.Printf("  Executable: %s\n", execPath)
+	fmt.Printf("  Logs: %s/gateway.stdout.log\n", logDir)
+	fmt.Printf("  Logs: %s/gateway.stderr.log\n", logDir)
+	fmt.Println("\nUse 'anyclaw gateway start' to start the service")
+}
+
+func uninstallMacOSService() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	plistPath := filepath.Join(homeDir, macOSPlistDir, macOSPlistFile)
+
+	// Check if service exists
+	if _, err := os.Stat(plistPath); os.IsNotExist(err) {
+		fmt.Println("Service not installed")
+		return
+	}
+
+	// Stop the service if running
+	fmt.Println("Stopping service...")
+	exec.Command("launchctl", "unload", plistPath).Run() // nolint:errcheck
+
+	// Remove the plist file
+	fmt.Println("Removing service configuration...")
+	if err := os.Remove(plistPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot remove plist file: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Gateway service uninstalled successfully")
+}
+
+func startMacOSService() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	plistPath := filepath.Join(homeDir, macOSPlistDir, macOSPlistFile)
+
+	// Check if service exists
+	if _, err := os.Stat(plistPath); os.IsNotExist(err) {
+		fmt.Println("Service not installed. Use 'anyclaw gateway install' first")
+		os.Exit(1)
+	}
+
+	// Start the service
+	fmt.Println("Starting service...")
+	cmd := exec.Command("launchctl", "start", macOSDomainStyle)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot start service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
+		}
+		os.Exit(1)
+	}
+
+	// Check if it's actually running
+	time.Sleep(500 * time.Millisecond)
+	if checkGatewayRunning() {
+		fmt.Println("Gateway service started successfully")
+	} else {
+		fmt.Println("Service started, but gateway may not be responding yet")
+		fmt.Println("Check logs: ~/.anyclaw/logs/gateway.stdout.log")
+	}
+}
+
+func stopMacOSService() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	plistPath := filepath.Join(homeDir, macOSPlistDir, macOSPlistFile)
+
+	// Check if service exists
+	if _, err := os.Stat(plistPath); os.IsNotExist(err) {
+		fmt.Println("Service not installed")
+		return
+	}
+
+	// Stop the service
+	fmt.Println("Stopping service...")
+	cmd := exec.Command("launchctl", "stop", macOSDomainStyle)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot stop service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
+		}
+		os.Exit(1)
+	}
+
+	fmt.Println("Gateway service stopped successfully")
+}
+
+func restartMacOSService() {
+	fmt.Println("Restarting service...")
+	stopMacOSService()
+	time.Sleep(1 * time.Second)
+	startMacOSService()
+}
+
+// Linux service functions
+
+func installLinuxService(execPath string) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	serviceDir := filepath.Join(homeDir, linuxServiceDir)
+	servicePath := filepath.Join(serviceDir, linuxServiceFile)
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(serviceDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot create directory %s: %v\n", serviceDir, err)
+		os.Exit(1)
+	}
+
+	// Check if service already exists
+	if _, err := os.Stat(servicePath); err == nil {
+		fmt.Printf("Service already installed at %s\n", servicePath)
+		fmt.Println("Use 'anyclaw gateway uninstall' first to remove it")
+		os.Exit(1)
+	}
+
+	// Get working directory
+	workDir := filepath.Dir(execPath)
+
+	// Create systemd service content
+	serviceContent := `[Unit]
+Description=anyclaw Agent Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={{.ExecPath}} gateway run
+WorkingDirectory={{.WorkDir}}
+Restart=always
+RestartSec=10
+StandardOutput=append:{{.HomeDir}}/.anyclaw/logs/gateway.stdout.log
+StandardError=append:{{.HomeDir}}/.anyclaw/logs/gateway.stderr.log
+
+[Install]
+WantedBy=default.target
+`
+
+	// Create template
+	tmpl, err := template.New("service").Parse(serviceContent)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot create service template: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Ensure log directory exists
+	logDir := filepath.Join(homeDir, ".anyclaw/logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot create log directory %s: %v\n", logDir, err)
+		os.Exit(1)
+	}
+
+	// Execute template
+	serviceFile, err := os.Create(servicePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot create service file %s: %v\n", servicePath, err)
+		os.Exit(1)
+	}
+	defer serviceFile.Close()
+
+	data := struct {
+		ExecPath string
+		WorkDir  string
+		HomeDir  string
+		Port     int
+	}{
+		ExecPath: execPath,
+		WorkDir:  workDir,
+		HomeDir:  homeDir,
+	}
+
+	if err := tmpl.Execute(serviceFile, data); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot write service file: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Reload systemd daemon
+	fmt.Println("Reloading systemd daemon...")
+	if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Cannot reload systemd daemon: %v\n", err)
+		fmt.Println("You may need to run: systemctl --user daemon-reload")
+	}
+
+	// Enable the service
+	fmt.Println("Enabling service...")
+	if err := exec.Command("systemctl", "--user", "enable", serviceName).Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Cannot enable service: %v\n", err)
+		fmt.Println("You may need to run: systemctl --user enable", serviceName)
+	}
+
+	fmt.Printf("Gateway service installed successfully\n")
+	fmt.Printf("  Config: %s\n", servicePath)
+	fmt.Printf("  Executable: %s\n", execPath)
+	fmt.Printf("  Logs: %s/gateway.stdout.log\n", logDir)
+	fmt.Printf("  Logs: %s/gateway.stderr.log\n", logDir)
+	fmt.Println("\nUse 'anyclaw gateway start' to start the service")
+}
+
+func uninstallLinuxService() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot get home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	servicePath := filepath.Join(homeDir, linuxServiceDir, linuxServiceFile)
+
+	// Check if service exists
+	if _, err := os.Stat(servicePath); os.IsNotExist(err) {
+		fmt.Println("Service not installed")
+		return
+	}
+
+	// Stop and disable the service
+	fmt.Println("Stopping service...")
+	exec.Command("systemctl", "--user", "stop", serviceName).Run() // nolint:errcheck
+
+	fmt.Println("Disabling service...")
+	exec.Command("systemctl", "--user", "disable", serviceName).Run() // nolint:errcheck
+
+	// Remove the service file
+	fmt.Println("Removing service configuration...")
+	if err := os.Remove(servicePath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot remove service file: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Reload systemd daemon
+	fmt.Println("Reloading systemd daemon...")
+	exec.Command("systemctl", "--user", "daemon-reload").Run() // nolint:errcheck
+
+	fmt.Println("Gateway service uninstalled successfully")
+}
+
+func startLinuxService() {
+	// Check if service file exists
+	homeDir, _ := os.UserHomeDir()
+	servicePath := filepath.Join(homeDir, linuxServiceDir, linuxServiceFile)
+
+	if _, err := os.Stat(servicePath); os.IsNotExist(err) {
+		fmt.Println("Service not installed. Use 'anyclaw gateway install' first")
+		os.Exit(1)
+	}
+
+	// Start the service
+	fmt.Println("Starting service...")
+	cmd := exec.Command("systemctl", "--user", "start", serviceName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot start service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
+		}
+		os.Exit(1)
+	}
+
+	// Check if it's actually running
+	time.Sleep(500 * time.Millisecond)
+	if checkGatewayRunning() {
+		fmt.Println("Gateway service started successfully")
+	} else {
+		fmt.Println("Service started, but gateway may not be responding yet")
+		fmt.Println("Check with: systemctl --user status", serviceName)
+	}
+}
+
+func stopLinuxService() {
+	// Stop the service
+	fmt.Println("Stopping service...")
+	cmd := exec.Command("systemctl", "--user", "stop", serviceName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot stop service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
+		}
+		os.Exit(1)
+	}
+
+	fmt.Println("Gateway service stopped successfully")
+}
+
+func restartLinuxService() {
+	fmt.Println("Restarting service...")
+	cmd := exec.Command("systemctl", "--user", "restart", serviceName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot restart service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
+		}
+		os.Exit(1)
+	}
+
+	// Check if it's actually running
+	time.Sleep(500 * time.Millisecond)
+	if checkGatewayRunning() {
+		fmt.Println("Gateway service restarted successfully")
+	} else {
+		fmt.Println("Service restarted, but gateway may not be responding yet")
+		fmt.Println("Check with: systemctl --user status", serviceName)
+	}
+}
+
+// Windows service functions
+
+func installWindowsService(execPath string) {
+	// Check if sc.exe exists
+	if _, err := exec.LookPath("sc.exe"); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: sc.exe not found. This command requires administrator privileges.\n")
+		fmt.Println("Please run Command Prompt as Administrator and try again.")
+		os.Exit(1)
+	}
+
+	// Check if service already exists
+	checkCmd := exec.Command("sc.exe", "query", windowsServiceName)
+	if output, err := checkCmd.CombinedOutput(); err == nil {
+		if strings.Contains(string(output), windowsServiceName) {
+			fmt.Printf("Service already installed: %s\n", windowsServiceName)
+			fmt.Println("Use 'anyclaw gateway uninstall' first to remove it")
+			os.Exit(1)
+		}
+	}
+
+	// Create the service
+	fmt.Printf("Creating service: %s\n", windowsServiceName)
+	createCmd := exec.Command("sc.exe", "create", windowsServiceName,
+		"binPath=", "`"+execPath+"` gateway run",
+		"DisplayName= AnyClaw Gateway",
+		"start= auto")
+
+	output, err := createCmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot create service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
+		}
+		fmt.Println("\nNote: This command requires administrator privileges.")
+		fmt.Println("Please run Command Prompt as Administrator.")
+		os.Exit(1)
+	}
+
+	// Set service description
+	descCmd := exec.Command("sc.exe", "description", windowsServiceName,
+		"AnyClaw WebSocket Gateway Service")
+	descCmd.Run() // nolint:errcheck
+
+	fmt.Printf("Gateway service installed successfully\n")
+	fmt.Printf("  Service Name: %s\n", windowsServiceName)
+	fmt.Printf("  Executable: %s\n", execPath)
+	fmt.Println("\nUse 'anyclaw gateway start' to start the service")
+	fmt.Println("Or use: sc start", windowsServiceName)
+}
+
+func uninstallWindowsService() {
+	// Check if sc.exe exists
+	if _, err := exec.LookPath("sc.exe"); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: sc.exe not found.\n")
+		os.Exit(1)
+	}
+
+	// Check if service exists
+	checkCmd := exec.Command("sc.exe", "query", windowsServiceName)
+	output, err := checkCmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), windowsServiceName) {
+		fmt.Println("Service not installed")
+		return
+	}
+
+	// Stop the service if running
+	fmt.Println("Stopping service...")
+	exec.Command("sc.exe", "stop", windowsServiceName).Run() // nolint:errcheck
+
+	// Wait a bit for the service to stop
+	time.Sleep(2 * time.Second)
+
+	// Delete the service
+	fmt.Println("Deleting service...")
+	deleteCmd := exec.Command("sc.exe", "delete", windowsServiceName)
+	output, err = deleteCmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot delete service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
+		}
+		os.Exit(1)
+	}
+
+	fmt.Println("Gateway service uninstalled successfully")
+}
+
+func startWindowsService() {
+	// Start the service
+	fmt.Printf("Starting service: %s\n", windowsServiceName)
+	cmd := exec.Command("sc.exe", "start", windowsServiceName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot start service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
+		}
+		os.Exit(1)
+	}
+
+	// Check if it's actually running
+	time.Sleep(1 * time.Second)
+	if checkGatewayRunning() {
+		fmt.Println("Gateway service started successfully")
+	} else {
+		fmt.Println("Service started, but gateway may not be responding yet")
+		fmt.Println("Check with: sc query", windowsServiceName)
+	}
+}
+
+func stopWindowsService() {
+	// Stop the service
+	fmt.Printf("Stopping service: %s\n", windowsServiceName)
+	cmd := exec.Command("sc.exe", "stop", windowsServiceName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Cannot stop service: %v\n", err)
+		if len(output) > 0 {
+			fmt.Fprintf(os.Stderr, "Output: %s\n", string(output))
+		}
+		os.Exit(1)
+	}
+
+	fmt.Println("Gateway service stopped successfully")
+}
+
+func restartWindowsService() {
+	fmt.Println("Restarting service...")
+	stopWindowsService()
+	time.Sleep(2 * time.Second)
+	startWindowsService()
+}
+
+// checkGatewayRunning checks if the gateway is responding
+func checkGatewayRunning() bool {
+	// Load config to get default port
+	cfg, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to load config: %v\n", err)
+	}
+
+	port := gatewayPort
+	if port == 0 {
+		port = config.GetGatewayHTTPPort(cfg)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/health", port)
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK
+}
+
+// runGatewayCall makes an RPC call to gateway
+func runGatewayCall(cmd *cobra.Command, args []string) {
+	method := args[0]
+
+	// Parse params
+	var params map[string]interface{}
+	if gatewayParams != "" {
+		if err := json.Unmarshal([]byte(gatewayParams), &params); err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid params JSON: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// Create request
+	request := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      "1",
+		"method":  method,
+		"params":  params,
+	}
+
+	requestBody, _ := json.Marshal(request)
+
+	// For WebSocket, we need a different approach
+	fmt.Printf("Calling method: %s\n", method)
+	fmt.Printf("Request: %s\n", string(requestBody))
+	fmt.Println("\nNote: RPC calls require WebSocket connection")
+	fmt.Println("Use the WebSocket API to call methods directly")
+}

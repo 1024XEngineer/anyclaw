@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AnyClaw Desktop</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f3f4ef;
+        --panel: rgba(255, 255, 255, 0.92);
+        --text: #1f2937;
+        --muted: #667085;
+        --border: rgba(15, 23, 42, 0.08);
+        --accent: #17624a;
+        --accent-soft: #dff3eb;
+        --warn: #a15c07;
+        --error: #b42318;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "SF Pro Text", "Helvetica Neue", Helvetica, sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(23, 98, 74, 0.18), transparent 30%),
+          radial-gradient(circle at bottom right, rgba(209, 213, 219, 0.55), transparent 35%),
+          linear-gradient(180deg, #f7f7f2 0%, var(--bg) 100%);
+      }
+
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+
+      .panel {
+        width: min(560px, 100%);
+        background: var(--panel);
+        backdrop-filter: blur(18px);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        padding: 32px;
+        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.12);
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 18px 0 10px;
+        font-size: 32px;
+        line-height: 1.1;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .status {
+        margin-top: 28px;
+        padding: 18px 20px;
+        border-radius: 18px;
+        background: rgba(248, 250, 252, 0.92);
+        border: 1px solid rgba(15, 23, 42, 0.06);
+      }
+
+      .status-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 0 rgba(23, 98, 74, 0.45);
+        animation: pulse 1.8s infinite;
+        flex: 0 0 auto;
+      }
+
+      .dot.warn {
+        background: var(--warn);
+        box-shadow: none;
+        animation: none;
+      }
+
+      .dot.error {
+        background: var(--error);
+        box-shadow: none;
+        animation: none;
+      }
+
+      .status-title {
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .status-detail {
+        margin-top: 8px;
+        font-size: 14px;
+      }
+
+      .meta {
+        margin-top: 24px;
+        display: grid;
+        gap: 12px;
+        font-size: 14px;
+      }
+
+      .meta-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .meta-row span:first-child {
+        color: var(--muted);
+      }
+
+      .actions {
+        margin-top: 28px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 14px;
+        padding: 12px 16px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+        transform: none;
+      }
+
+      .primary {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .secondary {
+        background: rgba(15, 23, 42, 0.06);
+        color: var(--text);
+      }
+
+      .hint {
+        margin-top: 20px;
+        font-size: 13px;
+      }
+
+      code {
+        font-family: "SFMono-Regular", Menlo, monospace;
+        background: rgba(15, 23, 42, 0.05);
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+
+      @keyframes pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(23, 98, 74, 0.42);
+        }
+        70% {
+          box-shadow: 0 0 0 10px rgba(23, 98, 74, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(23, 98, 74, 0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel">
+        <div class="eyebrow">AnyClaw Desktop</div>
+        <h1>Starting local dashboard</h1>
+        <p>
+          This window starts the bundled gateway process and opens
+          <code>/dashboard/</code> in the same webview once the backend is ready.
+        </p>
+
+        <div class="status">
+          <div class="status-row">
+            <div id="status-dot" class="dot"></div>
+            <div>
+              <div id="status-title" class="status-title">Waiting for backend</div>
+              <div id="status-detail" class="status-detail">
+                The gateway is starting on <code>127.0.0.1:28789</code>.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="meta">
+          <div class="meta-row">
+            <span>Target URL</span>
+            <span><code>http://127.0.0.1:28789/dashboard/</code></span>
+          </div>
+          <div class="meta-row">
+            <span>Config</span>
+            <span id="config-path">Detecting...</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="open-dashboard" class="primary" disabled>Open Dashboard</button>
+          <button id="restart-backend" class="secondary">Restart Backend</button>
+          <button id="open-config" class="secondary">Open Config</button>
+        </div>
+
+        <p class="hint" id="hint">
+          If the page stays here, inspect the config file and verify the backend can bind to port
+          <code>28789</code>.
+        </p>
+      </section>
+    </main>
+
+    <script>
+      const DASHBOARD_URL = "http://127.0.0.1:28789/dashboard/";
+      const statusDot = document.getElementById("status-dot");
+      const statusTitle = document.getElementById("status-title");
+      const statusDetail = document.getElementById("status-detail");
+      const openDashboardButton = document.getElementById("open-dashboard");
+      const restartButton = document.getElementById("restart-backend");
+      const openConfigButton = document.getElementById("open-config");
+      const configPath = document.getElementById("config-path");
+
+      const getInvoke = () => {
+        if (window.__TAURI__ && window.__TAURI__.tauri && window.__TAURI__.tauri.invoke) {
+          return window.__TAURI__.tauri.invoke;
+        }
+
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+          return (command, args = {}) =>
+            window.__TAURI_INTERNALS__.invoke(command, args);
+        }
+
+        if (window.__TAURI_IPC__) {
+          return (command, args = {}) =>
+            new Promise((resolve, reject) => {
+              const callback = `_${crypto.randomUUID()}`;
+              const error = `_${crypto.randomUUID()}`;
+
+              Object.defineProperty(window, callback, {
+                value: (result) => {
+                  delete window[callback];
+                  delete window[error];
+                  resolve(result);
+                },
+                configurable: true,
+              });
+
+              Object.defineProperty(window, error, {
+                value: (message) => {
+                  delete window[callback];
+                  delete window[error];
+                  reject(message);
+                },
+                configurable: true,
+              });
+
+              window.__TAURI_IPC__({
+                cmd: command,
+                callback,
+                error,
+                payload: args,
+              });
+            });
+        }
+
+        return null;
+      };
+
+      const invokeImpl = getInvoke();
+
+      const invoke = async (command, args = {}) => {
+        if (!invokeImpl) {
+          throw new Error("Tauri runtime is not available");
+        }
+
+        return invokeImpl(command, args);
+      };
+
+      const statusText = (status) => {
+        if (typeof status === "string") {
+          return status;
+        }
+        if (status && typeof status === "object") {
+          const [key, value] = Object.entries(status)[0] || [];
+          if (key === "Error") {
+            return `Error: ${value}`;
+          }
+          return key || "Unknown";
+        }
+        return "Unknown";
+      };
+
+      const normalizeStatus = (status) => {
+        if (typeof status === "string") {
+          return { kind: status, message: "" };
+        }
+        if (status && typeof status === "object") {
+          if ("Error" in status) {
+            return { kind: "Error", message: String(status.Error || "") };
+          }
+          const [key] = Object.keys(status);
+          return { kind: key || "Unknown", message: "" };
+        }
+        return { kind: "Unknown", message: "" };
+      };
+
+      const renderStatus = (rawStatus) => {
+        const status = normalizeStatus(rawStatus);
+        openDashboardButton.disabled = status.kind !== "Running";
+        statusDot.className = "dot";
+
+        switch (status.kind) {
+          case "Running":
+            statusTitle.textContent = "Backend is ready";
+            statusDetail.textContent = "Opening the local dashboard in this window.";
+            break;
+          case "Starting":
+            statusTitle.textContent = "Starting backend";
+            statusDetail.textContent = "The gateway process is launching. This usually takes a few seconds.";
+            break;
+          case "Stopped":
+            statusDot.classList.add("warn");
+            statusTitle.textContent = "Backend is stopped";
+            statusDetail.textContent = "Restart the backend to open the dashboard.";
+            break;
+          case "Error":
+            statusDot.classList.add("error");
+            statusTitle.textContent = "Backend failed to start";
+            statusDetail.textContent = status.message || "Check the config file and application logs.";
+            break;
+          default:
+            statusDot.classList.add("warn");
+            statusTitle.textContent = statusText(rawStatus);
+            statusDetail.textContent = "Waiting for backend state updates.";
+            break;
+        }
+      };
+
+      const refreshConfigPath = async () => {
+        try {
+          const path = await invoke("get_config_path");
+          configPath.textContent = path;
+        } catch (error) {
+          configPath.textContent = "Unavailable";
+          console.error("Failed to get config path:", error);
+        }
+      };
+
+      const refreshStatus = async () => {
+        try {
+          const status = await invoke("get_sidecar_status");
+          renderStatus(status);
+        } catch (error) {
+          renderStatus({ Error: String(error) });
+        }
+      };
+
+      openDashboardButton.addEventListener("click", () => {
+        window.location.replace(DASHBOARD_URL);
+      });
+
+      restartButton.addEventListener("click", async () => {
+        restartButton.disabled = true;
+        try {
+          await invoke("restart_sidecar");
+          renderStatus("Starting");
+        } catch (error) {
+          renderStatus({ Error: String(error) });
+        } finally {
+          setTimeout(() => {
+            restartButton.disabled = false;
+          }, 1200);
+        }
+      });
+
+      openConfigButton.addEventListener("click", async () => {
+        try {
+          await invoke("open_config_file");
+        } catch (error) {
+          renderStatus({ Error: String(error) });
+        }
+      });
+
+      refreshConfigPath();
+      refreshStatus();
+      setInterval(refreshStatus, 1500);
+    </script>
+  </body>
+</html>

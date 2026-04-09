@@ -1,0 +1,105 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "build": {
+    "beforeBuildCommand": "make prepare-tauri-sidecar",
+    "beforeDevCommand": "make prepare-tauri-sidecar",
+    "devPath": "shell-dist",
+    "distDir": "shell-dist",
+    "withGlobalTauri": true
+  },
+  "package": {
+    "productName": "AnyClaw",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "sidecar": true,
+        "scope": [
+          {
+            "name": "binaries/anyclaw",
+            "sidecar": true
+          }
+        ],
+        "open": true
+      },
+      "fs": {
+        "all": true,
+        "scope": ["$HOME/.anyclaw/**", "$APPDATA/**", "$APP/**"]
+      },
+      "path": {
+        "all": true
+      },
+      "dialog": {
+        "all": true
+      },
+      "process": {
+        "all": true
+      },
+      "window": {
+        "all": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "category": "DeveloperTool",
+      "copyright": "",
+      "deb": {
+        "depends": []
+      },
+      "externalBin": ["binaries/anyclaw"],
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "identifier": "com.anyclaw.desktop",
+      "longDescription": "AnyClaw - AI-powered development agent with desktop interface",
+      "macOS": {
+        "entitlements": null,
+        "exceptionDomain": "",
+        "frameworks": [],
+        "providerShortName": null,
+        "signingIdentity": null
+      },
+      "resources": [],
+      "shortDescription": "AnyClaw Desktop",
+      "targets": "all",
+      "windows": {
+        "certificateThumbprint": null,
+        "digestAlgorithm": "sha256",
+        "timestampUrl": ""
+      }
+    },
+    "security": {
+      "csp": null
+    },
+    "systemTray": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    },
+    "updater": {
+      "active": false
+    },
+    "windows": [
+      {
+        "label": "main",
+        "fullscreen": false,
+        "height": 800,
+        "resizable": true,
+        "title": "AnyClaw",
+        "width": 1200,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true,
+        "visible": true,
+        "decorations": true,
+        "transparent": false
+      }
+    ]
+  }
+}
