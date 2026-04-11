@@ -1,24 +1,67 @@
 # AnyClaw
 
-AnyClaw is a local-first AI agent workspace focused on transparent files, controllable tools, pluggable skills, and real task execution on the local machine.
+<div align="center">
 
-## What it does
+本地优先的 AI Agent 工作台，兼顾 CLI、网关服务与 Web 控制台。  
+让 AI 不只会聊天，还能真正调用工具、操作文件、连接浏览器，并在你的工作区里完成任务。
 
-- Runs as a CLI, gateway service, and web control surface.
-- Supports multiple LLM providers including Ollama, Qwen, OpenAI-compatible APIs, OpenAI, and Anthropic.
-- Exposes local tools for files, shell commands, browser automation, desktop UI automation, OCR, and screenshots.
-- Integrates with CLI-Anything through `clihub`, so AnyClaw can discover and execute agent-native software harnesses when a local `CLI-Anything-0.2.0` catalog is present.
-- Keeps runtime state under `./.anyclaw/` and workspace context under `workflows/`.
+<p>
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square&logo=go&logoColor=white" />
+  <img alt="React" src="https://img.shields.io/badge/Web%20UI-React%2019-20232A?style=flat-square&logo=react&logoColor=61DAFB" />
+  <img alt="Vite" src="https://img.shields.io/badge/Build-Vite%207-646CFF?style=flat-square&logo=vite&logoColor=white" />
+  <img alt="Local First" src="https://img.shields.io/badge/Mode-Local%20First-111827?style=flat-square" />
+</p>
 
-## Quick start
+</div>
+
+## 项目简介
+
+AnyClaw 是一个面向真实任务执行的 AI Agent 系统。
+
+它不是单纯的聊天壳，而是一个可以在本地工作区中运行的可控执行环境，支持：
+
+- 用命令行直接与 Agent 对话
+- 通过网关服务提供 Web 控制台与会话能力
+- 接入多种大模型供应商
+- 调用文件、Shell、浏览器、桌面自动化等工具
+- 通过 Skill / Agent / Channel 扩展能力
+
+如果你想要一个“能落地执行”的本地 AI 工作台，而不是只停留在问答层，AnyClaw 就是为这种场景设计的。
+
+## 核心能力
+
+| 能力 | 说明 |
+| --- | --- |
+| 多模型接入 | 支持 OpenAI 兼容接口、OpenAI、Anthropic、Qwen、Ollama 等供应商 |
+| 本地优先 | 运行状态、工作区上下文、历史数据默认保存在本地 |
+| 工具执行 | 支持文件读写、Shell 命令、浏览器自动化、截图、OCR、桌面控制 |
+| Web 控制台 | 提供新的控制台界面，用于聊天、市场、渠道、设置等操作入口 |
+| 可扩展架构 | 支持 Skill、Agent、插件与 CLI Hub 扩展 |
+| 工作区记忆 | 通过 `workflows/` 和本地状态目录管理上下文与运行轨迹 |
+
+## 适用场景
+
+- 想在本地搭建可控的 AI Agent 工作台
+- 想把模型能力和真实工具调用接在一起
+- 想做 Skill、Agent、Channel 等能力扩展
+- 想通过 Web 控制台管理模型、会话和工作区
+
+## 快速开始
+
+### 1. 环境要求
+
+- Go `1.25+`
+- Node.js `20+`
+- `corepack` / `pnpm`
+
+### 2. 克隆并编译
+
+macOS / Linux:
 
 ```bash
 git clone https://github.com/1024XEngineer/anyclaw.git
 cd anyclaw
 go build -o anyclaw ./cmd/anyclaw
-./anyclaw onboard --non-interactive
-./anyclaw doctor --connectivity=false
-./anyclaw -i
 ```
 
 Windows:
@@ -27,94 +70,42 @@ Windows:
 git clone https://github.com/1024XEngineer/anyclaw.git
 cd anyclaw
 go build -o anyclaw.exe ./cmd/anyclaw
-.\anyclaw.exe onboard --non-interactive --connectivity=false
-.\anyclaw.exe doctor --connectivity=false
+```
+
+### 3. 首次初始化
+
+macOS / Linux:
+
+```bash
+./anyclaw onboard
+./anyclaw doctor
+./anyclaw -i
+```
+
+Windows:
+
+```powershell
+.\anyclaw.exe onboard
+.\anyclaw.exe doctor
 .\anyclaw.exe -i
 ```
 
-## Initialize without API keys
+## 首次使用说明
 
-AnyClaw can be initialized in a no-cloud, no-API-key state.
+AnyClaw 现在默认不会直接把用户带到本地模型。
 
-- The current default safe bootstrap path is local `ollama`
-- `doctor --connectivity=false` skips live model checks
-- You can switch providers later after startup
+首次运行时，更推荐你先配置自己的模型供应商信息：
 
-Example:
+- `Provider`
+- `Base URL`
+- `API Key`
+- 默认模型名称
 
-```powershell
-.\anyclaw.exe onboard --non-interactive --connectivity=false
-.\anyclaw.exe doctor --connectivity=false
-```
+也就是说，仓库里的 `anyclaw.json` 只是一个安全的示例起点，不是可以直接聊天的私人配置。
 
-If you want local chat immediately, start Ollama separately and pull a model such as `llama3.2`.
+如果你更想走纯本地路线，也可以在初始化或设置页中切换到 `Ollama`。
 
-The committed `anyclaw.json` is a sanitized starter config. Keep local API keys and machine-specific overrides out of Git.
-
-## Reset local state
-
-Runtime state and history are stored locally and can be cleared.
-
-- Shared starter config: `anyclaw.json`
-- Runtime state: `./.anyclaw/`
-- Workspace memories: `workflows/memory/` and `workflows/**/memory.db*`
-
-If you want a clean reset with no API keys and no records:
-
-1. Clear any local API keys you added to `anyclaw.json`
-2. Remove `./.anyclaw/`
-3. Remove `workflows/memory/`
-4. Remove `workflows/**/memory.db*`
-5. Recreate minimal state with `anyclaw onboard --non-interactive --connectivity=false`
-
-## CLI Hub and CLI-Anything
-
-If a local `CLI-Anything-0.2.0` directory exists beside or inside the workspace, AnyClaw can auto-discover it and expose CLI Hub features.
-
-Useful commands:
-
-```bash
-anyclaw clihub list --runnable
-anyclaw clihub capabilities
-anyclaw clihub info anygen
-anyclaw clihub exec anygen -- config path
-```
-
-This gives AnyClaw access to structured harnesses for tools such as Browser, LibreOffice, Blender, GIMP, ComfyUI, AnyGen, Draw.io, Audacity, and more, depending on local dependencies.
-
-## Browser and desktop control
-
-AnyClaw already includes native tool families for app control:
-
-- Browser automation: navigate, click, type, upload, download, evaluate JS, capture snapshots, export PDF
-- Desktop automation on Windows: open apps, enumerate windows, inspect UI Automation trees, target controls, set values, OCR, text matching, image matching, screenshot windows
-- App workflows and connector plans: `anyclaw app ...`
-
-Notes:
-
-- Browser tasks are generally the most reliable.
-- Windows desktop automation is available now, especially for standard UI controls.
-- OCR-based flows benefit from installing Tesseract.
-- CLI-Anything harnesses are often more reliable than raw GUI automation when a matching harness exists.
-
-## Web UI workspace
-
-AnyClaw includes a pnpm-based UI workspace:
-
-```bash
-pnpm ui:install
-pnpm ui:dev
-pnpm ui:test
-pnpm ui:build
-```
-
-- Source: `ui/`
-- Build output: `dist/control-ui/`
-- Runtime route: gateway `/dashboard` prefers `dist/control-ui/` and falls back when missing
-- Compatible routes: `/dashboard` and `/control`
-- Optional root override: `ANYCLAW_CONTROL_UI_ROOT=/abs/path/to/dist/control-ui`
-
-Teammate quick start:
+## 启动 Web 控制台
 
 ```bash
 corepack enable
@@ -123,18 +114,34 @@ pnpm ui:build
 go run ./cmd/anyclaw gateway start
 ```
 
-Then open `http://127.0.0.1:18789/dashboard`.
+启动后打开：
 
-- Use `pnpm ui:dev` if you want Vite hot reload during UI work
-- Use `pnpm ui:build` before starting the gateway if you want the gateway-served UI to match the latest local source
+```text
+http://127.0.0.1:18789/dashboard
+```
 
-## Common commands
+开发 UI 时可以使用：
+
+```bash
+pnpm ui:dev
+```
+
+常用脚本：
+
+```bash
+pnpm ui:install
+pnpm ui:dev
+pnpm ui:test
+pnpm ui:build
+pnpm ui:preview
+```
+
+## 常用命令
 
 ```bash
 anyclaw -i
-anyclaw doctor --connectivity=false
-anyclaw onboard --non-interactive --connectivity=false
-anyclaw setup
+anyclaw onboard
+anyclaw doctor
 anyclaw gateway start
 anyclaw status --all
 anyclaw health --verbose
@@ -143,65 +150,95 @@ anyclaw models status
 anyclaw clihub list --runnable
 anyclaw clihub capabilities
 anyclaw app list
-anyclaw app workflows resolve "remove background"
 anyclaw task run "summarize this workspace"
 ```
 
-OpenClaw-style aliases are supported for common namespaces such as `skills`, `plugins`, `agents`, `apps`, `setup`, `daemon`, `status`, `health`, `sessions`, `approvals`, `channels`, `models`, and `config`.
-
-Interactive commands:
+交互模式下常见命令：
 
 ```text
-/exit, /quit, /q
+/help
 /clear
 /memory
 /skills
 /tools
-/provider
 /providers
 /models <provider>
 /agents
 /agent use <name>
-/audit
 /set provider <value>
 /set model <value>
 /set apikey <value>
-/set temp <value>
-/help
 ```
 
-## Project layout
+## 控制台与扩展能力
+
+AnyClaw 当前已经具备以下扩展基础：
+
+- `Skill`：扩展任务能力与工具编排
+- `Agent`：面向不同角色或任务类型的代理能力
+- `Channel`：对接微信、飞书等外部渠道
+- `CLI Hub`：发现并调用本地 CLI-Anything 能力目录
+
+如果本地存在 `CLI-Anything-0.2.0` 目录，AnyClaw 可以自动发现并暴露可执行能力，例如：
+
+- Browser
+- LibreOffice
+- Blender
+- GIMP
+- ComfyUI
+- AnyGen
+- Draw.io
+- Audacity
+
+示例命令：
+
+```bash
+anyclaw clihub list --runnable
+anyclaw clihub info anygen
+anyclaw clihub exec anygen -- config path
+```
+
+## 项目结构
 
 ```text
-cmd/anyclaw/     CLI entrypoint
-pkg/agent/       agent runtime
-pkg/apps/        app runtime, bindings, workflows
-pkg/clihub/      CLI-Anything catalog and execution
-pkg/config/      config loading and validation
-pkg/gateway/     HTTP / websocket gateway
-pkg/memory/      file-first memory
-pkg/plugin/      plugin and app connector system
-pkg/skills/      skill loading and execution
-pkg/tools/       tool registry and built-ins
-skills/          bundled skills
-workflows/       workspace bootstrap files
+cmd/anyclaw/     CLI 入口
+pkg/agent/       Agent 运行时
+pkg/apps/        应用运行时与工作流
+pkg/clihub/      CLI Hub 与本地能力目录接入
+pkg/config/      配置加载与校验
+pkg/gateway/     HTTP / WebSocket 网关
+pkg/memory/      本地记忆系统
+pkg/plugin/      插件与连接器系统
+pkg/skills/      Skill 加载与执行
+pkg/tools/       内置工具注册表
+ui/              Web 控制台源码
+dist/control-ui/ Web 控制台构建产物
+workflows/       工作区上下文与引导文件
 ```
 
-## Notes
+## 文档导航
 
-- `anyclaw.json` is the repo-safe starter config for runtime settings.
-- `./.anyclaw/`, `.claude/`, `.agent/`, and `workflows/memory/` are local-only state and should stay untracked.
-- `workflows/` stores bootstrap context and workspace memory.
-- `doctor --connectivity=false` is the easiest way to validate a fresh local setup.
+- [快速开始](./docs/QUICKSTART.md)
+- [架构说明](./docs/ARCHITECTURE.md)
+- [部署说明](./docs/DEPLOYMENT.md)
+- [Skill 文档](./docs/SKILLS.md)
+- [安全说明](./docs/SECURITY.md)
+- [故障排查](./docs/TROUBLESHOOTING.md)
 
-## Chinese Display On Windows
+## 注意事项
 
-If the Windows console shows garbled Chinese text while running AnyClaw, switch the terminal code page to UTF-8 first:
+- `anyclaw.json` 是仓库内可提交的起始配置，请不要把私人密钥直接提交到仓库
+- 本地运行状态默认保存在 `./.anyclaw/`
+- 工作区相关上下文与记忆保存在 `workflows/`
+- 如果你修改了 UI 源码，建议重新执行 `pnpm ui:build` 再启动网关
+
+Windows 终端如果出现中文乱码，可以先执行：
 
 ```bash
 chcp 65001
 ```
 
-## Version
+## 一句话总结
 
-`2026.3.13`
+AnyClaw 适合想把“大模型能力 + 本地工具执行 + Web 控制台管理”真正组合到一起的人。  
+如果你希望 AI 不只是回答问题，而是能在你的工作区里实际做事，这个项目就是围绕这个目标搭起来的。
