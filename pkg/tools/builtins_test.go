@@ -92,6 +92,24 @@ func TestReviewCommandExecutionBlocksProtectedPathReference(t *testing.T) {
 	}
 }
 
+func TestReviewCommandExecutionAllowsExplicitlyAllowedProtectedPathReference(t *testing.T) {
+	tempDir := t.TempDir()
+	protected := filepath.Join(tempDir, "Desktop")
+	if err := os.MkdirAll(protected, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	err := reviewCommandExecution("mkdir "+filepath.Join(protected, "hello"), "", BuiltinOptions{
+		ExecutionMode:  "host-reviewed",
+		ProtectedPaths: []string{protected},
+		AllowedWritePaths: []string{
+			protected,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected explicitly allowed protected path reference to pass review, got %v", err)
+	}
+}
+
 func TestRunCommandToolWithPolicyBlocksOutsideWorkingDirCwd(t *testing.T) {
 	workspace := t.TempDir()
 	outsideDir := t.TempDir()

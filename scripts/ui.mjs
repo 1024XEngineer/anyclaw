@@ -41,12 +41,46 @@ function which(cmd) {
   return null;
 }
 
+function isWindowsBatchCommand(cmd) {
+  return process.platform === "win32" && [".cmd", ".bat", ".com"].includes(path.extname(cmd).toLowerCase());
+}
+
+function quoteWindowsCmdArg(value) {
+  const input = String(value);
+  if (input.length === 0) {
+    return '""';
+  }
+  if (!/[ \t"&()^<>|]/.test(input)) {
+    return input;
+  }
+  return `"${input.replace(/"/g, '""')}"`;
+}
+
+function quotePowerShellArg(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function commandInvocation(cmd, args) {
+  if (!isWindowsBatchCommand(cmd)) {
+    return { command: cmd, args, shell: false };
+  }
+
+  const powershell = which("powershell") || "powershell.exe";
+  const inner = [`& ${quotePowerShellArg(cmd)}`, ...args.map(quotePowerShellArg)].join(" ");
+  return {
+    command: powershell,
+    args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", inner],
+    shell: false,
+  };
+}
+
 function run(cmd, args) {
-  const child = spawn(cmd, args, {
+  const invocation = commandInvocation(cmd, args);
+  const child = spawn(invocation.command, invocation.args, {
     cwd: uiDir,
     stdio: "inherit",
     env: process.env,
-    shell: process.platform === "win32" && [".cmd", ".bat", ".com"].includes(path.extname(cmd).toLowerCase()),
+    shell: invocation.shell,
   });
   child.on("error", (err) => {
     console.error(`Failed to launch ${cmd}:`, err);
@@ -58,11 +92,12 @@ function run(cmd, args) {
 }
 
 function runSync(cmd, args, env = process.env) {
-  const result = spawnSync(cmd, args, {
+  const invocation = commandInvocation(cmd, args);
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: uiDir,
     stdio: "inherit",
     env,
-    shell: process.platform === "win32" && [".cmd", ".bat", ".com"].includes(path.extname(cmd).toLowerCase()),
+    shell: invocation.shell,
   });
   if (result.error) {
     console.error(`Failed to launch ${cmd}:`, result.error);
@@ -96,13 +131,20 @@ function main() {
   }
 
   const pnpm = which("pnpm");
-  if (!pnpm) {
-    console.error("Missing pnpm. Please install pnpm and retry.");
+  const corepack = which("corepack");
+  const pkgRunner = pnpm
+    ? { bin: pnpm, prefixArgs: [] }
+    : corepack
+      ? { bin: corepack, prefixArgs: ["pnpm"] }
+      : null;
+
+  if (!pkgRunner) {
+    console.error("Missing pnpm/corepack. Please install Node.js with corepack support or pnpm and retry.");
     process.exit(1);
   }
 
   if (action === "install") {
-    run(pnpm, ["install", ...rest]);
+    run(pkgRunner.bin, [...pkgRunner.prefixArgs, "install", ...rest]);
     return;
   }
 
@@ -113,12 +155,10 @@ function main() {
   }
 
   if (!hasDeps(action)) {
-    const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
-    const installEnv = action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
-    runSync(pnpm, installArgs, installEnv);
+    runSync(pkgRunner.bin, [...pkgRunner.prefixArgs, "install"], process.env);
   }
 
-  run(pnpm, ["run", script, ...rest]);
+  run(pkgRunner.bin, [...pkgRunner.prefixArgs, "run", script, ...rest]);
 }
 
 main();

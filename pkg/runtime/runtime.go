@@ -422,6 +422,8 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		ExecutionMode:         app.Config.Sandbox.ExecutionMode,
 		DangerousPatterns:     app.Config.Security.DangerousCommandPatterns,
 		ProtectedPaths:        app.Config.Security.ProtectedPaths,
+		AllowedReadPaths:      app.Config.Security.AllowedReadPaths,
+		AllowedWritePaths:     app.Config.Security.AllowedWritePaths,
 		Policy:                policyEngine,
 		CommandTimeoutSeconds: app.Config.Security.CommandTimeoutSeconds,
 		AuditLogger:           auditLogger,

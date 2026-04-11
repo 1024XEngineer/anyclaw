@@ -24,10 +24,12 @@ type stubAgentLLM struct {
 	responses []*llm.Response
 	index     int
 	messages  [][]llm.Message
+	toolDefs  [][]llm.ToolDefinition
 }
 
 func (s *stubAgentLLM) Chat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error) {
 	s.messages = append(s.messages, append([]llm.Message(nil), messages...))
+	s.toolDefs = append(s.toolDefs, append([]llm.ToolDefinition(nil), toolDefs...))
 	if s.index >= len(s.responses) {
 		return &llm.Response{Content: "done"}, nil
 	}
@@ -291,6 +293,88 @@ func TestSelectToolInfosHandlesChineseDesktopRequest(t *testing.T) {
 	got := strings.Join(names, ",")
 	if !strings.Contains(got, "desktop_open") || !strings.Contains(got, "desktop_list_windows") || !strings.Contains(got, "skill_app-controller") {
 		t.Fatalf("expected desktop and skill tools for Chinese open-app request, got %q", got)
+	}
+}
+
+func TestSelectToolInfosHandlesChineseCreateFolderRequest(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("read_file", "Read a file", map[string]any{}, nil)
+	registry.RegisterTool("write_file", "Write a file", map[string]any{}, nil)
+	registry.RegisterTool("list_directory", "List a directory", map[string]any{}, nil)
+	registry.RegisterTool("search_files", "Search files", map[string]any{}, nil)
+	registry.RegisterTool("run_command", "Run a command", map[string]any{}, nil)
+
+	ag := New(Config{Tools: registry})
+
+	actionable := ag.selectToolInfos("在桌面创建文件夹哈喽")
+	names := make([]string, 0, len(actionable))
+	for _, tool := range actionable {
+		names = append(names, tool.Name)
+	}
+	got := strings.Join(names, ",")
+	if !strings.Contains(got, "run_command") || !strings.Contains(got, "write_file") || !strings.Contains(got, "list_directory") {
+		t.Fatalf("expected core file and command tools for Chinese create-folder request, got %q", got)
+	}
+}
+
+func TestAgentRunUsesToolsForNaturalChineseCreateFolderRequest(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+
+	registry := tools.NewRegistry()
+	registry.RegisterTool("read_file", "Read a file", map[string]any{}, nil)
+	registry.RegisterTool("write_file", "Write a file", map[string]any{}, nil)
+	registry.RegisterTool("list_directory", "List a directory", map[string]any{}, nil)
+	registry.RegisterTool("search_files", "Search files", map[string]any{}, nil)
+	registry.RegisterTool("run_command", "Run a command", map[string]any{}, nil)
+
+	llmStub := &stubAgentLLM{responses: []*llm.Response{
+		{Content: "可以帮你创建。"},
+	}}
+
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		LLM:         llmStub,
+		Memory:      mem,
+		Skills:      skills.NewSkillsManager(""),
+		Tools:       registry,
+	})
+
+	if _, err := ag.Run(context.Background(), "在桌面建立一个叫哈喽的文件夹"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(llmStub.messages) == 0 {
+		t.Fatalf("expected llm to receive at least one message batch")
+	}
+	if len(llmStub.toolDefs) == 0 {
+		t.Fatalf("expected llm to receive tool definitions")
+	}
+
+	systemPrompt := ""
+	for _, msg := range llmStub.messages[0] {
+		if msg.Role == "system" {
+			systemPrompt = msg.Content
+			break
+		}
+	}
+	if systemPrompt == "" {
+		t.Fatalf("expected system prompt to be present")
+	}
+	if strings.Contains(systemPrompt, "No tools selected for this turn") {
+		t.Fatalf("expected actionable Chinese request to expose tools, got system prompt %q", systemPrompt)
+	}
+
+	names := make([]string, 0, len(llmStub.toolDefs[0]))
+	for _, def := range llmStub.toolDefs[0] {
+		names = append(names, def.Function.Name)
+	}
+	got := strings.Join(names, ",")
+	if !strings.Contains(got, "run_command") || !strings.Contains(got, "write_file") || !strings.Contains(got, "list_directory") {
+		t.Fatalf("expected run path to pass core tool definitions, got %q", got)
 	}
 }
 

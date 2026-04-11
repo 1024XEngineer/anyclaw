@@ -112,6 +112,20 @@ pnpm ui:build
 - Compatible routes: `/dashboard` and `/control`
 - Optional root override: `ANYCLAW_CONTROL_UI_ROOT=/abs/path/to/dist/control-ui`
 
+Teammate quick start:
+
+```bash
+corepack enable
+pnpm ui:install
+pnpm ui:build
+go run ./cmd/anyclaw gateway start
+```
+
+Then open `http://127.0.0.1:18789/dashboard`.
+
+- Use `pnpm ui:dev` if you want Vite hot reload during UI work
+- Use `pnpm ui:build` before starting the gateway if you want the gateway-served UI to match the latest local source
+
 ## Common commands
 
 ```bash

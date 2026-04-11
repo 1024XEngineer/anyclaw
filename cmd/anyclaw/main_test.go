@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -113,5 +114,37 @@ func TestHandleMarkdownCommandTogglesOutputMode(t *testing.T) {
 	}
 	if !strings.Contains(output, "Markdown rendering enabled") {
 		t.Fatalf("expected enable confirmation, got %q", output)
+	}
+}
+
+func TestPrintGatewayInteractiveHelpShowsSupportedCommandsOnly(t *testing.T) {
+	output := captureStdout(t, func() {
+		printGatewayInteractiveHelp()
+	})
+
+	if !strings.Contains(output, "/status") {
+		t.Fatalf("expected gateway help to include /status, got %q", output)
+	}
+	if !strings.Contains(output, "/clear               - not available yet in Gateway mode") {
+		t.Fatalf("expected gateway help to explain /clear behavior, got %q", output)
+	}
+	if strings.Contains(output, "/providers") || strings.Contains(output, "/memory") || strings.Contains(output, "/set provider") {
+		t.Fatalf("expected gateway help to hide unsupported local-only commands, got %q", output)
+	}
+}
+
+func TestHandleGatewayClientCommandClearWarnsWhenUnsupported(t *testing.T) {
+	output := captureStdout(t, func() {
+		done := handleGatewayClientCommand(context.Background(), &RuntimeState{}, "/clear")
+		if done {
+			t.Fatal("expected /clear to keep the gateway session open")
+		}
+	})
+
+	if !strings.Contains(output, "not available yet") {
+		t.Fatalf("expected unsupported warning, got %q", output)
+	}
+	if strings.Contains(strings.ToLower(output), "cleared") {
+		t.Fatalf("expected /clear to avoid misleading success text, got %q", output)
 	}
 }

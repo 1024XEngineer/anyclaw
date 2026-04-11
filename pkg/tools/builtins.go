@@ -448,7 +448,8 @@ func reviewCommandExecution(command string, cwd string, opts BuiltinOptions) err
 			return fmt.Errorf("host execution denied: %w", err)
 		}
 	}
-	if err := validateCommandAgainstProtectedPaths(command, opts.ProtectedPaths); err != nil {
+	allowedCommandPaths := mergePathLists(opts.WorkingDir, opts.AllowedReadPaths, opts.AllowedWritePaths)
+	if err := validateCommandAgainstProtectedPaths(command, opts.ProtectedPaths, allowedCommandPaths); err != nil {
 		return fmt.Errorf("host execution denied: %w", err)
 	}
 	return nil
@@ -475,9 +476,12 @@ func validateProtectedPath(targetPath string, protectedPaths []string) error {
 	return nil
 }
 
-func validateCommandAgainstProtectedPaths(command string, protectedPaths []string) error {
+func validateCommandAgainstProtectedPaths(command string, protectedPaths []string, allowedPaths []string) error {
 	normalizedCommand := normalizeCommandForCompare(command)
 	for _, protected := range protectedPaths {
+		if isProtectedPathExplicitlyAllowed(protected, allowedPaths) {
+			continue
+		}
 		for _, token := range protectedPathTokens(protected) {
 			if token != "" && strings.Contains(normalizedCommand, token) {
 				return fmt.Errorf("command references protected path: %s", protected)
@@ -485,6 +489,38 @@ func validateCommandAgainstProtectedPaths(command string, protectedPaths []strin
 		}
 	}
 	return nil
+}
+
+func isProtectedPathExplicitlyAllowed(protected string, allowedPaths []string) bool {
+	protectedNorm, err := normalizePathForCompare(protected)
+	if err != nil || protectedNorm == "" {
+		return false
+	}
+	for _, allowed := range allowedPaths {
+		allowedNorm, err := normalizePathForCompare(allowed)
+		if err != nil || allowedNorm == "" {
+			continue
+		}
+		if pathWithin(allowedNorm, protectedNorm) || pathWithin(protectedNorm, allowedNorm) {
+			return true
+		}
+	}
+	return false
+}
+
+func mergePathLists(workingDir string, lists ...[]string) []string {
+	items := make([]string, 0, 1)
+	if strings.TrimSpace(workingDir) != "" {
+		items = append(items, workingDir)
+	}
+	for _, list := range lists {
+		for _, item := range list {
+			if strings.TrimSpace(item) != "" {
+				items = append(items, item)
+			}
+		}
+	}
+	return items
 }
 
 func normalizePathForCompare(path string) (string, error) {

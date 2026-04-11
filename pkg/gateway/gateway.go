@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -938,7 +939,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/v2/store/", s.wrap("/v2/store/", requirePermission("tasks.read", s.handleV2StoreByID)))
 	mux.HandleFunc("/approvals", s.wrap("/approvals", requirePermission("approvals.read", s.handleApprovals)))
 	mux.HandleFunc("/approvals/", s.wrap("/approvals/", requirePermission("approvals.write", s.handleApprovalByID)))
-	mux.HandleFunc("/skills", s.wrap("/skills", requirePermission("skills.read", s.handleSkills)))
+	mux.HandleFunc("/skills", s.wrap("/skills", s.handleSkills))
 	mux.HandleFunc("/tools/activity", s.wrap("/tools/activity", requirePermission("tools.read", s.handleToolActivity)))
 	mux.HandleFunc("/tools", s.wrap("/tools", requirePermission("tools.read", s.handleTools)))
 	mux.HandleFunc("/mcp/servers", s.wrap("/mcp/servers", requirePermission("mcp.read", s.handleMCPServers)))
@@ -985,6 +986,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Cron jobs
 	cron.RegisterUIHandler(mux, cronScheduler, "/cron")
+	s.registerUIRoutes(mux)
 
 	mux.HandleFunc("/", s.handleRootAPI)
 
@@ -1490,7 +1492,7 @@ func (s *Server) status() Status {
 		WorkDir:    s.app.WorkDir,
 		Sessions:   len(s.store.ListSessions()),
 		Events:     len(s.store.ListEvents(0)),
-		Skills:     len(s.app.Agent.ListSkills()),
+		Skills:     s.currentEnabledSkillCount(),
 		Tools:      len(s.app.Agent.ListTools()),
 		Secured:    secured,
 		Users:      len(s.app.Config.Security.Users),
@@ -3511,14 +3513,6 @@ func StopDetached(app *runtime.App) error {
 	return nil
 }
 
-func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.app.Agent.ListSkills())
-}
-
 func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -4277,7 +4271,7 @@ func runWorker(ctx context.Context, app *runtime.App) error {
 	mux.HandleFunc("/v2/store/", server.wrap("/v2/store/", requirePermission("tasks.read", server.handleV2StoreByID)))
 	mux.HandleFunc("/approvals", server.wrap("/approvals", requirePermission("approvals.read", server.handleApprovals)))
 	mux.HandleFunc("/approvals/", server.wrap("/approvals/", requirePermission("approvals.write", server.handleApprovalByID)))
-	mux.HandleFunc("/skills", server.wrap("/skills", requirePermission("skills.read", server.handleSkills)))
+	mux.HandleFunc("/skills", server.wrap("/skills", server.handleSkills))
 	mux.HandleFunc("/tools/activity", server.wrap("/tools/activity", requirePermission("tools.read", server.handleToolActivity)))
 	mux.HandleFunc("/tools", server.wrap("/tools", requirePermission("tools.read", server.handleTools)))
 
@@ -4289,6 +4283,7 @@ func runWorker(ctx context.Context, app *runtime.App) error {
 	mux.HandleFunc("/channels/discord/interactions", server.rateLimit.Wrap(server.handleDiscordInteractions))
 	mux.HandleFunc("/ingress/web", server.rateLimit.Wrap(server.handleSignedIngress))
 	mux.HandleFunc("/ingress/plugins/", server.rateLimit.Wrap(server.handlePluginIngress))
+	server.registerUIRoutes(mux)
 	mux.HandleFunc("/", server.handleRootAPI)
 
 	server.startedAt = time.Now().UTC()
@@ -4814,6 +4809,114 @@ func (s *Server) handleMarketCategories(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"categories": categories})
 }
 
+func (s *Server) registerUIRoutes(mux *http.ServeMux) {
+	if s == nil || mux == nil {
+		return
+	}
+
+	basePath := strings.TrimSpace(s.app.Config.Gateway.ControlUI.BasePath)
+	if basePath == "" {
+		basePath = "/dashboard"
+	}
+
+	controlPaths := []string{basePath, "/dashboard", "/control"}
+	seen := map[string]bool{}
+	for _, route := range controlPaths {
+		route = strings.TrimSpace(route)
+		if route == "" || seen[route] {
+			continue
+		}
+		seen[route] = true
+		mux.HandleFunc(route, s.handleControlUI)
+		mux.HandleFunc(route+"/", s.handleControlUI)
+	}
+
+	mux.HandleFunc("/market", s.handleMarketUI)
+	mux.HandleFunc("/market/", s.handleMarketUI)
+	mux.HandleFunc("/discovery", s.handleDiscoveryUI)
+	mux.HandleFunc("/discovery/", s.handleDiscoveryUI)
+}
+
+func (s *Server) controlUIRoot() string {
+	candidates := []string{
+		strings.TrimSpace(os.Getenv("ANYCLAW_CONTROL_UI_ROOT")),
+		strings.TrimSpace(s.app.Config.Gateway.ControlUI.Root),
+		"dist/control-ui",
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		info, err := os.Stat(candidate)
+		if err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func (s *Server) handleControlUI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if root := s.controlUIRoot(); root != "" {
+		if s.tryServeControlUIAsset(w, r, root) {
+			return
+		}
+		indexPath := filepath.Join(root, "index.html")
+		if _, err := os.Stat(indexPath); err == nil {
+			http.ServeFile(w, r, indexPath)
+			return
+		}
+	}
+
+	data, err := os.ReadFile("ui/control/index.html")
+	if err != nil {
+		http.Error(w, "control UI not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
+func (s *Server) tryServeControlUIAsset(w http.ResponseWriter, r *http.Request, root string) bool {
+	controlPaths := []string{
+		strings.TrimSpace(s.app.Config.Gateway.ControlUI.BasePath),
+		"/dashboard",
+		"/control",
+	}
+
+	requestPath := path.Clean(r.URL.Path)
+	for _, base := range controlPaths {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		base = path.Clean(base)
+		if requestPath == base || requestPath == base+"/" {
+			return false
+		}
+		prefix := base + "/"
+		if !strings.HasPrefix(requestPath, prefix) {
+			continue
+		}
+		rel := strings.TrimPrefix(requestPath, prefix)
+		if rel == "" || rel == "." {
+			return false
+		}
+		target := filepath.Join(root, filepath.FromSlash(rel))
+		info, err := os.Stat(target)
+		if err != nil || info.IsDir() {
+			return false
+		}
+		http.ServeFile(w, r, target)
+		return true
+	}
+	return false
+}
+
 func parseIntParam(s string, defaultVal int) int {
 	if s == "" {
 		return defaultVal
@@ -4829,7 +4932,10 @@ func parseIntParam(s string, defaultVal int) int {
 func (s *Server) handleMarketUI(w http.ResponseWriter, r *http.Request) {
 	data, err := os.ReadFile("ui/market/index.html")
 	if err != nil {
-		data, err = os.ReadFile(filepath.Join(s.app.Config.Gateway.ControlUI.Root, "market", "index.html"))
+		root := s.controlUIRoot()
+		if root != "" {
+			data, err = os.ReadFile(filepath.Join(root, "market", "index.html"))
+		}
 	}
 	if err != nil {
 		http.Error(w, "market UI not found", http.StatusNotFound)
@@ -4872,7 +4978,10 @@ func (s *Server) handleDiscoveryQuery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDiscoveryUI(w http.ResponseWriter, r *http.Request) {
 	data, err := os.ReadFile("ui/discovery/index.html")
 	if err != nil {
-		data, err = os.ReadFile(filepath.Join(s.app.Config.Gateway.ControlUI.Root, "discovery", "index.html"))
+		root := s.controlUIRoot()
+		if root != "" {
+			data, err = os.ReadFile(filepath.Join(root, "discovery", "index.html"))
+		}
 	}
 	if err != nil {
 		http.Error(w, "discovery UI not found", http.StatusNotFound)

@@ -1,6 +1,9 @@
 package tools
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestPolicyEngineDeniesReadOutsideWorkingDir(t *testing.T) {
 	workspace := t.TempDir()
@@ -22,6 +25,21 @@ func TestPolicyEngineAllowsConfiguredReadPath(t *testing.T) {
 
 	if err := policy.CheckReadPath(allowed); err != nil {
 		t.Fatalf("expected allowed read path, got %v", err)
+	}
+}
+
+func TestPolicyEngineAllowsConfiguredWritePathEvenIfProtected(t *testing.T) {
+	workspace := t.TempDir()
+	desktopRoot := t.TempDir()
+	target := filepath.Join(desktopRoot, "demo")
+	policy := NewPolicyEngine(PolicyOptions{
+		WorkingDir:        workspace,
+		ProtectedPaths:    []string{desktopRoot},
+		AllowedWritePaths: []string{desktopRoot},
+	})
+
+	if err := policy.CheckWritePath(target); err != nil {
+		t.Fatalf("expected explicit allowed write path to override protected path, got %v", err)
 	}
 }
 

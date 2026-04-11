@@ -35,3 +35,17 @@ bin/
 
 # Delegate LLM config (contains API keys)
 .anyclaw/delegate_config.json
+
+# Local runtime state
+.anyclaw/
+gateway.log
+gateway.err
+
+# UI generated files
+ui/*.tsbuildinfo
+ui/vite.config.js
+ui/vite.config.d.ts
+ui/vitest.config.js
+ui/vitest.config.d.ts
+ui/tailwind.config.js
+ui/tailwind.config.d.ts

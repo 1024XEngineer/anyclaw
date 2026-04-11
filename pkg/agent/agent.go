@@ -803,6 +803,21 @@ func containsCJKActionIntent(query string) bool {
 		}
 	}
 
+	// Keep a clean UTF-8 fallback list for common Chinese action verbs.
+	// Some older entries above came from legacy prompt heuristics and do not
+	// reliably cover everyday phrasings such as "建立一个文件夹".
+	fallbackActionTerms := []string{
+		"打开", "启动", "运行", "执行", "搜索", "查找", "读取", "查看",
+		"编辑", "修改", "创建", "建立", "新建", "删除", "发送", "点击",
+		"输入", "截图", "浏览", "访问", "安装", "修复", "实现", "编写",
+		"帮我", "请帮我",
+	}
+	for _, term := range fallbackActionTerms {
+		if strings.Contains(query, term) {
+			return true
+		}
+	}
+
 	return false
 }
 

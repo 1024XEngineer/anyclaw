@@ -52,6 +52,8 @@ type BuiltinOptions struct {
 	ExecutionMode           string
 	DangerousPatterns       []string
 	ProtectedPaths          []string
+	AllowedReadPaths        []string
+	AllowedWritePaths       []string
 	Policy                  *PolicyEngine
 	CommandTimeoutSeconds   int
 	ConfirmDangerousCommand DangerousCommandConfirmer

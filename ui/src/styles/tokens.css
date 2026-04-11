@@ -1,0 +1,14 @@
+:root {
+  --canvas: #ffffff;
+  --ink: #1d1f25;
+  --mute: #667085;
+  --panel: rgba(255, 255, 255, 0.84);
+  --panel-alt: rgba(255, 255, 255, 0.72);
+  --line: rgba(148, 163, 184, 0.18);
+  --line-soft: rgba(148, 163, 184, 0.1);
+  --accent: #242932;
+  --accent-soft: rgba(36, 41, 50, 0.08);
+  --glow: rgba(135, 160, 200, 0.14);
+  --shadow-panel: 0 24px 60px rgba(15, 23, 42, 0.08);
+  --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.06);
+}

@@ -227,12 +227,24 @@ func printInteractiveHeader(title string, lines ...string) {
 }
 
 func printInteractiveHeaderWithHelp(title string, helpPrinter func(), lines ...string) {
+	printInteractiveHeaderWithTips(title, helpPrinter, []string{
+		"Enter to send",
+		"/help",
+		"/quit",
+	}, lines...)
+}
+
+func printGatewayInteractiveHeader(title string, lines ...string) {
+	printInteractiveHeaderWithTips(title, nil, []string{
+		"Enter to send",
+		"/status",
+		"/quit",
+	}, lines...)
+}
+
+func printInteractiveHeaderWithTips(title string, helpPrinter func(), tips []string, lines ...string) {
 	fmt.Println()
-	fmt.Println(ui.InteractivePanel(title, lines, []string{
-		"Enter sends your message",
-		"/help shows all commands",
-		"/quit exits",
-	}))
+	fmt.Println(ui.InteractivePanel(title, lines, tips))
 	if helpPrinter != nil {
 		fmt.Println()
 		helpPrinter()
@@ -316,7 +328,7 @@ func runGatewayClientInteractive(ctx context.Context, state *RuntimeState) {
 		lines = append(lines, ui.KeyValue("dir", state.workingDir))
 	}
 	lines = append(lines, ui.KeyValue("output", interactiveOutputMode(state)))
-	printInteractiveHeader("Interactive Mode", lines...)
+	printGatewayInteractiveHeader("Gateway Chat", lines...)
 
 	for {
 		line, err := readInteractiveLineStable(state)
@@ -354,10 +366,10 @@ func handleGatewayClientCommand(ctx context.Context, state *RuntimeState, input 
 		return true
 	case commandText == "/help", commandText == "/?":
 		fmt.Println()
-		printInteractiveHelp()
+		printGatewayInteractiveHelp()
 		return false
 	case commandText == "/clear":
-		printSuccess("Chat history cleared (Gateway mode)")
+		printWarn("Gateway chat history reset is not available yet")
 		return false
 	case commandText == "/markdown":
 		printSuccess("Output mode: %s", interactiveOutputMode(state))
@@ -1006,6 +1018,27 @@ func showModelsForProviderStable(provider string) {
 
 func printInteractiveHelp() {
 	printInteractiveHelpSections("  /gateway             - show current gateway address")
+}
+
+func printGatewayInteractiveHelp() {
+	printInteractiveHelpLines(
+		"Chat",
+		"  /exit, /quit, /q     - exit",
+		"  /markdown            - show current output mode",
+		"  /markdown on|off     - toggle markdown rendering",
+		"  /help, /?            - show help",
+	)
+	fmt.Println()
+	printInteractiveHelpLines(
+		"Inspect",
+		"  /status              - show gateway status",
+		"  /gateway             - show current gateway address",
+	)
+	fmt.Println()
+	printInteractiveHelpLines(
+		"Notes",
+		"  /clear               - not available yet in Gateway mode",
+	)
 }
 
 func printInteractiveQuickHelp() {
