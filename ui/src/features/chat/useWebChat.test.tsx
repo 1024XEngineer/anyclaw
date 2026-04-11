@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CHAT_STORAGE_KEY, useWebChat } from "./useWebChat";
 
+const TEST_WORKSPACE_PATH = "D:\\workspace\\anyclaw\\workflows";
+
 type HookProbeProps = {
   agentName?: string;
 };
@@ -10,7 +12,7 @@ type HookProbeProps = {
 function HookProbe({ agentName = "binbin" }: HookProbeProps) {
   const { messages, resetConversation, selectSession, selectedSessionKey, sessionId } = useWebChat(
     agentName,
-    "D:\\anyclaw-mvp-sync\\workflows",
+    TEST_WORKSPACE_PATH,
   );
 
   return (
@@ -37,7 +39,7 @@ function ApprovalProbe() {
     resolveApproval,
     sendMessage,
     setDraft,
-  } = useWebChat("binbin", "D:\\anyclaw-mvp-sync\\workflows");
+  } = useWebChat("binbin", TEST_WORKSPACE_PATH);
 
   return (
     <div>
@@ -259,7 +261,7 @@ describe("useWebChat persistence", () => {
       id: "approval_1",
       payload: {
         args: {
-          command: "mkdir C:\\Users\\Lenovo\\Desktop\\哈喽",
+          command: "mkdir C:\\Users\\TestUser\\Desktop\\Hello",
         },
       },
       requested_at: "2026-04-11T12:00:10.000Z",

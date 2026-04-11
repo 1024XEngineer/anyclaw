@@ -49,17 +49,19 @@ Example:
 
 If you want local chat immediately, start Ollama separately and pull a model such as `llama3.2`.
 
+The committed `anyclaw.json` is a sanitized starter config. Keep local API keys and machine-specific overrides out of Git.
+
 ## Reset local state
 
 Runtime state and history are stored locally and can be cleared.
 
-- Config: `anyclaw.json`
+- Shared starter config: `anyclaw.json`
 - Runtime state: `./.anyclaw/`
 - Workspace memories: `workflows/memory/` and `workflows/**/memory.db*`
 
 If you want a clean reset with no API keys and no records:
 
-1. Clear API keys from `anyclaw.json`
+1. Clear any local API keys you added to `anyclaw.json`
 2. Remove `./.anyclaw/`
 3. Remove `workflows/memory/`
 4. Remove `workflows/**/memory.db*`
@@ -187,8 +189,8 @@ workflows/       workspace bootstrap files
 
 ## Notes
 
-- `anyclaw.json` stores runtime configuration.
-- `./.anyclaw/` stores local runtime state and logs.
+- `anyclaw.json` is the repo-safe starter config for runtime settings.
+- `./.anyclaw/`, `.claude/`, `.agent/`, and `workflows/memory/` are local-only state and should stay untracked.
 - `workflows/` stores bootstrap context and workspace memory.
 - `doctor --connectivity=false` is the easiest way to validate a fresh local setup.
 

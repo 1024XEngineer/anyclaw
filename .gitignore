@@ -20,6 +20,8 @@ vendor/
 /memory/
 /.local/
 .agents/
+.agent/
+.claude/
 skills-lock.json
 
 # IDE
@@ -38,8 +40,17 @@ bin/
 
 # Local runtime state
 .anyclaw/
+workflows/memory/
+workflows/.anyclaw-bootstrap-state.json
+workflows/BOOTSTRAP.md
 gateway.log
 gateway.err
+anyclaw-final
+anyclaw-test
+anyclaw
+anyclaw.exe
+anyclaw-run.exe
+anyclaw-run.exe~
 
 # UI generated files
 ui/*.tsbuildinfo

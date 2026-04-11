@@ -3,13 +3,13 @@
 // Do not edit manually.
 
 export const workspaceSnapshot = {
-  "generatedAt": "2026-04-11T08:16:28.110Z",
+  "generatedAt": "2026-04-11T08:43:18.265Z",
   "agent": {
-    "name": "binbin",
+    "name": "AnyClaw",
     "description": "Your AI assistant with file-based memory",
     "permissionLevel": "limited",
-    "workDir": "D:\\anyclaw-mvp-sync\\.anyclaw",
-    "workingDir": "D:\\anyclaw-mvp-sync\\workflows",
+    "workDir": ".anyclaw",
+    "workingDir": "workflows",
     "language": "CN",
     "activeProfile": ""
   },
@@ -35,7 +35,7 @@ export const workspaceSnapshot = {
       "provider": "ollama",
       "defaultModel": "llama3.2",
       "enabled": true,
-      "isDefault": false,
+      "isDefault": true,
       "capabilitiesCount": 0
     },
     {
@@ -44,7 +44,7 @@ export const workspaceSnapshot = {
       "type": "qwen",
       "provider": "qwen",
       "defaultModel": "qwen-max",
-      "enabled": true,
+      "enabled": false,
       "isDefault": false,
       "capabilitiesCount": 0
     },
@@ -53,19 +53,19 @@ export const workspaceSnapshot = {
       "name": "Primary OpenAI-compatible",
       "type": "openai-compatible",
       "provider": "compatible",
-      "defaultModel": "gpt-5.4",
-      "enabled": true,
-      "isDefault": true,
+      "defaultModel": "gpt-4o-mini",
+      "enabled": false,
+      "isDefault": false,
       "capabilitiesCount": 0
     }
   ],
   "agents": [
     {
-      "name": "binbin",
+      "name": "AnyClaw",
       "description": "Your AI assistant with file-based memory",
       "role": "main",
       "permissionLevel": "limited",
-      "workingDir": "D:\\anyclaw-mvp-sync\\workflows",
+      "workingDir": "workflows",
       "providerRef": "",
       "defaultModel": "",
       "enabled": true,

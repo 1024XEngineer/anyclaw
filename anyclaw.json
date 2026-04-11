@@ -1,14 +1,12 @@
 {
   "llm": {
-    "provider": "qwen",
-    "model": "qwen-max",
-    "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
-    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "default_provider_ref": "primary-qwen",
+    "provider": "ollama",
+    "model": "llama3.2",
+    "api_key": "",
+    "base_url": "http://127.0.0.1:11434",
+    "default_provider_ref": "primary-ollama",
     "max_tokens": 4096,
     "temperature": 0.7,
-    "proxy": "",
-    "extra": null,
     "routing": {
       "enabled": false,
       "reasoning_keywords": [
@@ -30,7 +28,7 @@
     }
   },
   "agent": {
-    "name": "黑塔",
+    "name": "AnyClaw",
     "description": "Your AI assistant with file-based memory",
     "work_dir": ".anyclaw",
     "working_dir": "workflows",
@@ -39,8 +37,8 @@
     "profiles": null,
     "active_profile": "",
     "lang": "CN",
-    "work_focus": "通用",
-    "behavior_style": "简洁"
+    "work_focus": "general",
+    "behavior_style": "concise"
   },
   "providers": [
     {
@@ -58,9 +56,19 @@
       "type": "qwen",
       "provider": "qwen",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
+      "api_key": "",
       "default_model": "qwen-max",
-      "enabled": true
+      "enabled": false
+    },
+    {
+      "id": "primary-compatible",
+      "name": "Primary OpenAI-compatible",
+      "type": "openai-compatible",
+      "provider": "compatible",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "",
+      "default_model": "gpt-4o-mini",
+      "enabled": false
     }
   ],
   "skills": {
@@ -167,7 +175,7 @@
   },
   "sandbox": {
     "enabled": false,
-    "execution_mode": "sandbox",
+    "execution_mode": "host-reviewed",
     "backend": "local",
     "base_dir": ".anyclaw/sandboxes",
     "docker_image": "alpine:3.20",
@@ -200,24 +208,8 @@
       "icacls",
       "git reset --hard"
     ],
-    "protected_paths": [
-      "C:\\WINDOWS",
-      "C:\\Windows",
-      "C:\\Program Files",
-      "C:\\Program Files (x86)",
-      "C:\\ProgramData",
-      "C:\\Users\\Lenovo\\.ssh",
-      "C:\\Users\\Lenovo\\AppData",
-      "C:\\Users\\Lenovo\\Documents",
-      "C:\\Users\\Lenovo\\Desktop",
-      "C:\\Users\\Lenovo\\Downloads",
-      "C:\\Users\\Lenovo\\Pictures",
-      "C:\\Users\\Lenovo\\Videos",
-      "C:\\Users\\Lenovo\\Music",
-      "C:\\Users\\Lenovo\\NTUSER.DAT"
-    ],
     "command_timeout_seconds": 30,
-    "risk_acknowledged": true,
+    "risk_acknowledged": false,
     "pairing_enabled": false,
     "pairing_ttl_hours": 0,
     "pairing_max_devices": 0
