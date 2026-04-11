@@ -48,6 +48,45 @@ function ThinkingIndicator({ activeAgentLabel }: { activeAgentLabel: string }) {
   );
 }
 
+function providerNeedsSetup(health?: string, enabled = true) {
+  if (!enabled) return true;
+  return ["disabled", "invalid", "invalid_base_url", "missing_key"].includes((health ?? "").trim().toLowerCase());
+}
+
+function providerSetupMessage(providerName?: string, health?: string) {
+  const label = providerName?.trim() || "当前模型";
+  switch ((health ?? "").trim().toLowerCase()) {
+    case "missing_key":
+      return `${label} 还没有填写 API Key，请先完成模型配置。`;
+    case "invalid_base_url":
+      return `${label} 的 Base URL 不正确，请先修正后再开始对话。`;
+    case "disabled":
+      return `${label} 当前处于停用状态，请先启用或切换到可用模型。`;
+    case "invalid":
+      return `${label} 配置不完整，请先补全供应商信息。`;
+    default:
+      return "第一次使用前，请先选择模型供应商并填写 Base URL / API Key。";
+  }
+}
+
+function SetupEmptyState({ message, onOpen }: { message: string; onOpen: () => void }) {
+  return (
+    <div className="flex flex-1 items-center justify-center py-12">
+      <div className="w-full max-w-[760px] border-b border-[#edf1f5] px-4 pb-8 text-center">
+        <div className="text-[28px] font-semibold tracking-[-0.03em] text-[#111827]">先完成模型配置</div>
+        <p className="mx-auto mt-3 max-w-[560px] text-[15px] leading-7 text-[#667085]">{message}</p>
+        <button
+          className="mt-6 inline-flex items-center justify-center rounded-full bg-[#1f2430] px-5 py-3 text-sm font-medium text-white transition-transform duration-150 hover:-translate-y-0.5"
+          onClick={onOpen}
+          type="button"
+        >
+          去设置 API 与模型
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const approvalFieldLabels: Record<string, string> = {
   command: "命令",
   message: "请求",
@@ -235,9 +274,13 @@ function ApprovalNotice({
 
 export function ChatHomePage() {
   const { data } = useWorkspaceOverview();
+  const openModelSettings = useShellStore((state) => state.openModelSettings);
   const openSettings = useShellStore((state) => state.openSettings);
   const activeAgent = data.localAgents.find((agent) => agent.active) ?? data.localAgents[0] ?? null;
   const defaultProvider = data.providers.find((provider) => provider.isDefault) ?? data.providers[0] ?? null;
+  const defaultProviderHealth = defaultProvider?.health ?? "";
+  const requiresModelSetup = !defaultProvider || providerNeedsSetup(defaultProviderHealth, defaultProvider?.enabled ?? true);
+  const modelSetupMessage = providerSetupMessage(defaultProvider?.name, defaultProviderHealth);
   const activeAgentName = activeAgent?.name ?? data.runtimeProfile.name ?? null;
   const activeAgentLabel = activeAgentName || data.runtimeProfile.name || "AnyClaw";
   const modelLabel = defaultProvider?.model || data.runtimeProfile.model || "默认大模型";
@@ -256,6 +299,13 @@ export function ChatHomePage() {
   } = useWebChat(activeAgentName, data.runtimeProfile.workspace);
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
   const scrollFadeTimerRef = useRef<number | null>(null);
+  const setupPromptedRef = useRef(false);
+
+  useEffect(() => {
+    if (!requiresModelSetup || setupPromptedRef.current) return;
+    setupPromptedRef.current = true;
+    openModelSettings();
+  }, [openModelSettings, requiresModelSetup]);
 
   useEffect(() => {
     const viewport = messagesViewportRef.current;
@@ -380,6 +430,8 @@ export function ChatHomePage() {
 
                 {isSending ? <ThinkingIndicator activeAgentLabel={activeAgentLabel} /> : null}
               </div>
+            ) : requiresModelSetup ? (
+              <SetupEmptyState message={modelSetupMessage} onOpen={openModelSettings} />
             ) : (
               <div className="flex-1" />
             )}
@@ -390,7 +442,7 @@ export function ChatHomePage() {
 
         <Composer
           activeAgentLabel={activeAgentLabel}
-          canSend={Boolean(draft.trim()) && pendingApprovals.length === 0 && approvalActionId === null}
+          canSend={!requiresModelSetup && Boolean(draft.trim()) && pendingApprovals.length === 0 && approvalActionId === null}
           draft={draft}
           error={error}
           isSending={isSending}
@@ -399,6 +451,8 @@ export function ChatHomePage() {
           onReset={resetConversation}
           onSend={sendMessage}
           sessionId={sessionId}
+          setupMessage={modelSetupMessage}
+          setupRequired={requiresModelSetup}
         />
       </section>
     </div>

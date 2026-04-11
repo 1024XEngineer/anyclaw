@@ -14,6 +14,8 @@ type ComposerProps = {
   onReset: () => void;
   onSend: () => void;
   sessionId: string | null;
+  setupMessage: string;
+  setupRequired: boolean;
 };
 
 export function Composer({
@@ -27,11 +29,14 @@ export function Composer({
   onReset,
   onSend,
   sessionId,
+  setupMessage,
+  setupRequired,
 }: ComposerProps) {
   const openModelSettings = useShellStore((state) => state.openModelSettings);
   const openSettings = useShellStore((state) => state.openSettings);
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (setupRequired) return;
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -61,20 +66,25 @@ export function Composer({
 
           <div className="px-5 pt-1.5">
             <textarea
-              className="min-h-[58px] max-h-[128px] w-full resize-none bg-transparent text-[15px] leading-7 text-ink outline-none placeholder:text-[#b1b8c6]"
+              className="min-h-[58px] max-h-[128px] w-full resize-none bg-transparent text-[15px] leading-7 text-ink outline-none placeholder:text-[#b1b8c6] disabled:cursor-not-allowed disabled:text-[#98a2b3]"
+              disabled={setupRequired}
               onChange={(event) => onDraftChange(event.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="可以描述任务或提出任何问题"
+              placeholder={setupRequired ? "先完成模型配置后再开始对话" : "可以描述任务或提出任何问题"}
               value={draft}
             />
           </div>
 
-          {error ? <div className="px-5 pt-1 text-sm text-[#c2410c]">{error}</div> : null}
+          {setupRequired ? <div className="px-5 pt-1 text-sm text-[#475467]">{setupMessage}</div> : null}
+          {!setupRequired && error ? <div className="px-5 pt-1 text-sm text-[#c2410c]">{error}</div> : null}
 
           <div className="mt-1 flex flex-col gap-2.5 border-t border-[#f2f4f7] px-5 py-2.5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-2">
               <button
-                className="chip-button gap-2 px-4 py-2 text-sm text-[#667085]"
+                className={[
+                  "chip-button gap-2 px-4 py-2 text-sm",
+                  setupRequired ? "bg-[#1f2430] text-white hover:bg-[#111827]" : "text-[#667085]",
+                ].join(" ")}
                 onClick={openModelSettings}
                 type="button"
               >
@@ -95,7 +105,9 @@ export function Composer({
             </div>
 
             <div className="flex items-center justify-between gap-4">
-              <span className="text-xs text-[#98a2b3]">{isSending ? "正在思考..." : "Enter 发送 · Shift + Enter 换行"}</span>
+              <span className="text-xs text-[#98a2b3]">
+                {setupRequired ? "先配置模型供应商，再开始当前会话" : isSending ? "正在思考..." : "Enter 发送 · Shift + Enter 换行"}
+              </span>
 
               <button
                 aria-label={isSending ? "正在思考" : "发送消息"}

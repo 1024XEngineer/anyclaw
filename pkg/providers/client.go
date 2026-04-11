@@ -92,6 +92,23 @@ type client struct {
 	httpClient  *http.Client
 }
 
+type configurationRequiredClient struct {
+	provider string
+	err      error
+}
+
+func (c *configurationRequiredClient) Chat(_ context.Context, _ []Message, _ []ToolDefinition) (*Response, error) {
+	return nil, c.err
+}
+
+func (c *configurationRequiredClient) StreamChat(_ context.Context, _ []Message, _ []ToolDefinition, _ func(string)) error {
+	return c.err
+}
+
+func (c *configurationRequiredClient) Name() string {
+	return c.provider
+}
+
 func NormalizeProviderName(provider string) string {
 	return normalizeProvider(provider)
 }
@@ -134,7 +151,10 @@ func NewClient(cfg Config) (Client, error) {
 	}
 
 	if ProviderRequiresAPIKey(c.provider) && c.apiKey == "" {
-		return nil, fmt.Errorf("API key is required")
+		return &configurationRequiredClient{
+			provider: normalizeProvider(c.provider),
+			err:      fmt.Errorf("API key is required. Configure a model provider before chatting"),
+		}, nil
 	}
 
 	if c.baseURL == "" {
@@ -245,7 +265,7 @@ func (c *client) chatOpenAICompatible(ctx context.Context, messages []Message, t
 		Choices []struct {
 			Message struct {
 				Content   json.RawMessage `json:"content"`
-				ToolCalls []ToolCall `json:"tool_calls"`
+				ToolCalls []ToolCall      `json:"tool_calls"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`

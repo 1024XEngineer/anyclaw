@@ -3,7 +3,7 @@
 // Do not edit manually.
 
 export const workspaceSnapshot = {
-  "generatedAt": "2026-04-11T08:43:18.265Z",
+  "generatedAt": "2026-04-11T09:08:49.967Z",
   "agent": {
     "name": "AnyClaw",
     "description": "Your AI assistant with file-based memory",
@@ -29,11 +29,11 @@ export const workspaceSnapshot = {
   },
   "providers": [
     {
-      "id": "primary-ollama",
-      "name": "Primary Ollama",
-      "type": "ollama",
-      "provider": "ollama",
-      "defaultModel": "llama3.2",
+      "id": "primary-compatible",
+      "name": "Primary OpenAI-compatible",
+      "type": "openai-compatible",
+      "provider": "compatible",
+      "defaultModel": "gpt-4o-mini",
       "enabled": true,
       "isDefault": true,
       "capabilitiesCount": 0
@@ -49,11 +49,11 @@ export const workspaceSnapshot = {
       "capabilitiesCount": 0
     },
     {
-      "id": "primary-compatible",
-      "name": "Primary OpenAI-compatible",
-      "type": "openai-compatible",
-      "provider": "compatible",
-      "defaultModel": "gpt-4o-mini",
+      "id": "primary-ollama",
+      "name": "Primary Ollama",
+      "type": "ollama",
+      "provider": "ollama",
+      "defaultModel": "llama3.2",
       "enabled": false,
       "isDefault": false,
       "capabilitiesCount": 0

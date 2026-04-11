@@ -1,10 +1,10 @@
 {
   "llm": {
-    "provider": "ollama",
-    "model": "llama3.2",
+    "provider": "compatible",
+    "model": "gpt-4o-mini",
     "api_key": "",
-    "base_url": "http://127.0.0.1:11434",
-    "default_provider_ref": "primary-ollama",
+    "base_url": "https://api.openai.com/v1",
+    "default_provider_ref": "primary-compatible",
     "max_tokens": 4096,
     "temperature": 0.7,
     "routing": {
@@ -42,12 +42,13 @@
   },
   "providers": [
     {
-      "id": "primary-ollama",
-      "name": "Primary Ollama",
-      "type": "ollama",
-      "provider": "ollama",
-      "base_url": "http://127.0.0.1:11434",
-      "default_model": "llama3.2",
+      "id": "primary-compatible",
+      "name": "Primary OpenAI-compatible",
+      "type": "openai-compatible",
+      "provider": "compatible",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "",
+      "default_model": "gpt-4o-mini",
       "enabled": true
     },
     {
@@ -61,13 +62,12 @@
       "enabled": false
     },
     {
-      "id": "primary-compatible",
-      "name": "Primary OpenAI-compatible",
-      "type": "openai-compatible",
-      "provider": "compatible",
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "",
-      "default_model": "gpt-4o-mini",
+      "id": "primary-ollama",
+      "name": "Primary Ollama",
+      "type": "ollama",
+      "provider": "ollama",
+      "base_url": "http://127.0.0.1:11434",
+      "default_model": "llama3.2",
       "enabled": false
     }
   ],

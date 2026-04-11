@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/anyclaw/anyclaw/pkg/config"
 	"github.com/anyclaw/anyclaw/pkg/setup"
 	"github.com/anyclaw/anyclaw/pkg/ui"
 )
@@ -45,7 +47,30 @@ func printDoctorReport(report *setup.Report) {
 
 func ensureConfigOnboarded(ctx context.Context, configPath string, checkConnectivity bool) error {
 	if _, err := os.Stat(configPath); err == nil {
-		return nil
+		needsSetup, setupErr := configNeedsProviderSetup(configPath)
+		if setupErr != nil {
+			return setupErr
+		}
+		if !needsSetup {
+			return nil
+		}
+
+		if !terminalInteractive() {
+			printWarn("Config exists but model setup is incomplete. Run `anyclaw onboard` or fill your provider Base URL / API key before chatting.")
+			return nil
+		}
+
+		printInfo("First-run model setup required. Please choose a provider and enter Base URL / API key.")
+		result, err := setup.RunOnboarding(ctx, configPath, setup.OnboardOptions{
+			Interactive:       true,
+			CheckConnectivity: checkConnectivity,
+			Stdin:             os.Stdin,
+			Stdout:            os.Stdout,
+		})
+		if result != nil {
+			printDoctorReport(result.Report)
+		}
+		return err
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -61,4 +86,37 @@ func ensureConfigOnboarded(ctx context.Context, configPath string, checkConnecti
 		printDoctorReport(result.Report)
 	}
 	return err
+}
+
+func configNeedsProviderSetup(configPath string) (bool, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return false, err
+	}
+
+	provider := strings.TrimSpace(cfg.LLM.Provider)
+	apiKey := strings.TrimSpace(cfg.LLM.APIKey)
+	baseURL := strings.TrimSpace(cfg.LLM.BaseURL)
+	if profile, ok := cfg.FindDefaultProviderProfile(); ok {
+		if value := strings.TrimSpace(profile.Provider); value != "" {
+			provider = value
+		}
+		if value := strings.TrimSpace(profile.APIKey); value != "" {
+			apiKey = value
+		}
+		if value := strings.TrimSpace(profile.BaseURL); value != "" {
+			baseURL = value
+		}
+	}
+
+	if provider == "" {
+		return true, nil
+	}
+	if strings.EqualFold(provider, "compatible") && baseURL == "" {
+		return true, nil
+	}
+	if setup.ProviderNeedsAPIKey(provider) && apiKey == "" {
+		return true, nil
+	}
+	return false, nil
 }

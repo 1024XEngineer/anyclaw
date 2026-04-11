@@ -29,6 +29,27 @@ func TestNewClientAllowsOllamaWithoutAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewClientAllowsConfigurationPlaceholderWithoutAPIKey(t *testing.T) {
+	client, err := NewClient(Config{
+		Provider: "compatible",
+		Model:    "demo-model",
+	})
+	if err != nil {
+		t.Fatalf("expected placeholder client without API key to succeed: %v", err)
+	}
+	if client.Name() != "compatible" {
+		t.Fatalf("expected compatible client placeholder, got %q", client.Name())
+	}
+
+	_, err = client.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("expected placeholder client to reject chat before API key is configured")
+	}
+	if got := err.Error(); got != "API key is required. Configure a model provider before chatting" {
+		t.Fatalf("unexpected placeholder error: %v", err)
+	}
+}
+
 func TestChatOpenAICompatibleRejectsEmptyMessageContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
