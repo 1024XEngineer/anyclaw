@@ -2,9 +2,7 @@
 
 Go 语言版本的 OpenClaw - 一个功能强大的 AI Agent 框架。
 
-License: MIT
 
-![](docs/dashboard.png)
 
 ## 功能特性
 
@@ -819,8 +817,4 @@ A: anyclaw 支持两种记忆后端：
 
 ## 许可证
 
-MIT
 
----
-
-Made with ❤️ by smallnest
