@@ -1,0 +1,24 @@
+appName: anyclaw
+
+gateway:
+  bind: 127.0.0.1
+  port: 18789
+  authToken: change-me
+  protocolVersion: 1
+
+agents:
+  defaultAgentId: default-agent
+  defaultProvider: openai
+  defaultModel: gpt-5.4
+  timeoutSeconds: 120
+
+providers:
+  enabled:
+    - openai
+
+channels:
+  enabled:
+    - webchat
+
+plugins:
+  enabled: []
