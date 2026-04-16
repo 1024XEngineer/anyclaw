@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -41,17 +42,18 @@ func (s *Server) requireSessionToolApproval(session *Session, title string, mess
 	if !requiresToolApprovalName(toolName) {
 		return nil
 	}
-	payload := map[string]any{
+	signaturePayload := map[string]any{
 		"tool_name":  toolName,
 		"args":       cloneAnyMap(args),
 		"session_id": session.ID,
 		"workspace":  session.Workspace,
-		"message":    strings.TrimSpace(message),
-		"title":      strings.TrimSpace(title),
 	}
-	signature := approvalSignature(toolName, "tool_call", payload)
+	payload := cloneAnyMap(signaturePayload)
+	payload["message"] = strings.TrimSpace(message)
+	payload["title"] = strings.TrimSpace(title)
+	signature := approvalSignature(toolName, "tool_call", signaturePayload)
 	for _, approval := range s.store.ListSessionApprovals(session.ID) {
-		if approval.Signature != signature || approval.ToolName != toolName || approval.Action != "tool_call" {
+		if !matchesSessionToolApproval(approval, signature, session.ID, session.Workspace, toolName, args) {
 			continue
 		}
 		switch approval.Status {
@@ -64,7 +66,7 @@ func (s *Server) requireSessionToolApproval(session *Session, title string, mess
 			return ErrTaskWaitingApproval
 		}
 	}
-	approval, err := s.approvals.Request("", session.ID, 0, toolName, "tool_call", payload)
+	approval, err := s.approvals.RequestWithSignature("", session.ID, 0, toolName, "tool_call", payload, signaturePayload)
 	if err != nil {
 		return err
 	}
@@ -77,6 +79,35 @@ func (s *Server) requireSessionToolApproval(session *Session, title string, mess
 		"source":      firstNonEmpty(strings.TrimSpace(source), "session"),
 	})
 	return ErrTaskWaitingApproval
+}
+
+func matchesSessionToolApproval(approval *Approval, signature string, sessionID string, workspace string, toolName string, args map[string]any) bool {
+	if approval == nil {
+		return false
+	}
+	if approval.ToolName != toolName || approval.Action != "tool_call" || approval.SessionID != sessionID {
+		return false
+	}
+	if approval.Signature == signature {
+		return true
+	}
+	payloadWorkspace, _ := approval.Payload["workspace"].(string)
+	if strings.TrimSpace(payloadWorkspace) != strings.TrimSpace(workspace) {
+		return false
+	}
+	payloadArgs, ok := approval.Payload["args"]
+	if !ok {
+		return false
+	}
+	expectedArgs, err := json.Marshal(cloneAnyMap(args))
+	if err != nil {
+		return false
+	}
+	actualArgs, err := json.Marshal(payloadArgs)
+	if err != nil {
+		return false
+	}
+	return string(actualArgs) == string(expectedArgs)
 }
 
 func (s *Server) updateSessionApprovalPresence(sessionID string, toolName string) {

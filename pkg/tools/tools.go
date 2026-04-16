@@ -228,7 +228,7 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 
 	r.RegisterTool(
 		"browser_navigate",
-		"Open a page in a browser automation session",
+		"Open a page in a headless browser automation session (not a visible desktop browser window)",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -516,11 +516,11 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 func RegisterDesktopTools(r *Registry, opts BuiltinOptions) {
 	r.RegisterTool(
 		"desktop_open",
-		"Open an application, URL, or file on the desktop host",
+		"Open a visible application, URL, or file on the desktop host",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target": map[string]string{"type": "string", "description": "Application path/name, URL, or file path"},
+				"target": map[string]string{"type": "string", "description": "Application path/name, URL, or file path. Use this to open a real browser window."},
 				"kind":   map[string]string{"type": "string", "description": "Optional kind: app, url, or file"},
 			},
 			"required": []string{"target"},

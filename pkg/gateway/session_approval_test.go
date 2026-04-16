@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +159,39 @@ func TestResumeApprovedSessionApprovalCompletesExchange(t *testing.T) {
 	}
 }
 
+func TestSessionToolApprovalReusesApprovedDesktopOpenAcrossMessageChanges(t *testing.T) {
+	server, session, _, store := newSessionApprovalTestServer(t, nil)
+
+	args := map[string]any{
+		"target": "https://www.douyin.com",
+		"kind":   "url",
+	}
+
+	err := server.requireSessionToolApproval(session, "", "帮我打开浏览器访问抖音", "api", "desktop_open", args)
+	if !errors.Is(err, ErrTaskWaitingApproval) {
+		t.Fatalf("expected ErrTaskWaitingApproval, got %v", err)
+	}
+
+	approvals := store.ListSessionApprovals(session.ID)
+	if len(approvals) != 1 {
+		t.Fatalf("expected 1 approval, got %d", len(approvals))
+	}
+
+	if _, err := server.approvals.Resolve(approvals[0].ID, true, "tester", ""); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	err = server.requireSessionToolApproval(session, "", "继续", "api", "desktop_open", args)
+	if err != nil {
+		t.Fatalf("expected approved desktop_open to be reused, got %v", err)
+	}
+
+	approvals = store.ListSessionApprovals(session.ID)
+	if len(approvals) != 1 {
+		t.Fatalf("expected approval reuse without duplicates, got %d approvals", len(approvals))
+	}
+}
+
 func newSessionApprovalTestServer(t *testing.T, responses []*llm.Response) (*Server, *Session, *stubTaskLLM, *Store) {
 	t.Helper()
 
@@ -184,6 +218,9 @@ func newSessionApprovalTestServer(t *testing.T, responses []*llm.Response) (*Ser
 	registry.RegisterTool("run_command", "run", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
 		return "ok", nil
 	})
+	registry.RegisterTool("desktop_open", "open desktop app", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		return "opened", nil
+	})
 	llmStub := &stubTaskLLM{responses: responses}
 	ag := agent.New(agent.Config{
 		Name:        "assistant",
@@ -202,6 +239,7 @@ func newSessionApprovalTestServer(t *testing.T, responses []*llm.Response) (*Ser
 			},
 		},
 		Agent:      ag,
+		Tools:      registry,
 		WorkingDir: workspacePath,
 		WorkDir:    t.TempDir(),
 	}
@@ -240,4 +278,48 @@ func newSessionApprovalTestServer(t *testing.T, responses []*llm.Response) (*Ser
 		},
 	}
 	return server, session, llmStub, store
+}
+
+func TestResumeApprovedDesktopOpenShortcutCompletesWithoutLLM(t *testing.T) {
+	server, session, llmStub, store := newSessionApprovalTestServer(t, nil)
+
+	_, _, err := server.runSessionMessage(context.Background(), session.ID, session.Title, "Open browser https://www.douyin.com/")
+	if !errors.Is(err, ErrTaskWaitingApproval) {
+		t.Fatalf("expected ErrTaskWaitingApproval, got %v", err)
+	}
+
+	approvals := store.ListSessionApprovals(session.ID)
+	if len(approvals) != 1 || approvals[0].ToolName != "desktop_open" {
+		t.Fatalf("expected one desktop_open approval, got %#v", approvals)
+	}
+
+	updatedApproval, err := server.approvals.Resolve(approvals[0].ID, true, "tester", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if err := server.resumeApprovedSessionApproval(context.Background(), updatedApproval); err != nil {
+		t.Fatalf("resumeApprovedSessionApproval: %v", err)
+	}
+
+	freshSession, ok := server.sessions.Get(session.ID)
+	if !ok {
+		t.Fatal("expected session to exist")
+	}
+	if len(freshSession.Messages) != 2 {
+		t.Fatalf("expected completed user/assistant exchange, got %#v", freshSession.Messages)
+	}
+	if freshSession.Messages[1].Content == "" || !strings.Contains(freshSession.Messages[1].Content, "https://www.douyin.com/") {
+		t.Fatalf("expected assistant to confirm desktop open, got %#v", freshSession.Messages[1])
+	}
+	if freshSession.Presence != "idle" || freshSession.Typing {
+		t.Fatalf("expected idle session after desktop_open shortcut, got presence=%q typing=%v", freshSession.Presence, freshSession.Typing)
+	}
+	activities := store.ListToolActivities(10, session.ID)
+	if len(activities) != 1 || activities[0].ToolName != "desktop_open" {
+		t.Fatalf("expected desktop_open activity to be recorded, got %#v", activities)
+	}
+	if len(llmStub.messages) != 0 {
+		t.Fatalf("expected desktop_open shortcut to bypass the LLM, got %d LLM calls", len(llmStub.messages))
+	}
 }

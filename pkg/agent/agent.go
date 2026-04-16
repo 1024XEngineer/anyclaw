@@ -50,6 +50,7 @@ type Config struct {
 	Name        string
 	Description string
 	Personality string
+	IsSubAgent  bool
 	LLM         LLMCaller
 	Memory      memory.MemoryBackend
 	Skills      *skills.SkillsManager
@@ -387,7 +388,7 @@ func (a *Agent) executeTool(ctx context.Context, tc ToolCall) (string, error) {
 		ctx = tools.WithBrowserSession(ctx, fmt.Sprintf("%v", tc.Args["session_id"]))
 	}
 
-	result, err := a.tools.Call(ctx, tc.Name, tc.Args)
+	result, err := a.tools.Call(a.toolCallContext(ctx), tc.Name, tc.Args)
 	if err != nil {
 		return "", fmt.Errorf("tool execution failed: %w", err)
 	}
@@ -470,7 +471,7 @@ func (a *Agent) toolContinuationPrompt(results []string) string {
 func (a *Agent) buildSystemPrompt() (string, error) {
 	var toolList []tools.ToolInfo
 	if a.tools != nil {
-		toolList = a.tools.List()
+		toolList = a.visibleToolInfos()
 	}
 	return a.buildSystemPromptForToolInfos(toolList)
 }
@@ -653,7 +654,7 @@ func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
 		return nil
 	}
 
-	allTools := a.tools.List()
+	allTools := a.visibleToolInfos()
 	if len(allTools) == 0 {
 		return nil
 	}
@@ -678,6 +679,7 @@ func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
 		"intent_route":             {},
 		"intent_list_capabilities": {},
 		"claw_bridge_context":      {},
+		"delegate_task":            {},
 	}
 	corePrefixes := []string{"browser_", "desktop_", "skill_"}
 	appPrefixes := matchedToolPrefixes(query, allTools)
@@ -727,7 +729,7 @@ func (a *Agent) tryAutoRouteCLIHubIntent(ctx context.Context, userInput string) 
 		"intent": strings.TrimSpace(userInput),
 		"json":   true,
 	}
-	execResult, err := a.tools.Call(ctx, "intent_route", args)
+	execResult, err := a.tools.Call(a.toolCallContext(ctx), "intent_route", args)
 	if err != nil {
 		a.recordToolActivity(ToolActivity{ToolName: "intent_route", Args: args, Error: err.Error()})
 		return "", false, nil
@@ -897,6 +899,24 @@ func normalizeToolSelectionText(input string) string {
 	return strings.ToLower(strings.TrimSpace(replacer.Replace(input)))
 }
 
+func (a *Agent) visibleToolInfos() []tools.ToolInfo {
+	if a.tools == nil {
+		return nil
+	}
+	return a.tools.ListForRole(a.config.IsSubAgent)
+}
+
+func (a *Agent) toolCallContext(ctx context.Context) context.Context {
+	role := tools.ToolCallerRoleMainAgent
+	if a.config.IsSubAgent {
+		role = tools.ToolCallerRoleSubAgent
+	}
+	return tools.WithToolCaller(ctx, tools.ToolCaller{
+		Role:      role,
+		AgentName: strings.TrimSpace(a.config.Name),
+	})
+}
+
 func (a *Agent) buildMessages(systemPrompt string) []llm.Message {
 	messages := make([]llm.Message, 0, 2+len(a.history))
 	if systemPrompt != "" {
@@ -912,7 +932,7 @@ func (a *Agent) buildToolDefinitions() []llm.ToolDefinition {
 	if a.tools == nil {
 		return nil
 	}
-	return buildToolDefinitionsFromInfos(a.tools.List())
+	return buildToolDefinitionsFromInfos(a.visibleToolInfos())
 }
 
 func buildToolDefinitionsFromInfos(toolList []tools.ToolInfo) []llm.ToolDefinition {
@@ -1085,7 +1105,10 @@ func (a *Agent) ListSkills() []skills.SkillInfo {
 }
 
 func (a *Agent) ListTools() []tools.ToolInfo {
-	return a.tools.List()
+	if a.tools == nil {
+		return nil
+	}
+	return a.visibleToolInfos()
 }
 
 func (a *Agent) ClearHistory() {

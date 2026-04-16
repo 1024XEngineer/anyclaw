@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -83,7 +85,11 @@ func getBrowserSession(sessionID string) (*browserSession, error) {
 	if existing, ok := browserSessions[sessionID]; ok {
 		return existing, nil
 	}
-	allocCtx, _ := chromedp.NewExecAllocator(context.Background(), append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Headless, chromedp.DisableGPU)...)
+	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Headless, chromedp.DisableGPU)
+	if browserPath := findChromedpBrowserExecutable(); browserPath != "" {
+		allocOpts = append(allocOpts, chromedp.ExecPath(browserPath))
+	}
+	allocCtx, _ := chromedp.NewExecAllocator(context.Background(), allocOpts...)
 	rootCtx, cancel := chromedp.NewContext(allocCtx)
 	bs := &browserSession{id: sessionID, allocCtx: allocCtx, rootCtx: rootCtx, cancel: cancel, started: time.Now().UTC(), pages: map[string]*browserPage{}}
 	page, err := bs.newPage("tab-1")
@@ -94,6 +100,54 @@ func getBrowserSession(sessionID string) (*browserSession, error) {
 	bs.activeTab = page.id
 	browserSessions[sessionID] = bs
 	return bs, nil
+}
+
+func findChromedpBrowserExecutable() string {
+	candidates := []string{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		candidates = append(candidates, value)
+	}
+
+	switch runtime.GOOS {
+	case "windows":
+		programFiles := strings.TrimSpace(os.Getenv("ProgramFiles"))
+		programFilesX86 := strings.TrimSpace(os.Getenv("ProgramFiles(x86)"))
+		add(filepath.Join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"))
+		add(filepath.Join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"))
+		add(filepath.Join(programFiles, "Google", "Chrome", "Application", "chrome.exe"))
+		add(filepath.Join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"))
+		add("msedge.exe")
+		add("chrome.exe")
+	case "darwin":
+		add("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+		add("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+		add("Google Chrome")
+		add("Microsoft Edge")
+	default:
+		add("google-chrome")
+		add("microsoft-edge")
+		add("microsoft-edge-stable")
+		add("chromium")
+		add("chromium-browser")
+		add("msedge")
+	}
+
+	for _, candidate := range candidates {
+		if filepath.IsAbs(candidate) {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+			continue
+		}
+		if resolved, err := exec.LookPath(candidate); err == nil {
+			return resolved
+		}
+	}
+	return ""
 }
 
 func (s *browserSession) newPage(tabID string) (*browserPage, error) {

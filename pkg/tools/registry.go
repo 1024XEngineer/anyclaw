@@ -84,11 +84,27 @@ const (
 // ToolAccessLevel 工具访问级别
 type ToolAccessLevel string
 
+// ToolVisibility controls which agent roles can see a tool.
+type ToolVisibility string
+
+// ToolCachePolicy controls whether tool outputs may be cached.
+type ToolCachePolicy string
+
 const (
 	ToolAccessPublic  ToolAccessLevel = "public"
 	ToolAccessOwner   ToolAccessLevel = "owner"
 	ToolAccessAdmin   ToolAccessLevel = "admin"
 	ToolAccessPrivate ToolAccessLevel = "private"
+)
+
+const (
+	ToolVisibilityAll           ToolVisibility = "all"
+	ToolVisibilityMainAgentOnly ToolVisibility = "main_agent_only"
+)
+
+const (
+	ToolCachePolicyDefault ToolCachePolicy = "default"
+	ToolCachePolicyNever   ToolCachePolicy = "never"
 )
 
 // Tool 工具结构
@@ -99,6 +115,8 @@ type Tool struct {
 	Handler     ToolFunc
 	Category    ToolCategory
 	AccessLevel ToolAccessLevel
+	Visibility  ToolVisibility
+	CachePolicy ToolCachePolicy
 	Timeout     time.Duration
 	Retryable   bool
 	MaxRetries  int
@@ -136,6 +154,8 @@ func (r *Registry) RegisterTool(name string, desc string, schema map[string]any,
 		Handler:     handler,
 		Category:    ToolCategoryCustom,
 		AccessLevel: ToolAccessPublic,
+		Visibility:  ToolVisibilityAll,
+		CachePolicy: ToolCachePolicyDefault,
 	}
 }
 
@@ -144,6 +164,12 @@ func (r *Registry) Register(t *Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if t.Visibility == "" {
+		t.Visibility = ToolVisibilityAll
+	}
+	if t.CachePolicy == "" {
+		t.CachePolicy = ToolCachePolicyDefault
+	}
 	r.tools[t.Name] = t
 	if t.Category != "" {
 		r.categories[t.Category] = append(r.categories[t.Category], t.Name)
@@ -171,6 +197,21 @@ func (r *Registry) ListTools() []*Tool {
 	return list
 }
 
+// ListToolsForRole returns tool instances visible to the given agent role.
+func (r *Registry) ListToolsForRole(isSubAgent bool) []*Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var list []*Tool
+	for _, t := range r.tools {
+		if !toolVisibleForRole(t, isSubAgent) {
+			continue
+		}
+		list = append(list, t)
+	}
+	return list
+}
+
 // Call 调用工具
 func (r *Registry) Call(ctx context.Context, name string, input map[string]any) (string, error) {
 	r.mu.RLock()
@@ -185,11 +226,19 @@ func (r *Registry) Call(ctx context.Context, name string, input map[string]any) 
 		return "", fmt.Errorf("tool handler not implemented: %s", name)
 	}
 
+	if err := authorizeToolCall(ctx, t); err != nil {
+		return "", err
+	}
+
 	// 检查缓存
-	cacheKey := r.generateCacheKey(name, input)
-	if cached, found := r.getFromCache(cacheKey); found {
-		if str, ok := cached.(string); ok {
-			return str, nil
+	cacheEnabled := t.CachePolicy != ToolCachePolicyNever
+	cacheKey := ""
+	if cacheEnabled {
+		cacheKey = r.generateCacheKey(name, input)
+		if cached, found := r.getFromCache(cacheKey); found {
+			if str, ok := cached.(string); ok {
+				return str, nil
+			}
 		}
 	}
 
@@ -203,7 +252,9 @@ func (r *Registry) Call(ctx context.Context, name string, input map[string]any) 
 	}
 
 	// 保存到缓存
-	r.saveToCache(cacheKey, result)
+	if cacheEnabled {
+		r.saveToCache(cacheKey, result)
+	}
 
 	_ = duration // 可以用于监控
 
@@ -311,16 +362,26 @@ func (r *Registry) ClearCache() {
 
 // GetToolDefinitions 获取工具定义
 func (r *Registry) GetToolDefinitions() []map[string]any {
+	return r.GetToolDefinitionsForRole(false)
+}
+
+// GetToolDefinitionsJSON 获取工具定义的 JSON
+func (r *Registry) GetToolDefinitionsForRole(isSubAgent bool) []map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	defs := make([]map[string]any, 0, len(r.tools))
 	for _, tool := range r.tools {
+		if !toolVisibleForRole(tool, isSubAgent) {
+			continue
+		}
 		defs = append(defs, map[string]any{
 			"name":         tool.Name,
 			"description":  tool.Description,
 			"category":     string(tool.Category),
 			"access_level": string(tool.AccessLevel),
+			"visibility":   string(tool.Visibility),
+			"cache_policy": string(tool.CachePolicy),
 			"input_schema": tool.InputSchema,
 		})
 	}
@@ -328,7 +389,6 @@ func (r *Registry) GetToolDefinitions() []map[string]any {
 	return defs
 }
 
-// GetToolDefinitionsJSON 获取工具定义的 JSON
 func (r *Registry) GetToolDefinitionsJSON() (string, error) {
 	defs := r.GetToolDefinitions()
 
@@ -345,25 +405,72 @@ type ToolInfo struct {
 	Name        string
 	Description string
 	InputSchema map[string]any
+	Visibility  ToolVisibility
+	CachePolicy ToolCachePolicy
 }
 
 // List 列出工具信息
 func (r *Registry) List() []ToolInfo {
+	return r.ListForRole(false)
+}
+
+// generateCacheKey 生成缓存键
+func (r *Registry) ListForRole(isSubAgent bool) []ToolInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	var list []ToolInfo
 	for _, t := range r.tools {
+		if !toolVisibleForRole(t, isSubAgent) {
+			continue
+		}
 		list = append(list, ToolInfo{
 			Name:        t.Name,
 			Description: t.Description,
 			InputSchema: t.InputSchema,
+			Visibility:  t.Visibility,
+			CachePolicy: t.CachePolicy,
 		})
 	}
 	return list
 }
 
-// generateCacheKey 生成缓存键
+func toolVisibleForRole(tool *Tool, isSubAgent bool) bool {
+	if tool == nil {
+		return false
+	}
+	if tool.Visibility == "" || !isSubAgent {
+		return true
+	}
+	return tool.Visibility != ToolVisibilityMainAgentOnly
+}
+
+func authorizeToolCall(ctx context.Context, tool *Tool) error {
+	if tool == nil {
+		return fmt.Errorf("tool is nil")
+	}
+	caller := ToolCallerFromContext(ctx)
+	if toolVisibleForCaller(tool, caller.Role) {
+		return nil
+	}
+	role := string(caller.Role)
+	if role == "" {
+		role = "unknown"
+	}
+	return fmt.Errorf("tool %s is not available for caller role %s", tool.Name, role)
+}
+
+func toolVisibleForCaller(tool *Tool, role ToolCallerRole) bool {
+	switch role {
+	case ToolCallerRoleSubAgent:
+		return toolVisibleForRole(tool, true)
+	case ToolCallerRoleMainAgent, ToolCallerRoleSystem:
+		return true
+	default:
+		return tool.Visibility != ToolVisibilityMainAgentOnly
+	}
+}
+
 func (r *Registry) generateCacheKey(toolName string, input map[string]any) string {
 	data, _ := json.Marshal(input)
 	return fmt.Sprintf("%s:%x", toolName, data)

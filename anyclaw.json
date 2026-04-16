@@ -1,12 +1,14 @@
 {
   "llm": {
-    "provider": "compatible",
-    "model": "gpt-4o-mini",
-    "api_key": "",
-    "base_url": "https://api.openai.com/v1",
-    "default_provider_ref": "primary-compatible",
-    "max_tokens": 4096,
+    "provider": "qwen",
+    "model": "qwen2.5-14b-instruct",
+    "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "default_provider_ref": "primary-qwen",
+    "max_tokens": 3072,
     "temperature": 0.7,
+    "proxy": "",
+    "extra": null,
     "routing": {
       "enabled": false,
       "reasoning_keywords": [
@@ -28,17 +30,466 @@
     }
   },
   "agent": {
-    "name": "AnyClaw",
+    "name": "黑塔",
     "description": "Your AI assistant with file-based memory",
-    "work_dir": ".anyclaw",
-    "working_dir": "workflows",
-    "permission_level": "limited",
+    "work_dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\.anyclaw",
+    "working_dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\workflows",
+    "permission_level": "full",
     "require_confirmation_for_dangerous": true,
+    "skills": [
+      {
+        "name": "analyst",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "api-designer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "app-builder",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "app-controller",
+        "enabled": true,
+        "permissions": [
+          "desktop:control",
+          "desktop:vision",
+          "apps:workflow"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "name": "architect",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "automation-engineer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "backend-engineer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "browser-automation",
+        "enabled": true,
+        "permissions": [
+          "tools:browser",
+          "web:fetch"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "canvas-designer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "changelog-writer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "cli-anything",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended",
+          "files:read",
+          "files:write",
+          "tools:exec"
+        ],
+        "version": "0.2.0"
+      },
+      {
+        "name": "coder",
+        "enabled": true,
+        "version": "1.0.0"
+      },
+      {
+        "name": "compliance-reviewer",
+        "enabled": true,
+        "permissions": [
+          "files:read"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "customer-support",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "data-engineer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "database-admin",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "devops",
+        "enabled": true,
+        "permissions": [
+          "tools:exec",
+          "sandbox:run"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "docs-writer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "education-coach",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "extension-curator",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "finance-analyst",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "find-skills",
+        "enabled": true,
+        "permissions": [
+          "skills:search",
+          "skills:install"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "frontend-designer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "github",
+        "enabled": true,
+        "version": "1.0.0"
+      },
+      {
+        "name": "github-issues",
+        "enabled": true,
+        "version": "1.0.0"
+      },
+      {
+        "name": "language-tutor",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "legal-assistant",
+        "enabled": true,
+        "permissions": [
+          "files:read"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "marketing-strategist",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "meeting-notes",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "ml-engineer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "plugin-builder",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "product-manager",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "project-planner",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "prompt-engineer",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "qa-engineer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "recruiter",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "release-manager",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "research-paper",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "web:fetch"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "researcher",
+        "enabled": true,
+        "permissions": [
+          "web:search",
+          "web:fetch"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "sales-assistant",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "security-auditor",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "seo-optimizer",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "sre",
+        "enabled": true,
+        "permissions": [
+          "tools:exec",
+          "sandbox:run"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "summarize",
+        "enabled": true,
+        "version": "1.0.0"
+      },
+      {
+        "name": "test-automation",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write",
+          "tools:exec"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "translator",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "ui-ux-reviewer",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "vision-agent",
+        "enabled": true,
+        "version": "1.0.0"
+      },
+      {
+        "name": "voice-assistant",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "name": "voice-designer",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "weather",
+        "enabled": true,
+        "version": "1.0.0"
+      },
+      {
+        "name": "web-search",
+        "enabled": true,
+        "version": "1.0.0"
+      },
+      {
+        "name": "workflow-builder",
+        "enabled": true,
+        "permissions": [
+          "files:read",
+          "files:write"
+        ],
+        "version": "2.1.0"
+      },
+      {
+        "name": "writer",
+        "enabled": true,
+        "permissions": [
+          "prompt:extended"
+        ],
+        "version": "2.1.0"
+      }
+    ],
     "profiles": null,
     "active_profile": "",
-    "lang": "CN",
-    "work_focus": "general",
-    "behavior_style": "concise"
+    "lang": "zh-CN",
+    "work_focus": "通用",
+    "behavior_style": "简洁"
   },
   "providers": [
     {
@@ -47,7 +498,6 @@
       "type": "openai-compatible",
       "provider": "compatible",
       "base_url": "https://api.openai.com/v1",
-      "api_key": "",
       "default_model": "gpt-4o-mini",
       "enabled": true
     },
@@ -57,9 +507,9 @@
       "type": "qwen",
       "provider": "qwen",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "api_key": "",
-      "default_model": "qwen-max",
-      "enabled": false
+      "api_key": "sk-97d77969ddcf4d9894fea7abf73ecd04",
+      "default_model": "qwen2.5-14b-instruct",
+      "enabled": true
     },
     {
       "id": "primary-ollama",
@@ -72,13 +522,13 @@
     }
   ],
   "skills": {
-    "dir": "skills",
+    "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\skills",
     "auto_load": true,
     "include": null,
     "exclude": null
   },
   "memory": {
-    "dir": "memory",
+    "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\memory",
     "max_history": 100,
     "format": "markdown",
     "auto_save": true
@@ -100,8 +550,8 @@
     "canvas_max_versions": 0
   },
   "daemon": {
-    "pid_file": ".anyclaw/gateway.pid",
-    "log_file": ".anyclaw/gateway.log"
+    "pid_file": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\.anyclaw\\gateway.pid",
+    "log_file": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\.anyclaw\\gateway.log"
   },
   "channels": {
     "telegram": {
@@ -166,7 +616,7 @@
     }
   },
   "plugins": {
-    "dir": "plugins",
+    "dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\plugins",
     "enabled": null,
     "allow_exec": false,
     "exec_timeout_seconds": 10,
@@ -177,7 +627,7 @@
     "enabled": false,
     "execution_mode": "host-reviewed",
     "backend": "local",
-    "base_dir": ".anyclaw/sandboxes",
+    "base_dir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\.anyclaw\\sandboxes",
     "docker_image": "alpine:3.20",
     "docker_network": "none",
     "reuse_per_scope": true,
@@ -194,7 +644,7 @@
     "rate_limit_rpm": 120,
     "users": null,
     "roles": null,
-    "audit_log": ".anyclaw/audit/audit.jsonl",
+    "audit_log": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\.anyclaw\\audit\\audit.jsonl",
     "dangerous_command_patterns": [
       "rm -rf",
       "del /f",
@@ -208,8 +658,24 @@
       "icacls",
       "git reset --hard"
     ],
+    "protected_paths": [
+      "C:\\WINDOWS",
+      "C:\\Windows",
+      "C:\\Program Files",
+      "C:\\Program Files (x86)",
+      "C:\\ProgramData",
+      "C:\\Users\\Lenovo\\.ssh",
+      "C:\\Users\\Lenovo\\AppData",
+      "C:\\Users\\Lenovo\\Documents",
+      "C:\\Users\\Lenovo\\Desktop",
+      "C:\\Users\\Lenovo\\Downloads",
+      "C:\\Users\\Lenovo\\Pictures",
+      "C:\\Users\\Lenovo\\Videos",
+      "C:\\Users\\Lenovo\\Music",
+      "C:\\Users\\Lenovo\\NTUSER.DAT"
+    ],
     "command_timeout_seconds": 30,
-    "risk_acknowledged": false,
+    "risk_acknowledged": true,
     "pairing_enabled": false,
     "pairing_ttl_hours": 0,
     "pairing_max_devices": 0

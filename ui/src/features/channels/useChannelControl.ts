@@ -62,6 +62,10 @@ function normalizeName(value: string) {
   return value.trim().toLowerCase();
 }
 
+function ensureArray<T>(value: T[] | null | undefined) {
+  return Array.isArray(value) ? value : [];
+}
+
 async function requestJSON<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
     headers: {
@@ -87,7 +91,13 @@ async function requestJSON<T>(input: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-function mapPresenceMap(payload: Record<string, Omit<ChannelPresenceRecord, "channel" | "key" | "user_id">>) {
+function mapPresenceMap(
+  payload: Record<string, Omit<ChannelPresenceRecord, "channel" | "key" | "user_id">> | null | undefined,
+) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [];
+  }
+
   return Object.entries(payload).map(([key, value]) => {
     const [channel, ...rest] = key.split(":");
 
@@ -105,7 +115,7 @@ export function useChannelControl(selectedSlug: string | null) {
 
   const adapterStatusesQuery = useQuery({
     queryKey: ["channel-adapter-statuses"],
-    queryFn: () => requestJSON<ChannelAdapterStatus[]>("/channels"),
+    queryFn: async () => ensureArray(await requestJSON<ChannelAdapterStatus[] | null>("/channels")),
     initialData: [],
     refetchInterval: 15000,
     retry: 0,
@@ -121,7 +131,14 @@ export function useChannelControl(selectedSlug: string | null) {
 
   const pairingQuery = useQuery({
     queryKey: ["channel-pairing"],
-    queryFn: () => requestJSON<ChannelPairingResponse>("/channel/pairing"),
+    queryFn: async () => {
+      const payload = await requestJSON<ChannelPairingResponse | null>("/channel/pairing");
+
+      return {
+        enabled: payload?.enabled ?? false,
+        paired: ensureArray(payload?.paired),
+      };
+    },
     retry: 0,
     staleTime: 8000,
   });
@@ -130,7 +147,7 @@ export function useChannelControl(selectedSlug: string | null) {
     queryKey: ["channel-presence"],
     queryFn: async () =>
       mapPresenceMap(
-        await requestJSON<Record<string, Omit<ChannelPresenceRecord, "channel" | "key" | "user_id">>>(
+        await requestJSON<Record<string, Omit<ChannelPresenceRecord, "channel" | "key" | "user_id">> | null>(
           "/channel/presence",
         ),
       ),
@@ -142,8 +159,12 @@ export function useChannelControl(selectedSlug: string | null) {
 
   const contactsQuery = useQuery({
     queryKey: ["channel-contacts", selectedSlug],
-    queryFn: () =>
-      requestJSON<ChannelContactRecord[]>(`/channel/contacts?channel=${encodeURIComponent(selectedSlug ?? "")}`),
+    queryFn: async () =>
+      ensureArray(
+        await requestJSON<ChannelContactRecord[] | null>(
+          `/channel/contacts?channel=${encodeURIComponent(selectedSlug ?? "")}`,
+        ),
+      ),
     enabled: Boolean(selectedSlug),
     initialData: [],
     refetchInterval: 20000,
@@ -226,7 +247,7 @@ export function useChannelControl(selectedSlug: string | null) {
     pairingError: pairingQuery.error,
     presenceError: presenceQuery.error,
     selectedAdapterStatus,
-    selectedContacts: contactsQuery.data,
+    selectedContacts: contactsQuery.data ?? [],
     selectedPairings,
     selectedPresence,
     toggleMentionGate: toggleMentionGateMutation.mutateAsync,

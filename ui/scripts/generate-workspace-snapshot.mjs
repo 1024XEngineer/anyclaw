@@ -24,6 +24,26 @@ function safeBoolean(value, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function stripWrappingQuotes(value) {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).trim();
+  }
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1).trim();
+  }
+  return value;
+}
+
+function normalizeSkillDescription(value) {
+  return compactText(
+    stripWrappingQuotes(safeString(value))
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+}
+
 function compactText(value, maxLength = 160) {
   const text = safeString(value).replace(/\s+/g, " ");
   if (text.length <= maxLength) return text;
@@ -57,7 +77,7 @@ function readSkillManifests(skillsDir) {
 
       return {
         name: safeString(manifest.name) || entry.name,
-        description: compactText(manifest.description),
+        description: normalizeSkillDescription(manifest.description),
         source: safeString(manifest.source) || "local",
         registry: safeString(manifest.registry),
         version: safeString(manifest.version),

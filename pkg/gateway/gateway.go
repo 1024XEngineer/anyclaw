@@ -1575,9 +1575,12 @@ type RuntimeStatus struct {
 	Max    int `json:"max"`
 }
 
+const typingSessionStaleAfter = 20 * time.Second
+
 func (s *Server) GatewayStatus() GatewayStatus {
 	sessions := s.store.ListSessions()
 	activeUsers := make(map[string]bool)
+	now := time.Now().UTC()
 	typingSessions := 0
 	queuedSessions := 0
 	channelSessions := make(map[string]int)
@@ -1585,7 +1588,7 @@ func (s *Server) GatewayStatus() GatewayStatus {
 		if sess.UserID != "" {
 			activeUsers[sess.UserID] = true
 		}
-		if sess.Typing {
+		if sess.Typing && typingSessionActive(sess, now, typingSessionStaleAfter) {
 			typingSessions++
 		}
 		if sess.Presence == "queued" {
@@ -1681,8 +1684,25 @@ func (s *Server) GatewayStatus() GatewayStatus {
 		},
 		Security:  securityStatus,
 		Runtime:   runtimeStatus,
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt: now.Format(time.RFC3339),
 	}
+}
+
+func typingSessionActive(session *Session, now time.Time, maxAge time.Duration) bool {
+	if session == nil || !session.Typing {
+		return false
+	}
+	if maxAge <= 0 {
+		return true
+	}
+	last := session.LastActiveAt
+	if last.IsZero() {
+		last = session.UpdatedAt
+	}
+	if last.IsZero() {
+		return true
+	}
+	return now.Sub(last) <= maxAge
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, value any) {
@@ -2213,6 +2233,17 @@ func (s *Server) runSessionMessageWithOptions(ctx context.Context, sessionID str
 		return "", session, err
 	}
 	targetApp.Agent.SetHistory(session.History)
+	if response, updatedSession, handled, err := s.tryDirectDesktopOpenURL(ctx, session, targetApp, title, message, source); handled {
+		if err != nil {
+			if errors.Is(err, ErrTaskWaitingApproval) {
+				s.updateSessionApprovalPresence(sessionID, "")
+			} else {
+				s.updateSessionPresence(sessionID, "idle", false)
+			}
+			return "", session, err
+		}
+		return response, updatedSession, nil
+	}
 	execCtx := tools.WithBrowserSession(ctx, sessionID)
 	execCtx = tools.WithSandboxScope(execCtx, tools.SandboxScope{SessionID: sessionID, Channel: "api"})
 	execCtx = agent.WithToolApprovalHook(execCtx, s.sessionToolApprovalHook(session, targetApp.Config, title, message, source))
@@ -2244,6 +2275,76 @@ func (s *Server) runSessionMessageWithOptions(ctx context.Context, sessionID str
 		sessionID = session.ID
 		s.appendEvent("session.created", sessionID, map[string]any{"title": session.Title})
 	*/
+}
+
+func (s *Server) tryDirectDesktopOpenURL(ctx context.Context, session *Session, targetApp *runtime.App, title string, message string, source string) (string, *Session, bool, error) {
+	targetURL, ok := directDesktopOpenTarget(message)
+	if !ok || session == nil || targetApp == nil || targetApp.Tools == nil {
+		return "", nil, false, nil
+	}
+	input := map[string]any{
+		"target": targetURL,
+		"kind":   "url",
+	}
+	if err := s.requireSessionToolApproval(session, title, message, source, "desktop_open", input); err != nil {
+		return "", session, true, err
+	}
+	result, err := targetApp.Tools.Call(ctx, "desktop_open", input)
+	if err != nil {
+		s.appendToolActivity(session.ID, ToolActivityRecord{
+			ToolName:  "desktop_open",
+			Args:      cloneAnyMap(input),
+			Error:     err.Error(),
+			Agent:     session.Agent,
+			Workspace: session.Workspace,
+		})
+		return "", session, true, err
+	}
+	response := fmt.Sprintf("已在桌面浏览器中打开 %s。", targetURL)
+	updatedSession, err := s.sessions.AddExchange(session.ID, message, response)
+	if err != nil {
+		return "", session, true, err
+	}
+	if _, err := s.sessions.SetPresence(session.ID, "idle", false); err == nil {
+		s.appendEvent("session.presence", session.ID, map[string]any{"presence": "idle", "source": source})
+	}
+	s.appendToolActivity(session.ID, ToolActivityRecord{
+		ToolName:  "desktop_open",
+		Args:      cloneAnyMap(input),
+		Result:    result,
+		Agent:     session.Agent,
+		Workspace: session.Workspace,
+	})
+	s.appendEvent("chat.completed", session.ID, map[string]any{"message": message, "response_length": len(response), "source": source})
+	return response, updatedSession, true, nil
+}
+
+func directDesktopOpenTarget(message string) (string, bool) {
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		return "", false
+	}
+	lower := strings.ToLower(msg)
+	hasOpenIntent := strings.Contains(msg, "打开") || strings.Contains(msg, "访问") || strings.Contains(lower, "open") || strings.Contains(lower, "visit")
+	if !hasOpenIntent {
+		return "", false
+	}
+	for _, field := range strings.Fields(msg) {
+		trimmed := strings.Trim(field, " \t\r\n,，。;；!！?？()（）[]【】<>\"'")
+		if strings.HasPrefix(strings.ToLower(trimmed), "http://") || strings.HasPrefix(strings.ToLower(trimmed), "https://") {
+			return trimmed, true
+		}
+	}
+	aliases := map[string]string{
+		"抖音":   "https://www.douyin.com/",
+		"douyin": "https://www.douyin.com/",
+	}
+	for alias, target := range aliases {
+		if strings.Contains(lower, strings.ToLower(alias)) || strings.Contains(msg, alias) {
+			return target, true
+		}
+	}
+	return "", false
 }
 
 func (s *Server) handleResolvedApproval(updated *Approval, approved bool, comment string) {

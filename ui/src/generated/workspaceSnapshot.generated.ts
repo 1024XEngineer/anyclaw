@@ -3,14 +3,14 @@
 // Do not edit manually.
 
 export const workspaceSnapshot = {
-  "generatedAt": "2026-04-11T09:08:49.967Z",
+  "generatedAt": "2026-04-11T16:18:04.808Z",
   "agent": {
-    "name": "AnyClaw",
+    "name": "黑塔",
     "description": "Your AI assistant with file-based memory",
     "permissionLevel": "limited",
-    "workDir": ".anyclaw",
-    "workingDir": "workflows",
-    "language": "CN",
+    "workDir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\.anyclaw",
+    "workingDir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\workflows",
+    "language": "zh-CN",
     "activeProfile": ""
   },
   "orchestrator": {
@@ -35,7 +35,7 @@ export const workspaceSnapshot = {
       "provider": "compatible",
       "defaultModel": "gpt-4o-mini",
       "enabled": true,
-      "isDefault": true,
+      "isDefault": false,
       "capabilitiesCount": 0
     },
     {
@@ -44,8 +44,8 @@ export const workspaceSnapshot = {
       "type": "qwen",
       "provider": "qwen",
       "defaultModel": "qwen-max",
-      "enabled": false,
-      "isDefault": false,
+      "enabled": true,
+      "isDefault": true,
       "capabilitiesCount": 0
     },
     {
@@ -61,16 +61,71 @@ export const workspaceSnapshot = {
   ],
   "agents": [
     {
-      "name": "AnyClaw",
+      "name": "黑塔",
       "description": "Your AI assistant with file-based memory",
       "role": "main",
       "permissionLevel": "limited",
-      "workingDir": "workflows",
+      "workingDir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\workflows",
       "providerRef": "",
       "defaultModel": "",
       "enabled": true,
       "active": true,
-      "skills": []
+      "skills": [
+        "analyst",
+        "api-designer",
+        "app-builder",
+        "app-controller",
+        "architect",
+        "automation-engineer",
+        "backend-engineer",
+        "browser-automation",
+        "canvas-designer",
+        "changelog-writer",
+        "cli-anything",
+        "coder",
+        "compliance-reviewer",
+        "customer-support",
+        "data-engineer",
+        "database-admin",
+        "devops",
+        "docs-writer",
+        "education-coach",
+        "extension-curator",
+        "finance-analyst",
+        "find-skills",
+        "frontend-designer",
+        "github",
+        "github-issues",
+        "language-tutor",
+        "legal-assistant",
+        "marketing-strategist",
+        "meeting-notes",
+        "ml-engineer",
+        "plugin-builder",
+        "product-manager",
+        "project-planner",
+        "prompt-engineer",
+        "qa-engineer",
+        "recruiter",
+        "release-manager",
+        "research-paper",
+        "researcher",
+        "sales-assistant",
+        "security-auditor",
+        "seo-optimizer",
+        "sre",
+        "summarize",
+        "test-automation",
+        "translator",
+        "ui-ux-reviewer",
+        "vision-agent",
+        "voice-assistant",
+        "voice-designer",
+        "weather",
+        "web-search",
+        "workflow-builder",
+        "writer"
+      ]
     }
   ],
   "skills": [
@@ -100,7 +155,7 @@ export const workspaceSnapshot = {
     },
     {
       "name": "github",
-      "description": "\"Interact with GitHub using the `gh` CLI. Use `gh issue`, `gh pr`, `gh run`, and `gh api` for issues, PRs, CI runs, and advanced queries.\"",
+      "description": "Interact with GitHub using the gh CLI. Use gh issue, gh pr, gh run, and gh api for issues, PRs, CI runs, and advanced queries.",
       "source": "skillhub",
       "registry": "",
       "version": "1.0.0",
@@ -140,7 +195,7 @@ export const workspaceSnapshot = {
     },
     {
       "name": "weather",
-      "description": "\"What's the weather?\"",
+      "description": "What's the weather?",
       "source": "skills.sh",
       "registry": "skills.sh",
       "version": "1.0.0",

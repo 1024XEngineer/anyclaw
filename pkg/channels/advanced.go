@@ -493,7 +493,7 @@ func (cp *ChannelPairing) ListPaired() []PairingInfo {
 	cp.mu.RLock()
 	defer cp.mu.RUnlock()
 	now := time.Now().UTC()
-	var result []PairingInfo
+	result := make([]PairingInfo, 0, len(cp.pairings))
 	for _, info := range cp.pairings {
 		if now.Before(info.ExpiresAt) {
 			result = append(result, info)
@@ -768,7 +768,7 @@ func (cd *ContactDirectory) List(channel string) []ContactInfo {
 	cd.mu.RLock()
 	defer cd.mu.RUnlock()
 
-	var result []ContactInfo
+	result := make([]ContactInfo, 0, len(cd.contacts))
 	for _, contact := range cd.contacts {
 		if channel == "" || contact.Channel == channel {
 			result = append(result, contact)
@@ -782,7 +782,7 @@ func (cd *ContactDirectory) Search(query string) []ContactInfo {
 	defer cd.mu.RUnlock()
 
 	query = strings.ToLower(query)
-	var result []ContactInfo
+	result := make([]ContactInfo, 0, len(cd.contacts))
 	for _, contact := range cd.contacts {
 		if strings.Contains(strings.ToLower(contact.DisplayName), query) ||
 			strings.Contains(strings.ToLower(contact.Username), query) ||

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +65,7 @@ func newContextRuntime(cfg Config) *contextRuntime {
 		maxTokens:         maxTokens,
 		safetyMargin:      safetyMargin,
 		bootstrapMaxRunes: maxTokens * defaultBootstrapCharsFactor,
-		contextEngine:     cfg.ContextEngine,
+		contextEngine:     normalizeContextEngine(cfg.ContextEngine),
 		bootstrapDirty:    true,
 	}
 
@@ -157,11 +158,11 @@ func (r *contextRuntime) setContextEngine(engine ctxpkg.ContextEngine) {
 	if r == nil {
 		return
 	}
-	r.contextEngine = engine
+	r.contextEngine = normalizeContextEngine(engine)
 }
 
 func (r *contextRuntime) storeConversation(ctx context.Context, agentName string, workingDir string, role string, content string) {
-	if r == nil || r.contextEngine == nil {
+	if r == nil || normalizeContextEngine(r.contextEngine) == nil {
 		return
 	}
 
@@ -182,6 +183,20 @@ func (r *contextRuntime) storeConversation(ctx context.Context, agentName string
 		},
 	}
 	_ = r.contextEngine.AddDocument(ctx, doc)
+}
+
+func normalizeContextEngine(engine ctxpkg.ContextEngine) ctxpkg.ContextEngine {
+	if engine == nil {
+		return nil
+	}
+	value := reflect.ValueOf(engine)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return nil
+		}
+	}
+	return engine
 }
 
 func (r *contextRuntime) loadBootstrapFiles(workingDir string) ([]workspace.BootstrapFile, error) {

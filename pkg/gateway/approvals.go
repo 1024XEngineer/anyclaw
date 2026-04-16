@@ -26,8 +26,16 @@ func newApprovalManager(store *Store) *approvalManager {
 }
 
 func (m *approvalManager) Request(taskID string, sessionID string, stepIndex int, toolName string, action string, payload map[string]any) (*Approval, error) {
+	return m.RequestWithSignature(taskID, sessionID, stepIndex, toolName, action, payload, nil)
+}
+
+func (m *approvalManager) RequestWithSignature(taskID string, sessionID string, stepIndex int, toolName string, action string, payload map[string]any, signaturePayload map[string]any) (*Approval, error) {
 	now := m.nowFunc()
-	signature := approvalSignature(toolName, action, payload)
+	signatureSource := payload
+	if signaturePayload != nil {
+		signatureSource = signaturePayload
+	}
+	signature := approvalSignature(toolName, action, signatureSource)
 	approval := &Approval{
 		ID:          m.nextID(),
 		TaskID:      strings.TrimSpace(taskID),

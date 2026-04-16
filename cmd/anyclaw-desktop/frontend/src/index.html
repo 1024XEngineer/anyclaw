@@ -1,0 +1,1480 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AnyClaw Desktop</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f7fb;
+        --surface: rgba(255, 255, 255, 0.96);
+        --border: rgba(15, 23, 42, 0.08);
+        --border-strong: rgba(15, 23, 42, 0.14);
+        --text: #0f172a;
+        --muted: #64748b;
+        --muted-strong: #475569;
+        --accent: #06b6d4;
+        --accent-strong: #0f766e;
+        --warm: #f59e0b;
+        --success: #10b981;
+        --danger: #ef4444;
+        --shadow: 0 24px 60px rgba(15, 23, 42, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        overflow: hidden;
+        font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(6, 182, 212, 0.1), transparent 28%),
+          linear-gradient(180deg, #fbfdff 0%, var(--bg) 100%);
+      }
+
+      body[data-mode="pet"] {
+        background:
+          radial-gradient(circle at top, rgba(6, 182, 212, 0.08), transparent 48%),
+          linear-gradient(180deg, #fcfeff 0%, #f3f7fb 100%);
+        border-radius: 999px;
+      }
+
+      button {
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .app {
+        width: 100vw;
+        height: 100vh;
+      }
+
+      .window-shell {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        grid-template-rows: 72px 1fr;
+        transition: opacity 180ms ease, transform 180ms ease;
+      }
+
+      body[data-mode="pet"] .window-shell {
+        opacity: 0;
+        pointer-events: none;
+        transform: scale(0.985);
+      }
+
+      .titlebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 20px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(249, 251, 255, 0.92));
+        border-bottom: 1px solid var(--border);
+        box-shadow: 0 6px 20px rgba(15, 23, 42, 0.04);
+        -webkit-app-region: drag;
+        --wails-draggable: drag;
+      }
+
+      .title-copy {
+        min-width: 0;
+      }
+
+      .title-copy strong {
+        display: block;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+
+      .title-copy span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .header-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.76);
+        color: var(--muted-strong);
+        font-size: 13px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .status-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: var(--success);
+        box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.12);
+      }
+
+      .status-dot[data-state="booting"] {
+        background: #38bdf8;
+        box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.12);
+      }
+
+      .status-dot[data-state="offline"] {
+        background: #94a3b8;
+        box-shadow: 0 0 0 6px rgba(148, 163, 184, 0.12);
+      }
+
+      .status-dot[data-state="thinking"] {
+        background: var(--warm);
+        box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.14);
+      }
+
+      .status-dot[data-state="executing"] {
+        background: var(--accent);
+        box-shadow: 0 0 0 6px rgba(6, 182, 212, 0.14);
+      }
+
+      .status-dot[data-state="waiting"] {
+        background: #fb923c;
+        box-shadow: 0 0 0 6px rgba(251, 146, 60, 0.12);
+      }
+
+      .status-dot[data-state="complete"] {
+        background: #22c55e;
+        box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.12);
+      }
+
+      .status-dot[data-state="error"] {
+        background: var(--danger);
+        box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.12);
+      }
+
+      .title-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        -webkit-app-region: no-drag;
+        --wails-draggable: no-drag;
+      }
+
+      .action-btn {
+        padding: 12px 16px;
+        border-radius: 16px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.86);
+        color: var(--muted-strong);
+        font-weight: 600;
+        transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
+      }
+
+      .action-btn:hover {
+        transform: translateY(-1px);
+        background: #ffffff;
+        border-color: var(--border-strong);
+        box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+      }
+
+      .action-btn.primary {
+        background: linear-gradient(135deg, #effbff 0%, #ecfeff 100%);
+        color: var(--accent-strong);
+        border-color: rgba(6, 182, 212, 0.18);
+      }
+
+      .dashboard-shell {
+        position: relative;
+        overflow: hidden;
+        background: #f8fafc;
+      }
+
+      iframe {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: #ffffff;
+      }
+
+      .boot-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 4;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 32px;
+        background:
+          radial-gradient(circle at top, rgba(6, 182, 212, 0.08), transparent 34%),
+          linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(244, 247, 252, 0.98));
+      }
+
+      .boot-overlay[hidden] {
+        display: none;
+      }
+
+      .boot-card {
+        width: min(760px, 100%);
+        padding: 34px;
+        border-radius: 30px;
+        background: rgba(255, 255, 255, 0.94);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(16px);
+      }
+
+      .boot-card h1 {
+        margin: 0;
+        font-size: clamp(30px, 4vw, 46px);
+        line-height: 1.06;
+        letter-spacing: -0.04em;
+      }
+
+      .boot-card p {
+        margin: 12px 0 0;
+        color: var(--muted);
+        line-height: 1.72;
+      }
+
+      .boot-progress {
+        height: 10px;
+        margin-top: 24px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(148, 163, 184, 0.18);
+      }
+
+      .boot-progress > span {
+        display: block;
+        width: 34%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #67e8f9 0%, #06b6d4 45%, #7dd3fc 100%);
+        animation: loading 1.15s ease-in-out infinite;
+      }
+
+      .boot-meta {
+        margin-top: 14px;
+        color: #7c8da3;
+        font-size: 13px;
+      }
+
+      .boot-detail {
+        margin-top: 16px;
+        padding: 13px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        background: rgba(248, 250, 252, 0.9);
+        color: #334155;
+        font: 13px/1.55 "Cascadia Code", "Consolas", monospace;
+        white-space: pre-wrap;
+      }
+
+      .boot-detail[hidden] {
+        display: none;
+      }
+
+      .boot-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .boot-actions[hidden] {
+        display: none;
+      }
+      .island-shell {
+        position: fixed;
+        inset: 0;
+        display: none;
+      }
+
+      body[data-mode="pet"] .island-shell {
+        display: block;
+      }
+
+      .island-card {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        background:
+          radial-gradient(circle at 16% 12%, rgba(255, 255, 255, 0.75), transparent 24%),
+          linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+        box-shadow:
+          0 18px 40px rgba(15, 23, 42, 0.12),
+          inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+        -webkit-app-region: drag;
+        --wails-draggable: drag;
+        user-select: none;
+        cursor: grab;
+        overflow: hidden;
+        --state-glow: rgba(6, 182, 212, 0.22);
+        --state-chip: rgba(6, 182, 212, 0.12);
+        --state-ink: #0f766e;
+      }
+
+      .island-card:active {
+        cursor: grabbing;
+      }
+
+      .island-card::after {
+        content: "";
+        position: absolute;
+        right: -18px;
+        bottom: -28px;
+        width: 120px;
+        height: 120px;
+        border-radius: 999px;
+        background: radial-gradient(circle, var(--state-glow) 0%, transparent 70%);
+        opacity: 0.5;
+        pointer-events: none;
+      }
+
+      .island-card[data-state="booting"] {
+        --state-glow: rgba(56, 189, 248, 0.2);
+        --state-chip: rgba(56, 189, 248, 0.12);
+        --state-ink: #0369a1;
+      }
+
+      .island-card[data-state="offline"] {
+        --state-glow: rgba(148, 163, 184, 0.18);
+        --state-chip: rgba(148, 163, 184, 0.12);
+        --state-ink: #475569;
+      }
+
+      .island-card[data-state="thinking"] {
+        --state-glow: rgba(245, 158, 11, 0.22);
+        --state-chip: rgba(245, 158, 11, 0.14);
+        --state-ink: #b45309;
+      }
+
+      .island-card[data-state="executing"] {
+        --state-glow: rgba(6, 182, 212, 0.24);
+        --state-chip: rgba(6, 182, 212, 0.14);
+        --state-ink: #0f766e;
+      }
+
+      .island-card[data-state="waiting"] {
+        --state-glow: rgba(251, 146, 60, 0.22);
+        --state-chip: rgba(251, 146, 60, 0.14);
+        --state-ink: #c2410c;
+      }
+
+      .island-card[data-state="complete"] {
+        --state-glow: rgba(16, 185, 129, 0.22);
+        --state-chip: rgba(16, 185, 129, 0.14);
+        --state-ink: #047857;
+      }
+
+      .island-card[data-state="error"] {
+        --state-glow: rgba(239, 68, 68, 0.22);
+        --state-chip: rgba(239, 68, 68, 0.14);
+        --state-ink: #b91c1c;
+      }
+
+      .pet-bubble {
+        position: absolute;
+        left: 28px;
+        top: 6px;
+        max-width: 150px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.92);
+        color: #f8fafc;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.3;
+        box-shadow: 0 16px 28px rgba(15, 23, 42, 0.18);
+        opacity: 0;
+        transform: translateY(4px) scale(0.96);
+        transform-origin: left bottom;
+        transition: opacity 180ms ease, transform 180ms ease;
+        pointer-events: none;
+      }
+
+      .pet-bubble::after {
+        content: "";
+        position: absolute;
+        left: 18px;
+        bottom: -5px;
+        width: 12px;
+        height: 12px;
+        background: inherit;
+        transform: rotate(45deg);
+        border-radius: 2px;
+      }
+
+      .pet-bubble[hidden] {
+        display: none;
+      }
+
+      .pet-bubble.is-visible {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+
+      .pet-bubble[data-tone="warm"] {
+        background: rgba(194, 65, 12, 0.94);
+      }
+
+      .pet-bubble[data-tone="good"] {
+        background: rgba(4, 120, 87, 0.94);
+      }
+
+      .pet-bubble[data-tone="danger"] {
+        background: rgba(185, 28, 28, 0.94);
+      }
+
+      .pet-stage {
+        position: relative;
+        width: 70px;
+        height: 58px;
+        flex: 0 0 70px;
+      }
+
+      .pet-shadow {
+        position: absolute;
+        left: 15px;
+        bottom: 3px;
+        width: 40px;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.12);
+        filter: blur(2px);
+      }
+
+      .pet-tail {
+        position: absolute;
+        right: 7px;
+        top: 20px;
+        width: 18px;
+        height: 28px;
+        border-radius: 18px;
+        border: 6px solid #1f2937;
+        border-left-color: transparent;
+        border-bottom-color: transparent;
+        transform-origin: 4px 20px;
+        transform: rotate(14deg);
+      }
+
+      .pet-body {
+        position: absolute;
+        left: 12px;
+        top: 24px;
+        width: 36px;
+        height: 21px;
+        border-radius: 18px 18px 14px 14px;
+        background: linear-gradient(180deg, #232f43 0%, #111827 100%);
+        transform-origin: center bottom;
+      }
+
+      .pet-paw {
+        position: absolute;
+        top: 39px;
+        width: 11px;
+        height: 16px;
+        border-radius: 999px;
+        background: linear-gradient(180deg, #202c3f 0%, #111827 100%);
+        transform-origin: top center;
+      }
+
+      .pet-paw.paw-left {
+        left: 18px;
+      }
+
+      .pet-paw.paw-right {
+        left: 32px;
+      }
+
+      .pet-head {
+        position: absolute;
+        left: 19px;
+        top: 7px;
+        width: 34px;
+        height: 30px;
+        border-radius: 16px 16px 15px 15px;
+        background: linear-gradient(180deg, #243246 0%, #0f172a 100%);
+        transform-origin: center 78%;
+      }
+
+      .pet-ear {
+        position: absolute;
+        top: -8px;
+        width: 12px;
+        height: 14px;
+        background: linear-gradient(180deg, #243246 0%, #111827 100%);
+        clip-path: polygon(50% 0, 0 100%, 100% 100%);
+      }
+
+      .pet-ear.ear-left {
+        left: 3px;
+        transform: rotate(-8deg);
+      }
+
+      .pet-ear.ear-right {
+        right: 3px;
+        transform: rotate(8deg);
+      }
+
+      .pet-ear::after {
+        content: "";
+        position: absolute;
+        left: 3px;
+        top: 4px;
+        width: 6px;
+        height: 7px;
+        background: rgba(255, 201, 214, 0.9);
+        clip-path: polygon(50% 0, 0 100%, 100% 100%);
+      }
+
+      .pet-face {
+        position: absolute;
+        inset: 0;
+      }
+
+      .pet-eye {
+        position: absolute;
+        top: 11px;
+        width: 6px;
+        height: 8px;
+        border-radius: 999px;
+        background: #dcfce7;
+        box-shadow: 0 0 0 4px rgba(220, 252, 231, 0.08);
+        transform-origin: center 60%;
+      }
+
+      .pet-eye.eye-left {
+        left: 9px;
+      }
+
+      .pet-eye.eye-right {
+        right: 9px;
+      }
+
+      .pet-eye::after {
+        content: "";
+        position: absolute;
+        left: 2px;
+        top: 2px;
+        width: 2px;
+        height: 2px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.88);
+      }
+      .pet-nose {
+        position: absolute;
+        left: 50%;
+        top: 16px;
+        width: 6px;
+        height: 5px;
+        margin-left: -3px;
+        border-radius: 999px 999px 70% 70%;
+        background: #fda4af;
+      }
+
+      .pet-mouth {
+        position: absolute;
+        left: 50%;
+        top: 21px;
+        width: 12px;
+        height: 7px;
+        margin-left: -6px;
+      }
+
+      .pet-mouth::before,
+      .pet-mouth::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        width: 6px;
+        height: 7px;
+        border-bottom: 2px solid rgba(248, 250, 252, 0.92);
+        border-radius: 0 0 10px 10px;
+      }
+
+      .pet-mouth::before {
+        left: 0;
+        border-right: 1px solid rgba(248, 250, 252, 0.92);
+      }
+
+      .pet-mouth::after {
+        right: 0;
+        border-left: 1px solid rgba(248, 250, 252, 0.92);
+      }
+
+      .island-copy {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+
+      .island-label {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .island-label strong {
+        display: block;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+
+      .island-badge {
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: var(--state-chip);
+        color: var(--state-ink);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .island-detail {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .island-hint {
+        flex: 0 0 auto;
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .island-card[data-state="offline"] .pet-stage {
+        opacity: 0.72;
+      }
+
+      .island-card[data-state="offline"] .pet-eye {
+        transform: scaleY(0.18);
+      }
+
+      .island-card[data-state="online"] .pet-stage {
+        animation: pet-idle 3s ease-in-out infinite;
+      }
+
+      .island-card[data-state="online"] .pet-tail {
+        animation: tail-sway 2.6s ease-in-out infinite;
+      }
+
+      .island-card[data-state="online"] .pet-eye {
+        animation: blink 5.6s ease-in-out infinite;
+      }
+
+      .island-card[data-state="booting"] .pet-stage {
+        animation: pet-breathe 2.2s ease-in-out infinite;
+      }
+
+      .island-card[data-state="booting"] .pet-tail {
+        animation: tail-slow 3.1s ease-in-out infinite;
+      }
+
+      .island-card[data-state="booting"] .pet-eye {
+        animation: sleepy-blink 4.2s ease-in-out infinite;
+      }
+
+      .island-card[data-state="thinking"] .pet-head {
+        animation: head-tilt 1.35s ease-in-out infinite;
+      }
+
+      .island-card[data-state="thinking"] .pet-ear.ear-left {
+        animation: ear-flick-left 1.2s ease-in-out infinite;
+      }
+
+      .island-card[data-state="thinking"] .pet-ear.ear-right {
+        animation: ear-flick-right 1.2s ease-in-out infinite;
+      }
+
+      .island-card[data-state="thinking"] .pet-tail {
+        animation: tail-sway 1.45s ease-in-out infinite;
+      }
+
+      .island-card[data-state="thinking"] .pet-eye {
+        background: #fde68a;
+        box-shadow: 0 0 0 4px rgba(253, 230, 138, 0.12);
+      }
+
+      .island-card[data-state="executing"] .pet-stage {
+        animation: pet-bounce 0.82s ease-in-out infinite;
+      }
+
+      .island-card[data-state="executing"] .pet-tail {
+        animation: tail-fast 0.58s linear infinite;
+      }
+
+      .island-card[data-state="executing"] .pet-paw.paw-left {
+        animation: paw-tap-left 0.52s ease-in-out infinite;
+      }
+
+      .island-card[data-state="executing"] .pet-paw.paw-right {
+        animation: paw-tap-right 0.52s ease-in-out infinite;
+      }
+
+      .island-card[data-state="executing"] .pet-eye {
+        background: #a5f3fc;
+        box-shadow: 0 0 0 4px rgba(165, 243, 252, 0.12);
+      }
+
+      .island-card[data-state="waiting"] .pet-stage {
+        animation: pet-idle 2.1s ease-in-out infinite;
+      }
+
+      .island-card[data-state="waiting"] .pet-tail {
+        animation: tail-sway 1s ease-in-out infinite;
+      }
+
+      .island-card[data-state="waiting"] .pet-paw.paw-right {
+        animation: paw-wave 1.06s ease-in-out infinite;
+      }
+
+      .island-card[data-state="waiting"] .pet-eye {
+        background: #fed7aa;
+        box-shadow: 0 0 0 4px rgba(254, 215, 170, 0.14);
+      }
+
+      .island-card[data-state="complete"] .pet-stage {
+        animation: pet-hop 0.9s ease-in-out infinite;
+      }
+
+      .island-card[data-state="complete"] .pet-tail {
+        animation: tail-fast 0.68s linear infinite;
+      }
+
+      .island-card[data-state="complete"] .pet-eye {
+        background: #bbf7d0;
+        box-shadow: 0 0 0 4px rgba(187, 247, 208, 0.14);
+      }
+
+      .island-card[data-state="complete"] .pet-shadow {
+        animation: shadow-pop 0.9s ease-in-out infinite;
+      }
+
+      .island-card[data-state="error"] {
+        animation: island-shake 0.82s ease-in-out infinite;
+      }
+
+      .island-card[data-state="error"] .pet-head {
+        animation: head-droop 1s ease-in-out infinite;
+      }
+
+      .island-card[data-state="error"] .pet-tail {
+        animation: tail-still 1.2s ease-in-out infinite;
+      }
+
+      .island-card[data-state="error"] .pet-eye {
+        background: #fecaca;
+        box-shadow: 0 0 0 4px rgba(254, 202, 202, 0.14);
+        transform: scaleY(0.2);
+      }
+
+      .island-card.is-poked .pet-stage {
+        animation: pet-poke 0.58s ease;
+      }
+
+      .island-card.is-poked .pet-tail {
+        animation: tail-fast 0.36s linear 2;
+      }
+
+      .island-card.is-poked .pet-head {
+        animation: head-pop 0.58s ease;
+      }
+
+      @keyframes loading {
+        0% {
+          transform: translateX(-18%) scaleX(0.72);
+        }
+        50% {
+          transform: translateX(148%) scaleX(1.16);
+        }
+        100% {
+          transform: translateX(304%) scaleX(0.72);
+        }
+      }
+
+      @keyframes pet-idle {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(-1px);
+        }
+      }
+
+      @keyframes pet-breathe {
+        0%,
+        100% {
+          transform: translateY(0) scale(1);
+        }
+        50% {
+          transform: translateY(1px) scale(0.985);
+        }
+      }
+
+      @keyframes pet-bounce {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        45% {
+          transform: translateY(-5px);
+        }
+        70% {
+          transform: translateY(1px);
+        }
+      }
+
+      @keyframes pet-hop {
+        0%,
+        100% {
+          transform: translateY(0) scale(1);
+        }
+        40% {
+          transform: translateY(-6px) scale(1.02);
+        }
+        65% {
+          transform: translateY(1px) scale(0.99);
+        }
+      }
+
+      @keyframes pet-poke {
+        0% {
+          transform: translateY(0) scale(1);
+        }
+        35% {
+          transform: translateY(-3px) scale(1.03);
+        }
+        100% {
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      @keyframes tail-sway {
+        0%,
+        100% {
+          transform: rotate(14deg);
+        }
+        50% {
+          transform: rotate(28deg);
+        }
+      }
+
+      @keyframes tail-slow {
+        0%,
+        100% {
+          transform: rotate(12deg);
+        }
+        50% {
+          transform: rotate(19deg);
+        }
+      }
+
+      @keyframes tail-fast {
+        0% {
+          transform: rotate(9deg);
+        }
+        50% {
+          transform: rotate(34deg);
+        }
+        100% {
+          transform: rotate(9deg);
+        }
+      }
+
+      @keyframes tail-still {
+        0%,
+        100% {
+          transform: rotate(10deg);
+        }
+        50% {
+          transform: rotate(14deg);
+        }
+      }
+      @keyframes head-tilt {
+        0%,
+        100% {
+          transform: rotate(0deg) translateY(0);
+        }
+        25% {
+          transform: rotate(-6deg) translateY(-1px);
+        }
+        75% {
+          transform: rotate(7deg) translateY(-1px);
+        }
+      }
+
+      @keyframes head-pop {
+        0% {
+          transform: rotate(0deg) scale(1);
+        }
+        35% {
+          transform: rotate(-7deg) scale(1.03);
+        }
+        100% {
+          transform: rotate(0deg) scale(1);
+        }
+      }
+
+      @keyframes head-droop {
+        0%,
+        100% {
+          transform: rotate(0deg) translateY(0);
+        }
+        50% {
+          transform: rotate(-3deg) translateY(2px);
+        }
+      }
+
+      @keyframes ear-flick-left {
+        0%,
+        100% {
+          transform: rotate(-8deg);
+        }
+        45% {
+          transform: rotate(-18deg);
+        }
+      }
+
+      @keyframes ear-flick-right {
+        0%,
+        100% {
+          transform: rotate(8deg);
+        }
+        45% {
+          transform: rotate(18deg);
+        }
+      }
+
+      @keyframes paw-wave {
+        0%,
+        100% {
+          transform: translateY(0) rotate(0deg);
+        }
+        40% {
+          transform: translateY(-10px) rotate(-18deg);
+        }
+        75% {
+          transform: translateY(-6px) rotate(6deg);
+        }
+      }
+
+      @keyframes paw-tap-left {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(3px);
+        }
+      }
+
+      @keyframes paw-tap-right {
+        0%,
+        100% {
+          transform: translateY(3px);
+        }
+        50% {
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes blink {
+        0%,
+        44%,
+        100% {
+          transform: scaleY(1);
+        }
+        46%,
+        48% {
+          transform: scaleY(0.16);
+        }
+      }
+
+      @keyframes sleepy-blink {
+        0%,
+        54%,
+        100% {
+          transform: scaleY(0.45);
+        }
+        58%,
+        62% {
+          transform: scaleY(0.08);
+        }
+      }
+
+      @keyframes shadow-pop {
+        0%,
+        100% {
+          transform: scaleX(1);
+          opacity: 1;
+        }
+        40% {
+          transform: scaleX(0.86);
+          opacity: 0.82;
+        }
+      }
+
+      @keyframes island-shake {
+        0%,
+        100% {
+          transform: translateX(0);
+        }
+        25% {
+          transform: translateX(-3px);
+        }
+        75% {
+          transform: translateX(3px);
+        }
+      }
+    </style>
+  </head>
+  <body data-mode="normal">
+    <div class="app">
+      <section class="window-shell">
+        <header class="titlebar">
+          <div class="title-copy">
+            <strong>AnyClaw Workspace</strong>
+            <span>桌面壳正在托管本地 Dashboard，你可以随时收起成灵动岛宠物。</span>
+          </div>
+          <div class="header-status">
+            <span class="status-dot" data-state="booting" id="headerDot"></span>
+            <span id="headerStatus">正在启动</span>
+          </div>
+          <div class="title-actions">
+            <button class="action-btn" id="openBrowser" type="button">浏览器打开</button>
+            <button class="action-btn primary" id="enterPetMode" type="button">收起为原子岛</button>
+            <button class="action-btn" id="closeApp" type="button">关闭</button>
+          </div>
+        </header>
+
+        <main class="dashboard-shell">
+          <iframe id="dashboardFrame" referrerpolicy="no-referrer" title="AnyClaw Dashboard"></iframe>
+
+          <section class="boot-overlay" id="bootOverlay">
+            <div class="boot-card">
+              <h1 id="bootTitle">正在启动桌面工作台</h1>
+              <p id="bootStatus">正在准备本地网关、连接控制台并同步岛宠状态。</p>
+              <div class="boot-progress" id="bootProgress"><span></span></div>
+              <div class="boot-meta" id="bootMeta">首次启动可能会稍慢一些，完成后会自动载入 Dashboard。</div>
+              <pre class="boot-detail" id="bootDetail" hidden></pre>
+              <div class="boot-actions" id="bootActions" hidden>
+                <button class="action-btn primary" id="retryLaunch" type="button">重新尝试</button>
+                <button class="action-btn" id="bootBrowser" type="button">浏览器打开</button>
+              </div>
+            </div>
+          </section>
+        </main>
+      </section>
+
+      <section class="island-shell">
+        <div
+          class="island-card"
+          data-state="online"
+          id="petCard"
+          title="双击展开工作台，单击戳一戳，按住即可拖拽移动"
+        >
+          <div class="pet-bubble" id="petBubble" hidden>AnyClaw 岛宠已上线</div>
+
+          <div class="pet-stage" aria-hidden="true">
+            <div class="pet-shadow"></div>
+            <div class="pet-tail"></div>
+            <div class="pet-body"></div>
+            <div class="pet-paw paw-left"></div>
+            <div class="pet-paw paw-right"></div>
+            <div class="pet-head">
+              <div class="pet-ear ear-left"></div>
+              <div class="pet-ear ear-right"></div>
+              <div class="pet-face">
+                <div class="pet-eye eye-left"></div>
+                <div class="pet-eye eye-right"></div>
+                <div class="pet-nose"></div>
+                <div class="pet-mouth"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="island-copy">
+            <div class="island-label">
+              <strong id="petStatus">在线</strong>
+              <span class="island-badge" id="petBadge">online</span>
+            </div>
+            <div class="island-detail" id="petDetail">岛宠正在待命，双击展开，单击可以戳一戳。</div>
+          </div>
+
+          <div class="island-hint" id="petHint">双击展开</div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const bridge = window?.go?.main?.DesktopApp;
+      const dashboardFrame = document.getElementById("dashboardFrame");
+      const bootOverlay = document.getElementById("bootOverlay");
+      const bootTitle = document.getElementById("bootTitle");
+      const bootStatus = document.getElementById("bootStatus");
+      const bootMeta = document.getElementById("bootMeta");
+      const bootDetail = document.getElementById("bootDetail");
+      const bootActions = document.getElementById("bootActions");
+      const bootProgress = document.getElementById("bootProgress");
+
+      const headerDot = document.getElementById("headerDot");
+      const headerStatus = document.getElementById("headerStatus");
+      const petCard = document.getElementById("petCard");
+      const petStatus = document.getElementById("petStatus");
+      const petDetail = document.getElementById("petDetail");
+      const petBadge = document.getElementById("petBadge");
+      const petHint = document.getElementById("petHint");
+      const petBubble = document.getElementById("petBubble");
+
+      const openBrowserButton = document.getElementById("openBrowser");
+      const enterPetModeButton = document.getElementById("enterPetMode");
+      const closeAppButton = document.getElementById("closeApp");
+      const retryLaunchButton = document.getElementById("retryLaunch");
+      const bootBrowserButton = document.getElementById("bootBrowser");
+
+      const bubbleStates = new Set(["waiting", "complete", "error"]);
+
+      const state = {
+        dashboardURL: "",
+        launched: false,
+        pollTimer: 0,
+        petMode: false,
+        bubbleTimer: 0,
+        pokeTimer: 0,
+        clickTimer: 0,
+        lastBubbleKey: "",
+      };
+
+      function setMode(mode) {
+        document.body.dataset.mode = mode;
+        state.petMode = mode === "pet";
+      }
+
+      function hintForState(visualState) {
+        switch (visualState) {
+          case "waiting":
+            return "双击处理";
+          case "error":
+            return "双击查看";
+          default:
+            return "双击展开";
+        }
+      }
+
+      function bubbleToneForState(visualState) {
+        switch (visualState) {
+          case "waiting":
+            return "warm";
+          case "complete":
+            return "good";
+          case "error":
+            return "danger";
+          default:
+            return "note";
+        }
+      }
+      function bubbleMessageForSnapshot(snapshot) {
+        switch (snapshot?.state) {
+          case "waiting":
+            return "有操作正在等你确认";
+          case "complete":
+            return "刚刚完成了一轮任务";
+          case "error":
+            return "这次执行出了点问题";
+          default:
+            return snapshot?.detail || "AnyClaw 岛宠在线";
+        }
+      }
+
+      function showBubble(text, tone = "note", duration = 2600) {
+        if (!text) {
+          return;
+        }
+
+        clearTimeout(state.bubbleTimer);
+        petBubble.hidden = false;
+        petBubble.dataset.tone = tone;
+        petBubble.textContent = text;
+        petBubble.classList.add("is-visible");
+
+        state.bubbleTimer = window.setTimeout(() => {
+          petBubble.classList.remove("is-visible");
+          window.setTimeout(() => {
+            if (!petBubble.classList.contains("is-visible")) {
+              petBubble.hidden = true;
+            }
+          }, 180);
+        }, duration);
+      }
+
+      function triggerPoke() {
+        petCard.classList.remove("is-poked");
+        void petCard.offsetWidth;
+        petCard.classList.add("is-poked");
+
+        clearTimeout(state.pokeTimer);
+        state.pokeTimer = window.setTimeout(() => {
+          petCard.classList.remove("is-poked");
+        }, 620);
+
+        showBubble("我在，随时待命。", "note", 1200);
+      }
+
+      function maybeShowStateBubble(snapshot) {
+        const visualState = snapshot?.state || "";
+        const bubbleKey = `${visualState}:${snapshot?.lastEvent || ""}`;
+
+        if (!bubbleStates.has(visualState)) {
+          state.lastBubbleKey = bubbleKey;
+          return;
+        }
+
+        if (bubbleKey === state.lastBubbleKey) {
+          return;
+        }
+
+        state.lastBubbleKey = bubbleKey;
+        showBubble(bubbleMessageForSnapshot(snapshot), bubbleToneForState(visualState), 3200);
+      }
+
+      function setIslandVisual(snapshot) {
+        const visualState = snapshot?.state || "online";
+        const label = snapshot?.label || "在线";
+        const detail = snapshot?.detail || "岛宠正在待命。";
+
+        headerDot.dataset.state = visualState;
+        headerStatus.textContent = label;
+
+        petCard.dataset.state = visualState;
+        petStatus.textContent = label;
+        petDetail.textContent = detail;
+        petBadge.textContent = visualState;
+        petHint.textContent = hintForState(visualState);
+        petCard.title = `${label} · 双击展开工作台，单击戳一戳，按住即可拖拽移动`;
+
+        maybeShowStateBubble(snapshot);
+      }
+
+      function showOverlay(title, message, meta, detail = "", isError = false) {
+        bootOverlay.hidden = false;
+        bootTitle.textContent = title;
+        bootStatus.textContent = message;
+        bootMeta.textContent = meta;
+        bootDetail.hidden = detail === "";
+        bootDetail.textContent = detail;
+        bootActions.hidden = !isError;
+        bootProgress.hidden = isError;
+      }
+
+      function hideOverlay() {
+        bootOverlay.hidden = true;
+      }
+
+      async function openInBrowser() {
+        if (!state.dashboardURL || !bridge || typeof bridge.OpenInBrowser !== "function") {
+          return;
+        }
+
+        try {
+          await bridge.OpenInBrowser(state.dashboardURL);
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      async function enterPetMode() {
+        if (!bridge || typeof bridge.EnterPetMode !== "function") {
+          return;
+        }
+
+        try {
+          await bridge.EnterPetMode();
+          setMode("pet");
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      async function exitPetMode() {
+        if (!bridge || typeof bridge.ExitPetMode !== "function") {
+          return;
+        }
+
+        try {
+          await bridge.ExitPetMode();
+          setMode("normal");
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      async function closeApp() {
+        if (!bridge || typeof bridge.Close !== "function") {
+          return;
+        }
+
+        await bridge.Close();
+      }
+
+      async function refreshPetSnapshot() {
+        if (!bridge || typeof bridge.PetSnapshot !== "function") {
+          return;
+        }
+
+        try {
+          const snapshot = await bridge.PetSnapshot();
+          setIslandVisual(snapshot);
+
+          if (snapshot?.dashboardUrl && !state.dashboardURL) {
+            state.dashboardURL = snapshot.dashboardUrl;
+          }
+
+          if (snapshot?.mode === "pet") {
+            setMode("pet");
+          } else if (snapshot?.mode === "normal") {
+            setMode("normal");
+          }
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      function startPolling() {
+        clearInterval(state.pollTimer);
+        state.pollTimer = window.setInterval(() => {
+          void refreshPetSnapshot();
+        }, 1800);
+      }
+
+      async function launchDesktop() {
+        if (!bridge || typeof bridge.Launch !== "function") {
+          showOverlay(
+            "桌面壳不可用",
+            "当前页面没有连接到 Wails 桌面桥接。",
+            "请通过 anyclaw-desktop.exe 启动桌面程序。",
+            "",
+            true,
+          );
+          return;
+        }
+
+        showOverlay(
+          "正在启动桌面工作台",
+          "正在准备本地网关、连接控制台并同步岛宠状态。",
+          "首次启动可能会稍慢一些，完成后会自动载入 Dashboard。",
+        );
+        setIslandVisual({ state: "booting", label: "正在启动", detail: "正在连接本地网关" });
+
+        try {
+          const result = await bridge.Launch();
+          if (result?.error) {
+            showOverlay(
+              "岛宠启动失败",
+              result.error,
+              "你可以重新尝试，或者先在浏览器里打开控制台。",
+              [result.configPath, result.bundleRoot].filter(Boolean).join("\n"),
+              true,
+            );
+            return;
+          }
+
+          state.dashboardURL = result?.url || "";
+          if (!state.dashboardURL) {
+            throw new Error("桌面壳没有返回可用的 Dashboard 地址。");
+          }
+
+          dashboardFrame.src = state.dashboardURL;
+          showOverlay(
+            result.attached ? "已连接本地工作台" : "网关已启动",
+            result.attached ? "检测到已存在本地实例，正在切换到 Dashboard。" : "本地网关已经就绪，正在载入 Dashboard。",
+            result.configPath ? `配置文件：${result.configPath}` : "正在打开 Dashboard。",
+          );
+
+          startPolling();
+          await refreshPetSnapshot();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown desktop error.";
+          showOverlay(
+            "桌面壳启动失败",
+            message,
+            "请检查本地配置和 WebView2 环境。",
+            "",
+            true,
+          );
+        }
+      }
+
+      dashboardFrame.addEventListener("load", () => {
+        state.launched = true;
+        hideOverlay();
+      });
+
+      dashboardFrame.addEventListener("error", () => {
+        showOverlay(
+          "Dashboard 载入失败",
+          "本地页面没有成功载入，你可以重试或者改用浏览器打开。",
+          "如果问题反复出现，请检查本地 Gateway 是否仍然在线。",
+          "",
+          true,
+        );
+      });
+
+      petCard.addEventListener("click", () => {
+        clearTimeout(state.clickTimer);
+        state.clickTimer = window.setTimeout(() => {
+          triggerPoke();
+        }, 210);
+      });
+
+      petCard.addEventListener("dblclick", () => {
+        clearTimeout(state.clickTimer);
+        void exitPetMode();
+      });
+
+      openBrowserButton.addEventListener("click", () => {
+        void openInBrowser();
+      });
+
+      bootBrowserButton.addEventListener("click", () => {
+        void openInBrowser();
+      });
+
+      enterPetModeButton.addEventListener("click", () => {
+        void enterPetMode();
+      });
+
+      closeAppButton.addEventListener("click", () => {
+        void closeApp();
+      });
+
+      retryLaunchButton.addEventListener("click", () => {
+        void launchDesktop();
+      });
+
+      void launchDesktop();
+    </script>
+  </body>
+</html>

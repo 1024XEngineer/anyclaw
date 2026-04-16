@@ -131,11 +131,9 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 	// Build private tool registry filtered by permission
 	privateTools := tools.NewRegistry()
 	if baseTools != nil {
-		for _, t := range baseTools.List() {
-			if tool, ok := baseTools.Get(t.Name); ok {
-				if isToolAllowedForPermission(t.Name, permLevel) {
-					privateTools.Register(tool)
-				}
+		for _, tool := range baseTools.ListToolsForRole(true) {
+			if isToolAllowedForPermission(tool.Name, permLevel) {
+				privateTools.Register(tool)
 			}
 		}
 	}
@@ -225,6 +223,7 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 		Name:             def.Name,
 		Description:      def.Description,
 		Personality:      personality,
+		IsSubAgent:       true,
 		LLM:              effectiveLLM,
 		Memory:           agentMem,
 		Skills:           privateSkills,

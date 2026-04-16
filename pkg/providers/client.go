@@ -538,16 +538,22 @@ type ClientWrapper struct {
 	apiKey      string
 	baseURL     string
 	proxyURL    string
+	maxTokens   int
 	temperature float64
 }
 
 func NewClientWrapper(cfg Config) (*ClientWrapper, error) {
+	maxTokens := cfg.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
 	c := &ClientWrapper{
 		provider:    normalizeProvider(cfg.Provider),
 		model:       cfg.Model,
 		apiKey:      cfg.APIKey,
 		baseURL:     cfg.BaseURL,
 		proxyURL:    cfg.Proxy,
+		maxTokens:   maxTokens,
 		temperature: cfg.Temperature,
 	}
 
@@ -569,7 +575,7 @@ func (w *ClientWrapper) initClient() error {
 		APIKey:      w.apiKey,
 		BaseURL:     w.baseURL,
 		Proxy:       w.proxyURL,
-		MaxTokens:   4096,
+		MaxTokens:   w.maxTokens,
 		Temperature: w.temperature,
 	})
 	if err != nil {

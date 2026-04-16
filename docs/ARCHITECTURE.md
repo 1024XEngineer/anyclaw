@@ -1,389 +1,383 @@
-# AnyClaw Architecture
+# AnyClaw 架构与功能模块拆分
 
-## Overview
+## 文档目标
 
-AnyClaw is a local-first AI agent workspace written in Go, inspired by OpenClaw's architecture. It provides a complete personal AI assistant that runs on your own devices with support for 20+ messaging channels, a plugin/extension system, skills, and file-first memory.
+这份文档不是按目录树机械罗列，而是基于当前源码里的真实职责，把 AnyClaw 按功能拆成可演进的模块，方便后续做：
 
-## Architecture Diagram
+- 架构收口
+- 包归属梳理
+- ownership 划分
+- 代码级拆包或拆仓
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        AnyClaw Architecture                      │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │    CLI       │  │   Gateway    │  │  Control UI  │          │
-│  │  (cmd/)      │  │  (HTTP/WS)   │  │  (ui/)       │          │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
-│         │                 │                  │                   │
-│         └─────────────────┴──────────────────┘                   │
-│                           │                                      │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                   Core Runtime (pkg/)                     │   │
-│  │                                                          │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │   │
-│  │  │  Agent   │  │  Tools   │  │ Channels │  │ Sessions │ │   │
-│  │  │ Runtime  │  │ Registry │  │ Manager  │  │ Manager  │ │   │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │   │
-│  │                                                          │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │   │
-│  │  │  Plugin  │  │  Skills  │  │  Memory  │  │  Event   │ │   │
-│  │  │ Registry │  │ Manager  │  │  Store   │  │   Bus    │ │   │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │   │
-│  │                                                          │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │   │
-│  │  │  Config  │  │  Hooks   │  │  Prompt  │  │  Routing │ │   │
-│  │  │ Manager  │  │ Manager  │  │ Builder  │  │  Engine  │ │   │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                           │                                      │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │              Extensions (extensions/)                     │   │
-│  │                                                          │   │
-│  │  telegram  discord  slack  whatsapp  signal  irc  matrix  │   │
-│  │  wechat    feishu   line   msteams   googlechat           │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                           │                                      │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │              Storage Layer                                │   │
-│  │                                                          │   │
-│  │  .anyclaw/     Memory JSON files + daily markdowns       │   │
-│  │  .anyclaw/gateway/  Gateway state (sessions, tasks)       │   │
-│  │  workflows/    Bootstrap files (AGENTS.md, SOUL.md...)    │   │
-│  │  plugins/      Runtime-loaded plugins                     │   │
-│  │  skills/       Bundled skill definitions                  │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+判断依据主要来自当前几个核心入口：
+
+- `pkg/runtime` 的启动装配链路
+- `pkg/gateway` 的对外 API 与状态管理
+- `pkg/agent` 的执行内核
+- `pkg/tools` / `pkg/skills` / `pkg/plugin` 的能力注入方式
+- `ui/` 与 `cmd/anyclaw-desktop/` 的展示层结构
+
+## 1. 从源码看当前主链路
+
+AnyClaw 现在的主流程可以概括成下面这条链路：
+
+```text
+配置/启动
+  -> runtime 装配
+  -> Gateway / Desktop / Web UI 对外暴露
+  -> Session / Task / RuntimePool 接住请求
+  -> Agent 执行
+  -> LLM + Memory + Context + Tools + Skills + Plugins
+  -> 审批 / 事件 / 审计 / 状态落盘
 ```
 
-## Directory Structure
+其中最关键的装配顺序已经写在 `pkg/runtime.Bootstrap` 里，顺序基本是：
 
-```
-anyclaw/
-├── cmd/anyclaw/              # CLI entrypoint (multi-command)
-│   ├── main.go               # Main entry, command dispatch
-│   ├── agent_cli.go          # Agent subcommands
-│   ├── channels_cli.go       # Channel management
-│   ├── config_cli.go         # Config management
-│   ├── gateway_cli.go        # Gateway start/stop/status
-│   ├── gateway_http.go       # Gateway HTTP handlers
-│   ├── plugin_cli.go         # Plugin management
-│   ├── skill_cli.go          # Skill management
-│   ├── setup_cli.go          # Setup/onboarding
-│   └── ...                   # Other CLI commands
-│
-├── pkg/                      # Core packages (Go standard layout)
-│   ├── agent/                # Agent runtime (run loop, tool calls)
-│   ├── agents/               # Agent definitions
-│   ├── agentstore/           # Agent store/installation
-│   ├── apps/                 # App runtime, bindings, pairings
-│   ├── audit/                # Audit logging
-│   ├── auto-reply/           # Auto-reply pipeline
-│   ├── cdp/                  # Chrome DevTools Protocol
-│   ├── channel/              # Channel compatibility shim
-│   ├── channels/             # Channel adapters (core)
-│   ├── chat/                 # Chat handling
-│   ├── clawbridge/           # Claw-code reference surface
-│   ├── cliadapter/           # CLI adapter system
-│   ├── clihub/               # CLI harness catalog
-│   ├── config/               # Configuration system
-│   ├── context/              # Context engine
-│   ├── context-engine/       # Context engine abstraction
-│   ├── cron/                 # Cron scheduler
-│   ├── enterprise/           # Enterprise features (SSO, vector)
-│   ├── event/                # Event bus
-│   ├── extension/            # Extension loading & management
-│   ├── gateway/              # HTTP/WebSocket gateway server
-│   ├── hooks/                # Hook system (message/tool/agent)
-│   ├── i18n/                 # Internationalization
-│   ├── llm/                  # LLM compatibility shim
-│   ├── media/                # Media handling
-│   ├── memory/               # File-first memory + hybrid search
-│   ├── nodes/                # Node system
-│   ├── orchestrator/         # Multi-agent orchestrator
-│   ├── pi/                   # Personal intelligence
-│   ├── plugin/               # Plugin system
-│   ├── prompt/               # System prompt builder
-│   ├── providers/            # LLM provider management
-│   ├── reply/                # Reply handling
-│   ├── routing/              # LLM routing logic
-│   ├── runtime/              # Bootstrap/runtime orchestration
-│   ├── sdk/                  # SDK
-│   ├── security/             # Security utilities
-│   ├── session/              # Session management
-│   ├── setup/                # Setup/onboarding
-│   ├── skills/               # Skill loading/execution
-│   ├── speech/               # Speech handling
-│   ├── task/                 # Task management
-│   ├── tools/                # Tool registry and builtins
-│   ├── ui/                   # Terminal UI utilities
-│   ├── verification/         # Verification/integration testing
-│   ├── workflow/             # Workflow graph engine
-│   └── workspace/            # Workspace bootstrap/rituals
-│
-├── extensions/               # Channel extensions (OpenClaw-style)
-│   ├── telegram/             # Telegram channel extension
-│   ├── discord/              # Discord channel extension
-│   ├── slack/                # Slack channel extension
-│   ├── whatsapp/             # WhatsApp channel extension
-│   ├── signal/               # Signal channel extension
-│   ├── irc/                  # IRC channel extension
-│   ├── matrix/               # Matrix channel extension
-│   ├── wechat/               # WeChat channel extension
-│   ├── feishu/               # Feishu/Lark channel extension
-│   ├── line/                 # LINE channel extension
-│   ├── msteams/              # Microsoft Teams extension
-│   └── googlechat/           # Google Chat extension
-│
-├── skills/                   # Bundled skills
-│   └── web-search/           # Web search skill
-│
-├── plugins/                  # Plugin directory (runtime-loaded)
-│
-├── workflows/personal/       # Workspace bootstrap files
-│   ├── AGENTS.md             # Agent definitions
-│   ├── SOUL.md               # Personality/soul
-│   ├── IDENTITY.md           # Identity definition
-│   ├── MEMORY.md             # Memory config
-│   ├── TOOLS.md              # Tool definitions
-│   ├── USER.md               # User profile
-│   ├── HEARTBEAT.md          # Heartbeat config
-│   └── memory/               # Daily memory files
-│
-├── ui/                       # Web Control UI
-├── docs/                     # Documentation
-├── scripts/                  # Build/dev scripts
-│
-├── anyclaw.json              # Runtime configuration
-├── go.mod / go.sum           # Go module definition
-├── package.json              # Node.js UI workspace
-├── Dockerfile                # Container definition
-└── docker-compose.yml        # Docker compose
-```
+1. `config`
+2. `security / secrets / audit`
+3. `storage / workspace`
+4. `qmd`
+5. `skills`
+6. `tools`
+7. `plugins`
+8. `llm`
+9. `agent`
+10. `orchestrator`
 
-## Core Components
+这说明当前系统虽然目录很多，但核心其实可以收敛为几类大能力：装配、接入、执行、扩展、存储、治理。
 
-### 1. CLI Layer (`cmd/anyclaw/`)
+## 2. 推荐的一级功能模块
 
-Multi-command CLI with 20+ subcommands:
-- **Interactive mode**: `anyclaw -i` for conversational interface
-- **Gateway**: `anyclaw gateway start` for daemon mode
-- **Management**: config, skills, plugins, channels, models, agents, cron, tasks
-- **Diagnostics**: `doctor`, `status`, `health`
+建议把当前源码按功能收口为 9 个一级模块。
 
-### 2. Agent Runtime (`pkg/agent/`)
+| 模块 | 主要职责 | 当前对应包/目录 |
+| --- | --- | --- |
+| 1. 客户端与展示层 | Web 控制台、桌面壳、终端 UI 展示 | `ui/`, `cmd/anyclaw-desktop/`, `cmd/anyclaw-desktop/frontend/`, `pkg/ui` |
+| 2. 运行时装配层 | 配置加载、启动编排、工作区初始化、环境自检 | `pkg/runtime`, `pkg/config`, `pkg/setup`, `pkg/workspace`, `pkg/bootstrap` |
+| 3. Agent 内核 | 对话执行、Prompt、上下文管理、记忆、模型调用 | `pkg/agent`, `pkg/prompt`, `pkg/context-engine`, `pkg/context`, `pkg/memory`, `pkg/embedding`, `pkg/llm`, `pkg/providers` |
+| 4. 工具与执行平台 | 文件/Shell/浏览器/桌面操作、CLI Hub、沙箱、多模态工具 | `pkg/tools`, `pkg/clihub`, `pkg/cliadapter`, `pkg/cdp`, `pkg/vision`, `pkg/media`, `pkg/canvas`, `pkg/qmd`, `pkg/isolation`, `pkg/verification` |
+| 5. 编排与任务流 | 多 Agent 编排、任务执行、工作流、计划、定时任务 | `pkg/orchestrator`, `pkg/task`, `pkg/workflow`, `pkg/cron`, `pkg/routing`, `pkg/gateway/tasks.go`, `pkg/gateway/runtimes.go` |
+| 6. 接入网关与会话层 | HTTP/WS API、OpenAI 兼容 API、会话状态、渠道接入、事件流 | `pkg/gateway`, `pkg/chat`, `pkg/reply`, `pkg/session`, `pkg/gateway/session`, `pkg/channel`, `pkg/channels`, `pkg/remote`, `pkg/discovery` |
+| 7. 扩展生态层 | Skills、Plugins、MCP、Agent Store、市场能力 | `pkg/skills`, `pkg/plugin`, `pkg/mcp`, `pkg/agentstore`, `pkg/extension`, `skills/`, `plugins/`, `extensions/` |
+| 8. 应用自动化与设备协同 | App 绑定、桌面协议、UI 学习、节点协作 | `pkg/apps`, `pkg/nodes`, `pkg/node`, `pkg/pi`, `pkg/sdk` |
+| 9. 平台基础设施与治理 | 安全、密钥、审计、可观测、存储、索引、企业能力 | `pkg/security`, `pkg/secrets`, `pkg/audit`, `pkg/observability`, `pkg/sqlite`, `pkg/vec`, `pkg/index`, `pkg/api`, `pkg/event`, `pkg/enterprise`, `pkg/i18n` |
 
-The core reasoning engine with:
-- **Run loop**: User input → intent preprocessor → system prompt → LLM chat → tool execution → response
-- **Tool call parsing**: Native LLM tool calls + regex-based text fallback
-- **Evidence-based execution**: Inspect → plan → execute → verify → adapt
-- **Max tool calls**: 10 per turn to prevent infinite loops
+## 3. 每个模块应该如何理解
 
-### 3. Gateway (`pkg/gateway/`)
+### 3.1 客户端与展示层
 
-HTTP + WebSocket server with:
-- **50+ WebSocket RPC methods**: chat, agents, sessions, tasks, tools, plugins, config, channels
-- **Challenge-handshake auth**: Nonce verification before method access
-- **Permission model**: RBAC with hierarchical access checks
-- **State persistence**: Sessions, tasks, events, approvals saved to `.anyclaw/gateway/state.json`
+这一层只负责“人如何使用 AnyClaw”，不应该承载核心业务规则。
 
-### 4. Channels (`pkg/channels/` + `extensions/`)
+- `ui/` 是当前主 Web 控制台，页面已经按 Chat / Channels / Market / Studio 切分
+- `cmd/anyclaw-desktop/` 是桌面壳，本质上是启动并承载 Gateway Dashboard
+- `pkg/ui` 是终端样式与交互辅助
 
-Multi-platform messaging with **extension architecture** (OpenClaw-style):
-- **Core channels**: Telegram, Discord, Slack, WhatsApp, Signal, IRC (built-in adapters)
-- **Extension channels**: Matrix, WeChat, Feishu, LINE, MS Teams, Google Chat (plugin-based)
-- **Each extension**: `anyclaw.extension.json` manifest + standalone Go adapter
-- **Communication**: stdin/stdout JSON protocol for external process plugins
-- **Polling model**: Most channels use configurable polling intervals
+建议边界：
 
-### 5. Plugin System (`pkg/plugin/`)
+- 只做展示、交互编排、调用 API
+- 不直接持有 Agent 业务逻辑
+- 所有核心状态应从 Gateway 或 runtime 派生
 
-Manifest-driven, process-isolated plugins:
-- **Plugin kinds**: tool, channel, app, node, surface, ingress
-- **Execution**: External processes with `ANYCLAW_PLUGIN_INPUT` env var
-- **Trust system**: SHA-256 signature verification with trusted signers
-- **Permission model**: `tool:exec`, `fs:read`, `fs:write`, `net:out`
+### 3.2 运行时装配层
 
-### 6. Extension System (`pkg/extension/`)
+这一层是系统的“总装厂”，`pkg/runtime` 是当前最核心的装配中心。
 
-OpenClaw-style extension architecture:
-- **Discovery**: Scan `extensions/` directory for `anyclaw.extension.json` manifests
-- **Manifest**: ID, name, version, kind, channels, entrypoint, permissions, config schema
-- **Registry**: Load, enable/disable, list by kind
-- **Runtime**: External process execution with stdin/stdout JSON protocol
+职责包括：
 
-### 7. Skills (`pkg/skills/`)
+- 加载配置与 profile
+- 解析工作目录
+- 初始化 secrets / audit / memory / qmd
+- 加载 skills / tools / plugins
+- 创建 LLM client、Agent、Orchestrator
 
-Reusable capability packages:
-- **Format**: `skill.json` (metadata) + `SKILL.md` (human-readable)
-- **Execution**: External processes (Python, Node.js, shell, PowerShell)
-- **Tool registration**: Each skill registers as `skill_<name>` in tool registry
-- **System prompts**: Skills contribute prompt fragments
+建议边界：
 
-### 8. Memory (`pkg/memory/`)
+- `runtime` 只负责装配，不负责具体业务策略
+- `config` / `setup` / `workspace` / `bootstrap` 都应围绕启动与环境检查服务
+- 不把 HTTP、UI、渠道逻辑继续下沉到这里
 
-File-first memory with **hybrid search** (OpenClaw-style):
-- **FileMemory**: JSON files organized by type (conversation, reflection, fact)
-- **Daily markdown**: Conversations appended to `YYYY-MM-DD.md` files
-- **Hybrid search**: Keyword (TF-IDF) + provider-backed vector similarity + temporal decay
-- **MMR ranking**: Maximal Marginal Relevance for diverse results
-- **Temporal decay**: Exponential decay with configurable half-life (default 7 days)
+### 3.3 Agent 内核
 
-### 9. Hooks (`pkg/hooks/`)
+这一层是 AnyClaw 的“思考与执行核心”。
 
-Event-driven interceptors (OpenClaw-style):
-- **Message hooks**: `message:inbound`, `message:outbound`, `message:sent`
-- **Tool hooks**: `tool:call`, `tool:result`, `tool:error`
-- **Agent hooks**: `agent:start`, `agent:stop`, `agent:think`, `agent:error`
-- **Session hooks**: `session:create`, `session:close`, `session:message`
-- **Lifecycle hooks**: `gateway:start`, `gateway:stop`, `compaction:before/after`
-- **Middleware**: Composable middleware chain with timeout support
+核心职责：
 
-### 10. Config (`pkg/config/`)
+- `pkg/agent`: 单 Agent 执行、工具调用循环、上下文预算、偏好学习
+- `pkg/prompt`: prompt 组织与消息模型
+- `pkg/memory`: 本地记忆
+- `pkg/context-engine` / `pkg/context`: 上下文存取与检索
+- `pkg/llm` / `pkg/providers`: 模型客户端与流式调用
+- `pkg/embedding`: 嵌入模型能力
 
-Comprehensive configuration system:
-- **14 top-level sections**: LLM, Agent, Providers, Skills, Memory, Gateway, Daemon, Channels, Plugins, Sandbox, Security, Orchestrator
-- **Provider profiles**: Multiple LLM providers with capabilities
-- **Agent profiles**: Named profiles with personality specs
-- **Environment overrides**: `ANYCLAW_LLM_PROVIDER`, `ANYCLAW_LLM_API_KEY`, etc.
-- **Validation**: Config validation with error reporting
+建议边界：
 
-### 11. Tools (`pkg/tools/`)
+- 这一层不关心 HTTP、页面、渠道协议
+- 只暴露“输入消息 -> 执行 -> 输出结果”的能力
+- 工具、技能、插件通过接口注入，不反向依赖 Gateway
 
-Agent action layer with 25+ files:
-- **Registry**: Thread-safe tool registration with categories and access levels
-- **Builtin tools**: `read_file`, `write_file`, `list_directory`, `search_files`, `run_command`, web fetch, browser control
-- **Browser tools**: Chrome DevTools Protocol via `chromedp`
-- **Desktop tools**: UI automation, OCR, image matching, window management
-- **Policy engine**: Path-based access control and permission levels
-- **Sandbox**: Execution sandbox with local and Docker backends
+### 3.4 工具与执行平台
 
-### 12. Routing (`pkg/routing/`)
+这一层是 AnyClaw 从“会聊天”变成“能做事”的关键。
 
-LLM routing based on keyword matching:
-- **Reasoning route**: Complex/plan/code → reasoning provider
-- **Fast route**: Simple queries → fast provider
-- **Configuration**: Rules in `anyclaw.json` under `llm.routing`
+职责包括：
 
-## Initialization Flow
+- `pkg/tools`: 内置工具注册表，包含文件、命令、浏览器、桌面、审批、策略等
+- `pkg/clihub` / `pkg/cliadapter`: CLI-Anything 与本地 CLI 能力接入
+- `pkg/cdp`: 浏览器自动化
+- `pkg/vision` / `pkg/media`: 图像、视频、音频处理与理解
+- `pkg/canvas`: UI/画布输出
+- `pkg/qmd`: 轻量结构化数据服务
+- `pkg/isolation`: 隔离与共享边界
 
-```
-main()
-  └── run()
-       └── switch command
-            ├── interactive: runRootCommand()
-            │    ├── ensureConfigOnboarded()
-            │    ├── config.Load()
-            │    ├── appRuntime.Bootstrap()
-            │    │    ├── Phase 1: Config
-            │    │    ├── Phase 2: Storage
-            │    │    ├── Phase 3: Security
-            │    │    ├── Phase 4: Skills
-            │    │    ├── Phase 5: Tools
-            │    │    ├── Phase 6: Plugins
-            │    │    ├── Phase 7: LLM
-            │    │    └── Phase 8: Agent
-            │    ├── rebindBuiltins()
-            │    └── runInteractive()
-            │
-            └── gateway: gatewayCLI.Start()
-                 ├── appRuntime.Bootstrap()
-                 ├── Gateway server init
-                 ├── Channel adapters start
-                 └── WebSocket + HTTP listeners
+建议边界：
+
+- 统一沉淀为“执行平台”
+- 所有可调用能力都通过 registry 暴露
+- 审批、策略、沙箱都应该在这一层闭环
+
+### 3.5 编排与任务流
+
+这一层负责把“一个请求”变成“可分解、可追踪、可恢复的执行过程”。
+
+职责包括：
+
+- `pkg/orchestrator`: 多 Agent 分解与协作
+- `pkg/task`: 任务模型
+- `pkg/workflow`: 图工作流、触发器、执行上下文
+- `pkg/cron`: 定时任务
+- `pkg/routing`: 请求路由和低 token 路径优化
+- `pkg/gateway/tasks.go` / `pkg/gateway/runtimes.go`: 当前任务执行与 runtime pool 也承担了这层职责
+
+建议边界：
+
+- 任务规划、执行、恢复、调度应统一归属这里
+- 不建议长期把任务核心逻辑继续散落在 `pkg/gateway`
+- `gateway` 更适合作为入口，不适合作为任务域中心
+
+### 3.6 接入网关与会话层
+
+这一层负责“系统如何接住外部请求并把结果送回去”。
+
+职责包括：
+
+- `pkg/gateway`: HTTP/WS API、状态聚合、审批接口、市场接口、OpenAI 兼容接口
+- `pkg/chat` / `pkg/reply`: 聊天与回复分发
+- `pkg/session` / `pkg/gateway/session`: 会话抽象
+- `pkg/channel` / `pkg/channels`: 渠道适配、Mention Gate、Pairing、Presence、Policy
+- `pkg/remote` / `pkg/discovery`: 远程接入与发现
+
+建议边界：
+
+- Gateway 负责协议适配、鉴权、状态聚合
+- 会话和渠道模型应从 Gateway 内部逐步抽到独立子域
+- 所有外部入口都先落到这一层，再进入任务或 Agent 内核
+
+### 3.7 扩展生态层
+
+这一层负责让 AnyClaw 可持续扩展，而不是靠修改核心代码加能力。
+
+职责包括：
+
+- `pkg/skills`: 技能定义、加载、工具注册
+- `pkg/plugin`: 插件 manifest、加载、签名、市场、MCP bridge、App 插件
+- `pkg/mcp`: MCP client/server/registry
+- `pkg/agentstore`: Agent 包安装与市场
+- `pkg/extension`: 兼容 `extensions/` 目录的扩展体系
+
+建议边界：
+
+- Skill / Plugin / MCP / Agent Store 应被视为同一个“扩展平台”的不同形态
+- 统一权限、签名、安装、生命周期规则
+- 新能力优先走扩展入口，而不是直接塞入 core
+
+### 3.8 应用自动化与设备协同
+
+这一层是 AnyClaw 面向桌面应用、节点设备、绑定关系的能力域。
+
+职责包括：
+
+- `pkg/apps`: App binding、pairing、UI learning、desktop protocol、window monitor
+- `pkg/nodes` / `pkg/node`: 节点与设备协同
+- `pkg/pi`: 设备端 RPC/配对
+- `pkg/sdk`: 对外 SDK 类型
+
+建议边界：
+
+- 这是一条独立业务线，不建议继续散落到 tools / plugin / gateway
+- 未来如果要做“桌面执行平台”或“手机节点”能力，这一层会成为独立子系统
+
+### 3.9 平台基础设施与治理
+
+这一层提供通用底座，不应该反向依赖业务域。
+
+职责包括：
+
+- `pkg/security`, `pkg/secrets`, `pkg/audit`: 安全、密钥、审计
+- `pkg/observability`: health / metrics / tracing / pprof
+- `pkg/sqlite`, `pkg/vec`, `pkg/index`: 存储、向量、索引
+- `pkg/api`: 向量检索 API
+- `pkg/event`: 事件总线
+- `pkg/enterprise`: RBAC / SSO / compliance / encryption
+- `pkg/i18n`: 国际化基础
+
+建议边界：
+
+- 只提供通用能力
+- 不持有上层产品状态
+- 被 runtime、gateway、agent、tools 等复用
+
+## 4. 建议的依赖方向
+
+建议把依赖关系收敛成下面这条单向链路：
+
+```text
+客户端与展示层
+  -> 接入网关与会话层
+  -> 编排与任务流
+  -> Agent 内核
+  -> 工具与执行平台 / 扩展生态层 / 应用自动化与设备协同
+  -> 平台基础设施与治理
 ```
 
-## Design Patterns
+具体规则：
 
-| Pattern | Where Used |
-|---------|-----------|
-| Phase-Based Bootstrap | `runtime.Bootstrap()` - 9 ordered phases |
-| Publish-Subscribe | `event.EventBus` - decoupled component communication |
-| Registry | `tools.Registry`, `plugin.Registry`, `extension.Registry` |
-| Plugin Architecture | Manifest-driven, process-isolated plugins |
-| Extension Architecture | OpenClaw-style `extensions/` with manifests |
-| Strategy | Config validators/migrators, LLM providers |
-| File-First Storage | Memory as JSON files + daily markdown |
-| Evidence-Based Execution | Agent inspect→execute→verify loops |
-| Hierarchical Resources | Org → Project → Workspace |
-| Hook System | Message/tool/agent lifecycle interceptors |
-| Middleware Chain | Hooks with composable middleware |
-| Hybrid Search | Keyword + vector + temporal decay + MMR |
+1. `runtime` 只做装配，不承载具体业务逻辑。
+2. `gateway` 只做入口、鉴权、聚合、状态外发，不吞并任务域和会话域。
+3. `agent` 不直接依赖 UI、Gateway handler、前端页面。
+4. `tools` 不依赖 `gateway`；审批和策略通过 hook / interface 注入。
+5. `skills` / `plugins` 依赖工具契约，不依赖具体 HTTP 实现。
+6. `memory` / `embedding` / `vec` / `sqlite` 必须处在低层，避免反向引用上层业务。
 
-## Differences from OpenClaw
+## 5. 当前源码里最需要收口的重叠区
 
-| Aspect | AnyClaw (Go) | OpenClaw (TypeScript) |
-|--------|-------------|----------------------|
-| Language | Go (compiled, single binary) | TypeScript (Node.js runtime) |
-| Module System | Go packages (`pkg/`) | pnpm workspaces (packages, extensions) |
-| Plugin Loading | External process (stdin/stdout JSON) | jiti runtime transpilation |
-| Distribution | Single static binary | npm package |
-| Concurrency | Goroutines + channels | Async/await + event emitters |
-| Memory | File-first JSON + markdown | SQLite + sqlite-vec + LanceDB |
-| Build | `go build` | `tsdown` bundler + Vite |
-| Channels | Built-in + extension processes | Extension packages (44+) |
-| UI | Embedded dashboard + Lit SPA | Lit SPA served by gateway |
-| Native Apps | Not yet | Android, iOS, macOS apps |
+下面这些地方说明当前代码已经出现“功能上属于一个模块，但代码上分散或重名”的情况，后续重构建议优先处理。
 
-## Supported Channels
+### 5.1 `pkg/channel` 与 `pkg/channels`
 
-| Channel | Status | Type |
-|---------|--------|------|
-| Telegram | ✅ Built-in | Polling |
-| Discord | ✅ Built-in | Polling + Webhook |
-| Slack | ✅ Built-in | Polling |
-| WhatsApp | ✅ Built-in | Webhook |
-| Signal | ✅ Built-in | Polling (signal-cli) |
-| IRC | ✅ Built-in | Persistent connection |
-| Matrix | 📦 Extension | Polling |
-| WeChat | 📦 Extension | Webhook |
-| Feishu/Lark | 📦 Extension | Webhook |
-| LINE | 📦 Extension | Webhook |
-| MS Teams | 📦 Extension | Webhook |
-| Google Chat | 📦 Extension | Webhook |
+现状：
 
-## Getting Started
+- `pkg/channel` 只是对 `pkg/channels` 的兼容 re-export
+- 实际实现都在 `pkg/channels`
 
-```bash
-# Build
-go build -o anyclaw ./cmd/anyclaw
+建议：
 
-# Setup
-./anyclaw --setup
+- 保留一个正式入口
+- 逐步清理旧 import path
+- 对外只保留 `channel` 或 `channels` 其中一个
 
-# Interactive mode
-./anyclaw -i
+### 5.2 `pkg/agent` 与 `pkg/agents`
 
-# Gateway mode
-./anyclaw gateway start
-```
+现状：
 
-## Configuration
+- `pkg/agent` 是当前真正的执行内核
+- `pkg/agents` 更像早期简化版 Agent 管理器
 
-Runtime configuration is stored in `anyclaw.json`:
+建议：
 
-```json
-{
-  "llm": {
-    "provider": "openai",
-    "model": "gpt-4",
-    "api_key": "sk-..."
-  },
-  "channels": {
-    "telegram": {
-      "enabled": true,
-      "bot_token": "...",
-      "poll_every": 3
-    }
-  },
-  "memory": {
-    "backend": "file"
-  },
-  "gateway": {
-    "port": 18789
-  }
-}
-```
+- 将 `pkg/agents` 视为 legacy
+- 能迁移就迁移到 `pkg/agent` / `pkg/orchestrator`
 
-## Version
+### 5.3 `pkg/context` 与 `pkg/context-engine`
 
-`2026.3.13`
+现状：
+
+- 两者都在处理“上下文”
+- 一个偏检索引擎接口，一个偏短生命周期上下文容器
+
+建议：
+
+- 明确拆成 `contextstore` 与 `retrieval` 两个概念，或者统一到同一子域下
+- 避免名称上继续并列造成误解
+
+### 5.4 `pkg/llm` 与 `pkg/providers`
+
+现状：
+
+- 两个目录都在承载模型调用能力
+- `pkg/providers` 甚至仍使用 `package llm`，理解成本很高
+
+建议：
+
+- 合并为一个模型访问层
+- 统一 provider adapter、wrapper、failover、multimodal 能力
+
+### 5.5 Session 相关实现分散
+
+现状：
+
+- `pkg/session`
+- `pkg/gateway/session`
+- `pkg/gateway/state.go` 内的 session/store 逻辑
+
+建议：
+
+- 抽成单独的会话子域
+- Gateway 只调用 session service，不自己长期持有完整实现
+
+### 5.6 扩展体系有三套概念
+
+现状：
+
+- `pkg/plugin`
+- `pkg/extension`
+- `pkg/agentstore`
+
+建议：
+
+- 统一为“扩展平台”
+- 区分清楚插件、扩展、Agent 包只是不同 artifact，不是三套独立平台
+
+### 5.7 对外 API 面不止一套
+
+现状：
+
+- `pkg/gateway`
+- `pkg/api`
+- `pkg/web`
+
+建议：
+
+- `gateway` 作为产品主 API
+- `api` 保留为专用向量检索服务或独立基础能力
+- `web` 若无明确演进方向，可并入工具层或标记为实验能力
+
+## 6. 如果要真正动代码，推荐的拆分优先级
+
+### 第一阶段：先收口命名和边界
+
+- 合并 `channel/channels`
+- 标记 `agents` 为 legacy
+- 理清 `context` / `context-engine`
+- 合并 `llm/providers`
+
+### 第二阶段：把领域从 Gateway 中抽出来
+
+- 把 session 管理抽成独立模块
+- 把 task/runtimes 从 `pkg/gateway` 抽成任务域服务
+- 让 Gateway 回到“协议入口”角色
+
+### 第三阶段：统一扩展平台
+
+- 技能、插件、MCP、Agent Store 统一抽象
+- 收敛权限、签名、安装、市场、生命周期
+
+### 第四阶段：把桌面执行链路独立出来
+
+- `apps` + `tools.desktop` + `vision/media` 形成独立执行子系统
+- 为后续桌面宠物、桌面自动化、宿主节点能力做准备
+
+## 7. 一句话结论
+
+AnyClaw 当前最合理的拆法，不是按 Go 包逐个拆，而是按下面这 9 个功能模块收口：
+
+1. 客户端与展示层
+2. 运行时装配层
+3. Agent 内核
+4. 工具与执行平台
+5. 编排与任务流
+6. 接入网关与会话层
+7. 扩展生态层
+8. 应用自动化与设备协同
+9. 平台基础设施与治理
+
+如果后续要继续重构代码，优先处理重名/重叠模块，再把 `gateway` 内部混合的任务、会话、运行时逻辑逐步抽出来，整体架构会清晰很多。

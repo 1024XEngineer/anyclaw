@@ -136,7 +136,7 @@ function StatusSwitch({
       aria-pressed={active}
       disabled={disabled}
       className={[
-        "relative flex h-8 w-14 items-center rounded-full p-1 transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60",
+        "relative flex h-8 w-14 shrink-0 items-center overflow-hidden rounded-full p-1 transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60",
         active ? "bg-[#111827]" : "bg-[#d7dbe3]",
       ].join(" ")}
       onClick={onToggle}
@@ -144,7 +144,7 @@ function StatusSwitch({
     >
       <span
         className={[
-          "h-6 w-6 rounded-full bg-white shadow-[0_3px_10px_rgba(15,23,42,0.18)] transition-transform duration-150",
+          "block h-6 w-6 rounded-full bg-white shadow-[0_3px_10px_rgba(15,23,42,0.18)] transition-transform duration-150",
           active ? "translate-x-6" : "translate-x-0",
         ].join(" ")}
       />
@@ -418,12 +418,12 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
 
               return (
                 <article key={skill.name} className="rounded-[28px] border border-[#eceff3] bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.04)]">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex min-w-0 items-start gap-4">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex min-w-0 flex-1 items-start gap-4">
                       <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-[linear-gradient(145deg,#e3f0ff,#cfe2ff)] text-[#2563eb]">
                         <Sparkles size={22} strokeWidth={2.1} />
                       </span>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="text-[20px] font-semibold tracking-[-0.03em] text-[#111827]">{skill.name}</div>
                         <div className="mt-1 text-sm text-[#667085]">{skill.description}</div>
                       </div>
@@ -445,9 +445,9 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                       {enabled ? "已加载" : "本地识别"}
                     </span>
                     {skill.version ? (
-                      <span className="rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">{skill.version}</span>
+                      <span className="whitespace-nowrap rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">{skill.version}</span>
                     ) : null}
-                    <span className="rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">
+                    <span className="whitespace-nowrap rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">
                       {skill.registry || skill.source || "local"}
                     </span>
                   </div>
@@ -510,12 +510,12 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
 
               return (
                 <article key={agent.name} className="rounded-[28px] border border-[#eceff3] bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.04)]">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex min-w-0 items-start gap-4">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex min-w-0 flex-1 items-start gap-4">
                       <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-[linear-gradient(145deg,#ffe8d7,#ffd0b0)] text-[#f97316]">
                         <Bot size={22} strokeWidth={2.1} />
                       </span>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="text-[20px] font-semibold tracking-[-0.03em] text-[#111827]">{agent.name}</div>
                         <div className="mt-1 text-sm text-[#667085]">
                           {agent.role} · {agent.providerName}
@@ -536,9 +536,9 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
                   </div>
 
                   <div className="mt-5 flex flex-wrap gap-2">
-                    <span className="rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">{agent.status}</span>
-                    <span className="rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">{agent.skillsCount} skills</span>
-                    <span className="rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">{agent.permissionLevel}</span>
+                    <span className="whitespace-nowrap rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">{agent.status}</span>
+                    <span className="whitespace-nowrap rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">{agent.skillsCount} skills</span>
+                    <span className="whitespace-nowrap rounded-full bg-[#f4f5f7] px-3 py-1.5 text-xs text-[#667085]">{agent.permissionLevel}</span>
                   </div>
                 </article>
               );

@@ -78,6 +78,7 @@ type App struct {
 	Plugins        *plugin.Registry
 	Audit          *audit.Logger
 	Orchestrator   *orchestrator.Orchestrator
+	Delegation     *DelegationService
 	QMD            *qmd.Client
 	SecretsManager *secrets.ActivationManager
 	SecretsStore   *secrets.Store
@@ -508,7 +509,12 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 				progress(BootEvent{Phase: PhaseOrchestrator, Status: "warn", Message: fmt.Sprintf("orchestrator init failed: %v; running in single-agent mode", err), Dur: 0})
 			} else {
 				app.Orchestrator = orch
-				progress(BootEvent{Phase: PhaseOrchestrator, Status: "ok", Message: fmt.Sprintf("multi-agent orchestrator enabled (%d agents)", len(orchCfg.AgentDefinitions)), Dur: time.Since(t)})
+				registerDelegationTool(app)
+				if warnings := orch.InitWarnings(); len(warnings) > 0 {
+					progress(BootEvent{Phase: PhaseOrchestrator, Status: "warn", Message: fmt.Sprintf("multi-agent orchestrator enabled with %d active agent(s); warnings: %s", orch.AgentCount(), strings.Join(warnings, "; ")), Dur: time.Since(t)})
+				} else {
+					progress(BootEvent{Phase: PhaseOrchestrator, Status: "ok", Message: fmt.Sprintf("multi-agent orchestrator enabled (%d agents)", len(orchCfg.AgentDefinitions)), Dur: time.Since(t)})
+				}
 			}
 		} else {
 			progress(BootEvent{Phase: PhaseOrchestrator, Status: "warn", Message: "orchestrator enabled but no agent definitions found", Dur: 0})

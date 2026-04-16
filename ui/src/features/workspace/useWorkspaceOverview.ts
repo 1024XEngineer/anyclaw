@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { workspaceSnapshot } from "@/generated/workspaceSnapshot.generated";
+import { normalizeSkillDescription } from "@/features/workspace/skillDescription";
 
 export type AgentRecord = {
   active: boolean;
@@ -396,7 +397,7 @@ function buildSkillRecords(live: LivePayload): SkillRecord[] {
       const liveSkill = liveMap.get(skill.name);
 
       return {
-        description: compactText(
+        description: normalizeSkillDescription(
           liveSkill?.description?.trim() || skill.description,
           `${skill.name} 已经存在于本地技能目录中。`,
         ),

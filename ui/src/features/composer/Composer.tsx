@@ -106,7 +106,7 @@ export function Composer({
 
             <div className="flex items-center justify-between gap-4">
               <span className="text-xs text-[#98a2b3]">
-                {setupRequired ? "先配置模型供应商，再开始当前会话" : isSending ? "正在思考..." : "Enter 发送 · Shift + Enter 换行"}
+                {setupRequired ? "先配置模型提供商，再开始当前会话" : isSending ? "正在思考..." : "Enter 发送 · Shift + Enter 换行"}
               </span>
 
               <button
@@ -125,8 +125,6 @@ export function Composer({
             </div>
           </div>
         </div>
-
-        <div className="mt-2.5 text-center text-xs text-[#b1b8c6]">内容由 AI 生成，请仔细甄别</div>
       </div>
     </section>
   );

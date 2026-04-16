@@ -64,7 +64,7 @@ export function MarketPage() {
         {selectedEntry.chips.length > 0 ? (
           <div className="mt-4 flex flex-wrap gap-2">
             {selectedEntry.chips.map((chip) => (
-              <span key={chip} className="rounded-[10px] bg-[#f5f7fb] px-2.5 py-1.5 text-xs text-[#5b6f8b]">
+              <span key={chip} className="whitespace-nowrap rounded-[10px] bg-[#f5f7fb] px-2.5 py-1.5 text-xs text-[#5b6f8b]">
                 {chip}
               </span>
             ))}
@@ -176,8 +176,8 @@ export function MarketPage() {
 
             <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
               <div className="overflow-hidden rounded-[18px] border border-skin bg-white">
-                <div className="hidden border-b border-skin bg-[#fafbfd] px-5 py-3 lg:block">
-                  <div className="grid gap-4 text-xs font-medium uppercase tracking-[0.18em] text-[#98a2b3] lg:grid-cols-[minmax(0,1.7fr)_220px_160px]">
+                <div className="hidden border-b border-skin bg-[#fafbfd] px-5 py-3 xl:block">
+                  <div className="grid gap-4 text-xs font-medium uppercase tracking-[0.18em] text-[#98a2b3] xl:grid-cols-[minmax(0,2.2fr)_minmax(160px,0.95fr)_minmax(120px,0.7fr)]">
                     <div>目录条目</div>
                     <div>来源</div>
                     <div className="text-right">状态</div>
@@ -201,7 +201,7 @@ export function MarketPage() {
                           role="button"
                           tabIndex={0}
                         >
-                          <div className="grid gap-4 px-4 py-4 lg:grid-cols-[minmax(0,1.7fr)_220px_160px] lg:px-5">
+                          <div className="grid gap-4 px-4 py-4 xl:grid-cols-[minmax(0,2.2fr)_minmax(160px,0.95fr)_minmax(120px,0.7fr)] lg:px-5">
                             <div className="min-w-0">
                               <div className="flex items-start gap-4">
                                 <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[#f3f6fb] text-[#607699]">
@@ -213,13 +213,13 @@ export function MarketPage() {
                                       {entry.name}
                                     </h3>
                                   </div>
-                                  <p className="mt-2 text-sm leading-7 text-mute">{entry.summary}</p>
+                                  <p className="mt-2 max-w-[58ch] text-sm leading-7 text-mute">{entry.summary}</p>
                                   {entry.chips.length > 0 ? (
                                     <div className="mt-3 flex flex-wrap gap-2">
                                       {entry.chips.map((chip) => (
                                         <span
                                           key={chip}
-                                          className="rounded-[10px] bg-[#f5f7fb] px-2.5 py-1.5 text-xs text-[#5b6f8b]"
+                                          className="whitespace-nowrap rounded-[10px] bg-[#f5f7fb] px-2.5 py-1.5 text-xs text-[#5b6f8b]"
                                         >
                                           {chip}
                                         </span>
@@ -230,11 +230,11 @@ export function MarketPage() {
                               </div>
                             </div>
 
-                            <div className="flex items-start pl-14 text-sm text-[#607699] lg:pl-0">
+                            <div className="flex items-start pl-14 text-sm text-[#607699] xl:pl-0">
                               {entry.owner}
                             </div>
 
-                            <div className="flex items-start pl-14 lg:justify-end lg:pl-0">
+                            <div className="flex items-start pl-14 xl:justify-end xl:pl-0">
                               <StatusBadge label={entry.status} tone={getStatusTone(entry.status)} />
                             </div>
                           </div>
@@ -261,7 +261,7 @@ export function MarketPage() {
                                     {entry.chips.map((chip) => (
                                       <span
                                         key={chip}
-                                        className="rounded-[10px] bg-[#f5f7fb] px-2.5 py-1.5 text-xs text-[#5b6f8b]"
+                                        className="whitespace-nowrap rounded-[10px] bg-[#f5f7fb] px-2.5 py-1.5 text-xs text-[#5b6f8b]"
                                       >
                                         {chip}
                                       </span>
@@ -311,8 +311,8 @@ export function MarketPage() {
 
           {cloudPanels.length > 0 ? (
             <div className="mt-5 overflow-hidden rounded-[18px] border border-dashed border-[#dbe4f0] bg-white">
-              <div className="hidden border-b border-skin bg-[#fafbfd] px-5 py-3 lg:block">
-                <div className="grid gap-4 text-xs font-medium uppercase tracking-[0.18em] text-[#98a2b3] lg:grid-cols-[minmax(0,1.5fr)_140px]">
+              <div className="hidden border-b border-skin bg-[#fafbfd] px-5 py-3 xl:block">
+                <div className="grid gap-4 text-xs font-medium uppercase tracking-[0.18em] text-[#98a2b3] xl:grid-cols-[minmax(0,1.7fr)_140px]">
                   <div>目录条目</div>
                   <div className="text-right">状态</div>
                 </div>
@@ -320,7 +320,7 @@ export function MarketPage() {
 
               {cloudPanels.map((panel) => (
                 <article key={panel.title} className="border-b border-skin px-4 py-4 last:border-b-0 lg:px-5">
-                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_140px]">
+                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_140px]">
                     <div className="min-w-0">
                       <div className="flex items-start gap-4">
                         <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[#f3f6fb] text-[#607699]">
@@ -328,12 +328,12 @@ export function MarketPage() {
                         </span>
                         <div className="min-w-0 flex-1">
                           <h3 className="text-[18px] font-semibold tracking-[-0.02em] text-ink">{panel.title}</h3>
-                          <p className="mt-2 text-sm leading-7 text-mute">{panel.summary}</p>
+                          <p className="mt-2 max-w-[58ch] text-sm leading-7 text-mute">{panel.summary}</p>
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex items-start pl-14 lg:justify-end lg:pl-0">
+                    <div className="flex items-start pl-14 xl:justify-end xl:pl-0">
                       <StatusBadge label={panel.status} tone={getStatusTone(panel.status)} />
                     </div>
                   </div>

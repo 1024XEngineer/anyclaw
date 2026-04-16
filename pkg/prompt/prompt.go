@@ -227,6 +227,7 @@ func (b *SystemPromptBuilder) buildOperatingMode(data PromptData) string {
 
 	if len(catalog.BrowserTools) > 0 {
 		lines = append(lines, fmt.Sprintf("2. For web apps, prefer browser tools over desktop clicking when the same task can be completed in the browser: %s.", formatToolNameList(catalog.BrowserTools, 6)))
+		lines = append(lines, "- Important: browser tools are for browser automation sessions. When the user explicitly wants a visible browser window or asks to open a URL on the desktop, prefer desktop_open instead of browser_navigate.")
 		hasSpecificOrder = true
 	}
 
@@ -256,6 +257,7 @@ func (b *SystemPromptBuilder) buildOperatingMode(data PromptData) string {
 	lines = append(lines,
 		"Approval and recovery:",
 		"- When approvals are required, prepare a concise action plan, request approval, and resume execution after approval instead of abandoning the task.",
+		"- If the user already explicitly requested a local action and the tool approval prompt will capture consent, do not ask an extra conversational confirmation unless some detail is genuinely ambiguous.",
 		"- If a step fails or the observed state does not match the goal, retry with a more reliable selector, a higher-level workflow, or a different tactic before falling back to raw mouse and keyboard actions.",
 		"- When a task needs a multi-step local app procedure, you may emit a structured anyclaw.app.desktop.v1 plan instead of narrating raw step-by-step instructions.",
 		"- Prefer completing the requested deliverable and reporting what changed, what was verified, and what remains blocked or unverified.",
