@@ -135,7 +135,7 @@ func (s *Server) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Requ
 
 	// Non-streaming: use Chat method
 	ctx := r.Context()
-	response, err := targetApp.LLM.Chat(ctx, llmMessages, toolDefs)
+	response, err := targetApp.Chat(ctx, llmMessages, toolDefs)
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, err.Error(), "internal_error")
 		return
@@ -212,7 +212,7 @@ func (s *Server) handleOpenAIStream(w http.ResponseWriter, r *http.Request, targ
 	// Stream content
 	var fullContent strings.Builder
 
-	err := targetApp.LLM.StreamChat(ctx, messages, toolDefs, func(chunk string) {
+	err := targetApp.StreamChat(ctx, messages, toolDefs, func(chunk string) {
 		select {
 		case <-ctx.Done():
 			return
@@ -474,7 +474,7 @@ func (s *Server) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Non-streaming
-	response, err := targetApp.LLM.Chat(ctx, messages, toolDefs)
+	response, err := targetApp.Chat(ctx, messages, toolDefs)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -543,7 +543,7 @@ func (s *Server) handleOpenAIResponseStream(w http.ResponseWriter, r *http.Reque
 
 	// Stream output
 	var content strings.Builder
-	err := targetApp.LLM.StreamChat(ctx, messages, toolDefs, func(chunk string) {
+	err := targetApp.StreamChat(ctx, messages, toolDefs, func(chunk string) {
 		select {
 		case <-ctx.Done():
 			return

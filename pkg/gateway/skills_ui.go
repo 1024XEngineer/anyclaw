@@ -82,10 +82,10 @@ func (s *Server) currentConfiguredSkillRefs() []config.AgentSkillRef {
 func (s *Server) currentEnabledSkillCount() int {
 	refs := s.currentConfiguredSkillRefs()
 	if len(refs) == 0 {
-		if s == nil || s.app == nil || s.app.Agent == nil {
+		if s == nil || s.app == nil {
 			return 0
 		}
-		return len(s.app.Agent.ListSkills())
+		return len(s.app.ListSkills())
 	}
 	count := 0
 	seen := make(map[string]struct{}, len(refs))

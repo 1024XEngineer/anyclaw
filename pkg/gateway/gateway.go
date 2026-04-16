@@ -24,7 +24,6 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/config"
 	"github.com/anyclaw/anyclaw/pkg/cron"
 	"github.com/anyclaw/anyclaw/pkg/discovery"
-	"github.com/anyclaw/anyclaw/pkg/llm"
 	"github.com/anyclaw/anyclaw/pkg/mcp"
 	"github.com/anyclaw/anyclaw/pkg/observability"
 	"github.com/anyclaw/anyclaw/pkg/plugin"
@@ -32,22 +31,9 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/runtime"
 	"github.com/anyclaw/anyclaw/pkg/speech"
 	taskModule "github.com/anyclaw/anyclaw/pkg/task"
-	"github.com/anyclaw/anyclaw/pkg/tools"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
-
-type llmPlannerAdapter struct {
-	client *llm.ClientWrapper
-}
-
-func (a *llmPlannerAdapter) Chat(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition) (*llm.Response, error) {
-	return a.client.Chat(ctx, messages, tools)
-}
-
-func (a *llmPlannerAdapter) Name() string {
-	return "llm-planner"
-}
 
 type Server struct {
 	app            *runtime.App
@@ -137,12 +123,12 @@ func New(app *runtime.App) *Server {
 	server := &Server{
 		app:            app,
 		store:          store,
-		sessions:       NewSessionManager(store, app.Agent),
+		sessions:       NewSessionManager(store, app),
 		bus:            NewBus(),
 		runtimePool:    NewRuntimePool(app.ConfigPath, store, app.Config.Gateway.RuntimeMaxInstances, time.Duration(app.Config.Gateway.RuntimeIdleSeconds)*time.Second),
 		auth:           newAuthMiddleware(&app.Config.Security),
 		rateLimit:      newRateLimiter(&app.Config.Security),
-		plugins:        app.Plugins,
+		plugins:        app.PluginRegistry(),
 		telegram:       nil,
 		jobQueue:       make(chan func(), 64),
 		jobCancel:      map[string]bool{},
@@ -159,17 +145,17 @@ func New(app *runtime.App) *Server {
 	// Initialize routing layer for low-token path optimization
 	var router *routing.Router
 	var registry *plugin.Registry
-	if app.Plugins != nil {
-		registry = app.Plugins
+	if app.PluginRegistry() != nil {
+		registry = app.PluginRegistry()
 		cfg := config.DefaultConfig()
 		var planner routing.PlannerClient
-		if app.LLM != nil {
-			planner = &llmPlannerAdapter{client: app.LLM}
+		if app.HasLLM() {
+			planner = app
 		}
-		router = routing.NewRouter(app.Plugins, cfg, app.LLM, planner)
+		router = routing.NewRouter(app.PluginRegistry(), cfg, app.LLMClient(), planner)
 	}
 
-	server.tasks = NewTaskManager(store, server.sessions, server.runtimePool, taskAppInfo{Name: app.Config.Agent.Name, WorkingDir: app.WorkingDir, ConfigPath: app.ConfigPath}, app.LLM, server.approvals, router, registry)
+	server.tasks = NewTaskManager(store, server.sessions, server.runtimePool, taskAppInfo{Name: app.Config.Agent.Name, WorkingDir: app.WorkingDir, ConfigPath: app.ConfigPath}, app, server.approvals, router, registry)
 
 	if sm, err := agentstore.NewStoreManager(app.WorkDir, app.ConfigPath); err == nil {
 		server.storeModule = sm
@@ -1198,7 +1184,7 @@ func (s *Server) ensureChannelSession(source string, sessionID string, decision 
 	return sessionID, nil
 }
 
-func (s *Server) prepareChannelExecution(ctx context.Context, source string, sessionID string, message string, decision channel.RouteDecision, meta map[string]string, streaming bool) (*Session, *runtime.App, context.Context, error) {
+func (s *Server) prepareChannelExecution(source string, sessionID string, message string, decision channel.RouteDecision, meta map[string]string, streaming bool) (*Session, *runtime.App, error) {
 	if _, err := s.sessions.EnqueueTurn(sessionID); err == nil {
 		s.appendEvent("session.queue.updated", sessionID, map[string]any{
 			"queue_mode":   decision.QueueMode,
@@ -1242,24 +1228,20 @@ func (s *Server) prepareChannelExecution(ctx context.Context, source string, ses
 
 	session, ok := s.sessions.Get(sessionID)
 	if !ok {
-		return nil, nil, nil, fmt.Errorf("session not found: %s", sessionID)
+		return nil, nil, fmt.Errorf("session not found: %s", sessionID)
 	}
 	if s.runtimePool == nil {
-		return nil, nil, nil, fmt.Errorf("runtime pool not initialized")
+		return nil, nil, fmt.Errorf("runtime pool not initialized")
 	}
 
 	targetApp, err := s.runtimePool.GetOrCreate(session.Agent, session.Org, session.Project, session.Workspace)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	targetApp.Agent.SetHistory(session.History)
-
-	execCtx := tools.WithBrowserSession(ctx, sessionID)
-	execCtx = tools.WithSandboxScope(execCtx, tools.SandboxScope{SessionID: sessionID, Channel: source})
-	return session, targetApp, execCtx, nil
+	return session, targetApp, nil
 }
 
-func (s *Server) finalizeChannelExecution(sessionID string, source string, message string, response string, meta map[string]string, targetApp *runtime.App, streaming bool) (*Session, error) {
+func (s *Server) finalizeChannelExecution(sessionID string, source string, message string, response string, meta map[string]string, activities []agent.ToolActivity, streaming bool) (*Session, error) {
 	updatedSession, err := s.sessions.AddExchange(sessionID, message, response)
 	if err != nil {
 		return nil, err
@@ -1279,8 +1261,8 @@ func (s *Server) finalizeChannelExecution(sessionID string, source string, messa
 		})
 	}
 
-	if targetApp != nil {
-		s.recordSessionToolActivities(updatedSession, targetApp.Agent.GetLastToolActivities())
+	if len(activities) > 0 {
+		s.recordSessionToolActivities(updatedSession, activities)
 	}
 
 	completedPayload := channelMetaPayload(map[string]any{
@@ -1328,15 +1310,27 @@ func (s *Server) runOrCreateChannelSession(ctx context.Context, source string, s
 	if err != nil {
 		return "", nil, err
 	}
-	_, targetApp, execCtx, err := s.prepareChannelExecution(ctx, source, sessionID, message, decision, meta, false)
+	session, targetApp, err := s.prepareChannelExecution(source, sessionID, message, decision, meta, false)
 	if err != nil {
 		return "", nil, err
 	}
-	response, err := targetApp.Agent.Run(execCtx, message)
+	execResult, err := targetApp.Execute(ctx, runtime.ExecutionRequest{
+		Input:          message,
+		History:        session.History,
+		ReplaceHistory: true,
+		SessionID:      sessionID,
+		Channel:        source,
+	})
+	response := ""
+	activities := []agent.ToolActivity(nil)
+	if execResult != nil {
+		response = execResult.Output
+		activities = execResult.ToolActivities
+	}
 	if err != nil {
 		return "", nil, err
 	}
-	updatedSession, err := s.finalizeChannelExecution(sessionID, source, message, response, meta, targetApp, false)
+	updatedSession, err := s.finalizeChannelExecution(sessionID, source, message, response, meta, activities, false)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1349,22 +1343,31 @@ func (s *Server) runOrCreateChannelSessionStream(ctx context.Context, source str
 	if err != nil {
 		return "", nil, err
 	}
-	_, targetApp, execCtx, err := s.prepareChannelExecution(ctx, source, sessionID, message, decision, meta, true)
+	session, targetApp, err := s.prepareChannelExecution(source, sessionID, message, decision, meta, true)
 	if err != nil {
 		return "", nil, err
 	}
 
-	var responseText strings.Builder
-	err = targetApp.Agent.RunStream(execCtx, message, func(chunk string) {
-		responseText.WriteString(chunk)
+	execResult, err := targetApp.Stream(ctx, runtime.ExecutionRequest{
+		Input:          message,
+		History:        session.History,
+		ReplaceHistory: true,
+		SessionID:      sessionID,
+		Channel:        source,
+	}, func(chunk string) {
 		onChunk(chunk)
 	})
+	response := ""
+	activities := []agent.ToolActivity(nil)
+	if execResult != nil {
+		response = execResult.Output
+		activities = execResult.ToolActivities
+	}
 	if err != nil {
 		return "", nil, err
 	}
 
-	response := responseText.String()
-	updatedSession, err := s.finalizeChannelExecution(sessionID, source, message, response, meta, targetApp, true)
+	updatedSession, err := s.finalizeChannelExecution(sessionID, source, message, response, meta, activities, true)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1493,7 +1496,7 @@ func (s *Server) status() Status {
 		Sessions:   len(s.store.ListSessions()),
 		Events:     len(s.store.ListEvents(0)),
 		Skills:     s.currentEnabledSkillCount(),
-		Tools:      len(s.app.Agent.ListTools()),
+		Tools:      len(s.app.ListTools()),
 		Secured:    secured,
 		Users:      len(s.app.Config.Security.Users),
 	}
@@ -1655,7 +1658,7 @@ func (s *Server) GatewayStatus() GatewayStatus {
 			Uptime:        time.Since(s.startedAt).Round(time.Second).String(),
 			ChannelsUp:    channelsUp,
 			ChannelsTotal: len(channelStatuses),
-			LLMConnected:  s.app.LLM != nil,
+			LLMConnected:  s.app.HasLLM(),
 		},
 		Presence: PresenceStatus{
 			ActiveUsers: len(activeUsers),
@@ -2189,15 +2192,11 @@ func (s *Server) recordTaskCompletion(result *TaskExecutionResult, source string
 		return
 	}
 	s.appendEvent("task.completed", result.Session.ID, map[string]any{"task_id": result.Task.ID, "status": result.Task.Status, "source": source})
-	app, getErr := s.runtimePool.GetOrCreate(result.Task.Assistant, result.Task.Org, result.Task.Project, result.Task.Workspace)
-	if getErr != nil {
-		return
-	}
 	freshSession, ok := s.sessions.Get(result.Session.ID)
 	if !ok {
 		return
 	}
-	s.recordSessionToolActivities(freshSession, app.Agent.GetLastToolActivities())
+	s.recordSessionToolActivities(freshSession, result.ToolActivities)
 }
 
 func (s *Server) runSessionMessage(ctx context.Context, sessionID string, title string, message string) (string, *Session, error) {
@@ -2232,7 +2231,6 @@ func (s *Server) runSessionMessageWithOptions(ctx context.Context, sessionID str
 	if err != nil {
 		return "", session, err
 	}
-	targetApp.Agent.SetHistory(session.History)
 	if response, updatedSession, handled, err := s.tryDirectDesktopOpenURL(ctx, session, targetApp, title, message, source); handled {
 		if err != nil {
 			if errors.Is(err, ErrTaskWaitingApproval) {
@@ -2244,11 +2242,21 @@ func (s *Server) runSessionMessageWithOptions(ctx context.Context, sessionID str
 		}
 		return response, updatedSession, nil
 	}
-	execCtx := tools.WithBrowserSession(ctx, sessionID)
-	execCtx = tools.WithSandboxScope(execCtx, tools.SandboxScope{SessionID: sessionID, Channel: "api"})
-	execCtx = agent.WithToolApprovalHook(execCtx, s.sessionToolApprovalHook(session, targetApp.Config, title, message, source))
-	execCtx = tools.WithToolApprovalHook(execCtx, s.sessionProtocolApprovalHook(session, targetApp.Config, title, message, source))
-	response, err := targetApp.Agent.Run(execCtx, message)
+	execResult, err := targetApp.Execute(ctx, runtime.ExecutionRequest{
+		Input:                message,
+		History:              session.History,
+		ReplaceHistory:       true,
+		SessionID:            sessionID,
+		Channel:              "api",
+		AgentApprovalHook:    s.sessionToolApprovalHook(session, targetApp.Config, title, message, source),
+		ProtocolApprovalHook: s.sessionProtocolApprovalHook(session, targetApp.Config, title, message, source),
+	})
+	response := ""
+	activities := []agent.ToolActivity(nil)
+	if execResult != nil {
+		response = execResult.Output
+		activities = execResult.ToolActivities
+	}
 	if err != nil {
 		if errors.Is(err, ErrTaskWaitingApproval) {
 			s.updateSessionApprovalPresence(sessionID, "")
@@ -2264,7 +2272,7 @@ func (s *Server) runSessionMessageWithOptions(ctx context.Context, sessionID str
 	if _, err := s.sessions.SetPresence(sessionID, "idle", false); err == nil {
 		s.appendEvent("session.presence", sessionID, map[string]any{"presence": "idle", "source": source})
 	}
-	s.recordSessionToolActivities(updatedSession, targetApp.Agent.GetLastToolActivities())
+	s.recordSessionToolActivities(updatedSession, activities)
 	s.appendEvent("chat.completed", sessionID, map[string]any{"message": message, "response_length": len(response), "source": source})
 	return response, updatedSession, nil
 	/*
@@ -2279,7 +2287,7 @@ func (s *Server) runSessionMessageWithOptions(ctx context.Context, sessionID str
 
 func (s *Server) tryDirectDesktopOpenURL(ctx context.Context, session *Session, targetApp *runtime.App, title string, message string, source string) (string, *Session, bool, error) {
 	targetURL, ok := directDesktopOpenTarget(message)
-	if !ok || session == nil || targetApp == nil || targetApp.Tools == nil {
+	if !ok || session == nil || targetApp == nil {
 		return "", nil, false, nil
 	}
 	input := map[string]any{
@@ -2289,7 +2297,7 @@ func (s *Server) tryDirectDesktopOpenURL(ctx context.Context, session *Session, 
 	if err := s.requireSessionToolApproval(session, title, message, source, "desktop_open", input); err != nil {
 		return "", session, true, err
 	}
-	result, err := targetApp.Tools.Call(ctx, "desktop_open", input)
+	result, err := targetApp.CallTool(ctx, "desktop_open", input)
 	if err != nil {
 		s.appendToolActivity(session.ID, ToolActivityRecord{
 			ToolName:  "desktop_open",
@@ -2336,7 +2344,7 @@ func directDesktopOpenTarget(message string) (string, bool) {
 		}
 	}
 	aliases := map[string]string{
-		"抖音":   "https://www.douyin.com/",
+		"抖音":     "https://www.douyin.com/",
 		"douyin": "https://www.douyin.com/",
 	}
 	for alias, target := range aliases {
@@ -2392,7 +2400,7 @@ func (s *Server) handleResolvedApproval(updated *Approval, approved bool, commen
 func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		mem, err := s.app.Agent.ShowMemory()
+		mem, err := s.app.ShowMemory()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -3619,7 +3627,7 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.app.Agent.ListTools())
+	writeJSON(w, http.StatusOK, s.app.ListTools())
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -4453,7 +4461,7 @@ func (s *Server) initMCP(ctx context.Context) {
 	}
 
 	if s.mcpRegistry != nil {
-		if err := mcp.BridgeToToolRegistry(s.app.Tools, s.mcpRegistry); err != nil {
+		if err := mcp.BridgeToToolRegistry(s.app.ToolRegistry(), s.mcpRegistry); err != nil {
 			fmt.Fprintf(os.Stderr, "MCP bridge: %v\n", err)
 		}
 	}

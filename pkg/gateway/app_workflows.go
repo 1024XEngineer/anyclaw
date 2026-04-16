@@ -84,7 +84,7 @@ func (s *Server) resolveAppWorkflowViews(ctx context.Context, query string, limi
 		}
 	}
 	if s.tasks != nil && s.app != nil {
-		matches = trimWorkflowMatches(s.tasks.resolveWorkflowMatches(ctx, query, s.plugins, s.app.LLM), limit)
+		matches = trimWorkflowMatches(s.tasks.resolveWorkflowMatches(ctx, query, s.plugins, s.app), limit)
 	}
 	items := make([]appWorkflowMatchView, 0, len(matches))
 	for _, match := range matches {

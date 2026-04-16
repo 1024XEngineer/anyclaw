@@ -322,10 +322,10 @@ func (c *openClawWSConn) handleRequest(ctx context.Context, frame openClawWSFram
 		if err := c.requirePermission("tools.read"); err != nil {
 			return err
 		}
-		if c.server.app == nil || c.server.app.Agent == nil {
+		if c.server.app == nil {
 			return c.writeResponse(frame.ID, true, []any{}, "")
 		}
-		return c.writeResponse(frame.ID, true, c.server.app.Agent.ListTools(), "")
+		return c.writeResponse(frame.ID, true, c.server.app.ListTools(), "")
 	case "plugins.list":
 		if err := c.requirePermission("plugins.read"); err != nil {
 			return err

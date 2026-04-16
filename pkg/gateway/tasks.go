@@ -17,6 +17,7 @@ import (
 	"github.com/anyclaw/anyclaw/pkg/plugin"
 	"github.com/anyclaw/anyclaw/pkg/prompt"
 	"github.com/anyclaw/anyclaw/pkg/routing"
+	"github.com/anyclaw/anyclaw/pkg/runtime"
 	"github.com/anyclaw/anyclaw/pkg/tools"
 )
 
@@ -55,8 +56,9 @@ type TaskCreateOptions struct {
 }
 
 type TaskExecutionResult struct {
-	Task    *Task
-	Session *Session
+	Task           *Task
+	Session        *Session
+	ToolActivities []agent.ToolActivity
 }
 
 type plannedStep struct {
@@ -325,7 +327,7 @@ func (m *TaskManager) Execute(ctx context.Context, taskID string) (*TaskExecutio
 		return nil, err
 	}
 
-	workflowMatches := m.resolveWorkflowMatches(ctx, task.Input, app.Plugins, app.LLM)
+	workflowMatches := m.resolveWorkflowMatches(ctx, task.Input, app.PluginRegistry(), app)
 	if len(workflowMatches) > 0 {
 		if alignedSteps, alignErr := m.adoptWorkflowMainPath(task, workflowMatches[0]); alignErr == nil {
 			steps = alignedSteps
@@ -387,13 +389,17 @@ func (m *TaskManager) Execute(ctx context.Context, taskID string) (*TaskExecutio
 	if stage.execute > 0 {
 		_ = m.setStepStatus(task.ID, stage.execute, "running", "", executionStageOutput(task, workflowMatches, nil), "")
 	}
-	app.Agent.SetHistory(m.historyWithWorkflowSuggestions(session.History, workflowMatches))
-	execCtx := tools.WithBrowserSession(ctx, session.ID)
-	execCtx = tools.WithSandboxScope(execCtx, tools.SandboxScope{SessionID: session.ID, Channel: "task"})
-	execCtx = agent.WithToolApprovalHook(execCtx, m.toolApprovalHook(task, session, app.Config))
-	execCtx = tools.WithToolApprovalHook(execCtx, m.protocolApprovalHook(task, session, app.Config))
+	req := runtime.ExecutionRequest{
+		Input:                task.Input,
+		History:              m.historyWithWorkflowSuggestions(session.History, workflowMatches),
+		ReplaceHistory:       true,
+		SessionID:            session.ID,
+		Channel:              "task",
+		AgentApprovalHook:    m.toolApprovalHook(task, session, app.Config),
+		ProtocolApprovalHook: m.protocolApprovalHook(task, session, app.Config),
+	}
 	if task.ExecutionState != nil && task.ExecutionState.DesktopPlan != nil {
-		execCtx = appstate.WithDesktopPlanResumeState(execCtx, task.ExecutionState.DesktopPlan)
+		req.DesktopPlanResumeState = task.ExecutionState.DesktopPlan
 		m.appendTaskEvidenceNoSave(task, TaskEvidence{
 			Kind:      "execution_resumed",
 			Summary:   "Task resumed from a saved desktop workflow checkpoint.",
@@ -409,12 +415,17 @@ func (m *TaskManager) Execute(ctx context.Context, taskID string) (*TaskExecutio
 		})
 		_ = m.persistTask(task)
 	}
-	execCtx = appstate.WithDesktopPlanStateHook(execCtx, m.desktopPlanStateHook(task))
-	response, err := app.Agent.Run(execCtx, task.Input)
+	req.DesktopPlanStateHook = m.desktopPlanStateHook(task)
+	execResult, err := app.Execute(ctx, req)
 	if freshTask, ok := m.store.GetTask(task.ID); ok && freshTask != nil {
 		task = freshTask
 	}
-	toolActivities := app.Agent.GetLastToolActivities()
+	toolActivities := []agent.ToolActivity(nil)
+	response := ""
+	if execResult != nil {
+		toolActivities = execResult.ToolActivities
+		response = execResult.Output
+	}
 	m.recordTaskToolActivitiesNoSave(task, toolActivities)
 	if len(toolActivities) > 0 {
 		_ = m.persistTask(task)
@@ -422,7 +433,7 @@ func (m *TaskManager) Execute(ctx context.Context, taskID string) (*TaskExecutio
 	if err != nil {
 		if errors.Is(err, ErrTaskWaitingApproval) {
 			m.updateSessionPresence(session.ID, "waiting_approval", false)
-			return &TaskExecutionResult{Task: task, Session: session}, err
+			return &TaskExecutionResult{Task: task, Session: session, ToolActivities: toolActivities}, err
 		}
 		m.updateSessionPresence(session.ID, "idle", false)
 		_ = m.failTask(task, err)
@@ -491,7 +502,7 @@ func (m *TaskManager) Execute(ctx context.Context, taskID string) (*TaskExecutio
 		return nil, err
 	}
 
-	return &TaskExecutionResult{Task: task, Session: updatedSession}, nil
+	return &TaskExecutionResult{Task: task, Session: updatedSession, ToolActivities: toolActivities}, nil
 }
 
 func (m *TaskManager) executionMode(task *Task) taskExecutionMode {

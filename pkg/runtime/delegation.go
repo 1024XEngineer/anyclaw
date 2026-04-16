@@ -4,30 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/orchestrator"
+	runtimedelegation "github.com/anyclaw/anyclaw/pkg/runtime/delegation"
 	"github.com/anyclaw/anyclaw/pkg/tools"
 )
 
-type DelegationRequest struct {
-	Task            string   `json:"task"`
-	AgentNames      []string `json:"agent_names,omitempty"`
-	Reason          string   `json:"reason,omitempty"`
-	SuccessCriteria string   `json:"success_criteria,omitempty"`
-	UserContext     string   `json:"user_context,omitempty"`
-}
-
-type DelegationResult struct {
-	Status          string                 `json:"status"`
-	TaskID          string                 `json:"task_id,omitempty"`
-	DelegationBrief string                 `json:"delegation_brief"`
-	SelectedAgents  []string               `json:"selected_agents,omitempty"`
-	Summary         string                 `json:"summary"`
-	ErrorSummary    string                 `json:"error_summary,omitempty"`
-	Stats           orchestrator.TaskStats `json:"stats"`
-	SubTasks        []orchestrator.SubTask `json:"sub_tasks,omitempty"`
-}
+type DelegationRequest = runtimedelegation.Request
+type DelegationResult = runtimedelegation.Result
 
 type DelegationService struct {
 	app *App
@@ -44,13 +27,13 @@ func (s *DelegationService) Delegate(ctx context.Context, req DelegationRequest)
 	if s == nil || s.app == nil || s.app.Orchestrator == nil {
 		return nil, fmt.Errorf("delegation is unavailable: orchestrator is not enabled")
 	}
-	req.Task = strings.TrimSpace(req.Task)
+	req.Task = runtimedelegation.StringFromAny(req.Task)
 	if req.Task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
 
-	brief := buildDelegationBrief(req)
-	result, err := s.app.Orchestrator.RunTaskResult(ctx, brief, normalizeNames(req.AgentNames))
+	brief := runtimedelegation.BuildBrief(req)
+	result, err := s.app.Orchestrator.RunTaskResult(ctx, brief, runtimedelegation.NormalizeNames(req.AgentNames))
 	if result == nil {
 		if err == nil {
 			err = fmt.Errorf("delegation failed without a result")
@@ -58,17 +41,16 @@ func (s *DelegationService) Delegate(ctx context.Context, req DelegationRequest)
 		return nil, err
 	}
 
-	status := delegationStatusForResult(result, err)
 	errorSummary := ""
 	if err != nil {
 		errorSummary = err.Error()
 	}
 
 	return &DelegationResult{
-		Status:          status,
+		Status:          runtimedelegation.StatusForResult(result, err),
 		TaskID:          result.TaskID,
 		DelegationBrief: brief,
-		SelectedAgents:  normalizeNames(req.AgentNames),
+		SelectedAgents:  runtimedelegation.NormalizeNames(req.AgentNames),
 		Summary:         result.Summary,
 		ErrorSummary:    errorSummary,
 		Stats:           result.Stats,
@@ -124,11 +106,11 @@ func registerDelegationTool(app *App) {
 			}
 
 			req := DelegationRequest{
-				Task:            stringFromAny(input["task"]),
-				AgentNames:      stringSliceFromAny(input["agent_names"]),
-				Reason:          stringFromAny(input["reason"]),
-				SuccessCriteria: stringFromAny(input["success_criteria"]),
-				UserContext:     stringFromAny(input["user_context"]),
+				Task:            runtimedelegation.StringFromAny(input["task"]),
+				AgentNames:      runtimedelegation.StringSliceFromAny(input["agent_names"]),
+				Reason:          runtimedelegation.StringFromAny(input["reason"]),
+				SuccessCriteria: runtimedelegation.StringFromAny(input["success_criteria"]),
+				UserContext:     runtimedelegation.StringFromAny(input["user_context"]),
 			}
 			result, err := service.Delegate(ctx, req)
 			if result == nil {
@@ -141,87 +123,4 @@ func registerDelegationTool(app *App) {
 			return string(data), nil
 		},
 	})
-}
-
-func delegationStatusForResult(result *orchestrator.OrchestratorResult, runErr error) string {
-	if result == nil {
-		if runErr != nil {
-			return "failed"
-		}
-		return "completed"
-	}
-	if runErr == nil {
-		return "completed"
-	}
-	if result.Stats.Completed > 0 {
-		return "partial_failed"
-	}
-	return "failed"
-}
-
-func buildDelegationBrief(req DelegationRequest) string {
-	lines := []string{
-		"You are executing a delegated task from the main agent.",
-		"",
-		"Delegated task:",
-		strings.TrimSpace(req.Task),
-	}
-	if reason := strings.TrimSpace(req.Reason); reason != "" {
-		lines = append(lines, "", "Why this was delegated:", reason)
-	}
-	if context := strings.TrimSpace(req.UserContext); context != "" {
-		lines = append(lines, "", "Relevant user context:", context)
-	}
-	if criteria := strings.TrimSpace(req.SuccessCriteria); criteria != "" {
-		lines = append(lines, "", "Success criteria:", criteria)
-	}
-	lines = append(lines,
-		"",
-		"Work only within this delegated scope.",
-		"Return concrete output that the main agent can integrate back into the user-facing answer.",
-	)
-	return strings.Join(lines, "\n")
-}
-
-func normalizeNames(items []string) []string {
-	if len(items) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(items))
-	seen := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		name := strings.TrimSpace(item)
-		if name == "" {
-			continue
-		}
-		key := strings.ToLower(name)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		result = append(result, name)
-	}
-	return result
-}
-
-func stringFromAny(value any) string {
-	if value == nil {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprint(value))
-}
-
-func stringSliceFromAny(value any) []string {
-	switch items := value.(type) {
-	case []string:
-		return normalizeNames(items)
-	case []any:
-		result := make([]string, 0, len(items))
-		for _, item := range items {
-			result = append(result, stringFromAny(item))
-		}
-		return normalizeNames(result)
-	default:
-		return nil
-	}
 }

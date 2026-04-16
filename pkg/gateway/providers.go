@@ -180,7 +180,7 @@ func (s *Server) applyDefaultProvider(ref string) (config.ProviderProfile, error
 	if err != nil {
 		return config.ProviderProfile{}, err
 	}
-	s.app.LLM = client
+	s.app.SetLLMClient(client)
 	if s.tasks != nil {
 		s.tasks.planner = client
 	}

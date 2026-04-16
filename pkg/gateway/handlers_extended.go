@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/anyclaw/anyclaw/pkg/cron"
+	"github.com/anyclaw/anyclaw/pkg/runtime"
 )
 
 // Webhook and Node handlers
@@ -37,8 +38,14 @@ func (s *Server) handleWebhookIncoming(w http.ResponseWriter, r *http.Request) {
 			message = fmt.Sprintf("%s\n\nPayload:\n%s", webhook.Template, string(payload))
 		}
 
-		targetApp.Agent.SetHistory(nil)
-		response, err := targetApp.Agent.Run(ctx, message)
+		execResult, err := targetApp.Execute(ctx, runtime.ExecutionRequest{
+			Input:          message,
+			ReplaceHistory: true,
+		})
+		response := ""
+		if execResult != nil {
+			response = execResult.Output
+		}
 		if err != nil {
 			return "", err
 		}
@@ -161,7 +168,7 @@ var cronInitOnce sync.Once
 
 func (s *Server) initCronScheduler() {
 	cronInitOnce.Do(func() {
-		executor := cron.NewAgentExecutor(s.app.Agent, s.app.Orchestrator)
+		executor := s.app.NewCronExecutor()
 		cronScheduler = cron.NewScheduler(executor)
 
 		persister, err := cron.NewFilePersister("")

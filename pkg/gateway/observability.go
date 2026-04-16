@@ -72,10 +72,10 @@ func (om *observabilityMiddleware) RegisterHealthChecks(app *runtime.App) {
 	}))
 
 	om.checker.Register("llm", observability.TimeoutCheck(observability.FuncCheck(func() error {
-		if app == nil || app.LLM == nil {
+		if app == nil {
 			return nil
 		}
-		name := app.LLM.Name()
+		name := app.LLMName()
 		if name == "" {
 			return nil
 		}
