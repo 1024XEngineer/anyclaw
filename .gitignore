@@ -38,6 +38,10 @@ bin/
 # Delegate LLM config (contains API keys)
 .anyclaw/delegate_config.json
 
+# Local config snapshots
+anyclaw.json
+anyclaw.json.bak-*
+
 # Local runtime state
 .anyclaw/
 workflows/memory/

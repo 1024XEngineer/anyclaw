@@ -1,0 +1,212 @@
+{
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "api_key": "YOUR_API_KEY",
+    "base_url": "https://api.openai.com/v1",
+    "max_tokens": 4096,
+    "temperature": 0.7
+  },
+  "agent": {
+    "name": "AnyClaw",
+    "description": "Your AI assistant with file-based memory",
+    "work_dir": ".anyclaw",
+    "working_dir": "workflows/default",
+    "permission_level": "limited",
+    "require_confirmation_for_dangerous": true,
+    "profiles": [],
+    "active_profile": "",
+    "lang": "zh-CN",
+    "work_focus": "通用",
+    "behavior_style": "简洁",
+    "constraints": ""
+  },
+  "providers": [
+    {
+      "id": "primary-openai",
+      "name": "Primary OpenAI",
+      "type": "openai",
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "YOUR_API_KEY",
+      "default_model": "gpt-4o-mini",
+      "enabled": true
+    }
+  ],
+  "skills": {
+    "dir": "skills",
+    "auto_load": true,
+    "include": [],
+    "exclude": []
+  },
+  "memory": {
+    "dir": "memory",
+    "max_history": 100,
+    "format": "markdown",
+    "auto_save": true
+  },
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 18789,
+    "bind": "loopback",
+    "control_ui": {
+      "base_path": "/dashboard",
+      "root": ""
+    },
+    "worker_count": 0,
+    "runtime_max_instances": 16,
+    "runtime_idle_seconds": 900,
+    "job_worker_count": 2,
+    "job_max_attempts": 2,
+    "job_retry_delay_seconds": 2,
+    "canvas_max_versions": 0
+  },
+  "daemon": {
+    "pid_file": ".anyclaw/gateway.pid",
+    "log_file": ".anyclaw/gateway.log"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "bot_token": "",
+      "chat_id": "",
+      "poll_every_seconds": 3
+    },
+    "slack": {
+      "enabled": false,
+      "bot_token": "",
+      "app_token": "",
+      "default_channel": "",
+      "poll_every_seconds": 3
+    },
+    "discord": {
+      "enabled": false,
+      "bot_token": "",
+      "default_channel": "",
+      "poll_every_seconds": 3,
+      "api_base_url": "https://discord.com/api/v10",
+      "guild_id": "",
+      "public_key": "",
+      "use_gateway_ws": true
+    },
+    "whatsapp": {
+      "enabled": false,
+      "access_token": "",
+      "phone_number_id": "",
+      "verify_token": "",
+      "default_recipient": "",
+      "api_version": "v20.0",
+      "app_secret": ""
+    },
+    "signal": {
+      "enabled": false,
+      "base_url": "http://127.0.0.1:8080",
+      "number": "",
+      "default_recipient": "",
+      "poll_every_seconds": 3,
+      "bearer_token": ""
+    },
+    "routing": {
+      "mode": "per-chat",
+      "rules": []
+    },
+    "security": {
+      "dm_policy": "allow-list",
+      "group_policy": "mention-only",
+      "allow_from": [],
+      "pairing_enabled": false,
+      "pairing_ttl_hours": 72,
+      "mention_gate": true,
+      "risk_acknowledged": false,
+      "default_deny_dm": true
+    }
+  },
+  "plugins": {
+    "dir": "plugins",
+    "enabled": [],
+    "allow_exec": false,
+    "exec_timeout_seconds": 10,
+    "trusted_signers": [],
+    "require_trust": true
+  },
+  "sandbox": {
+    "enabled": false,
+    "execution_mode": "host-reviewed",
+    "backend": "local",
+    "base_dir": ".anyclaw/sandboxes",
+    "docker_image": "alpine:3.20",
+    "docker_network": "none",
+    "reuse_per_scope": true,
+    "default_channel": ""
+  },
+  "security": {
+    "api_token": "",
+    "public_paths": [
+      "/healthz"
+    ],
+    "protect_events": true,
+    "webhook_secret": "",
+    "trusted_cidrs": [],
+    "rate_limit_rpm": 120,
+    "users": [],
+    "roles": [],
+    "audit_log": ".anyclaw/audit/audit.jsonl",
+    "dangerous_command_patterns": [
+      "rm -rf",
+      "del /f",
+      "format ",
+      "mkfs",
+      "shutdown",
+      "reboot",
+      "poweroff",
+      "chmod 777",
+      "takeown",
+      "icacls",
+      "git reset --hard"
+    ],
+    "protected_paths": [],
+    "command_timeout_seconds": 30,
+    "risk_acknowledged": false,
+    "pairing_enabled": false,
+    "pairing_ttl_hours": 72,
+    "pairing_max_devices": 0
+  },
+  "speech": {
+    "enabled": false,
+    "voice_wake": {
+      "enabled": false,
+      "provider": "",
+      "model": "",
+      "keyword": "",
+      "device": "",
+      "sensitivity": 0,
+      "vad_threshold": 0,
+      "silence_ms": 0,
+      "max_duration_seconds": 0,
+      "min_confidence": 0,
+      "timeout_seconds": 0,
+      "channels": {},
+      "exclude_channels": {},
+      "fallback_to_voice": false,
+      "append_transcript": false,
+      "trigger_prefix": ""
+    },
+    "tts": {
+      "enabled": false,
+      "provider": "",
+      "model": "",
+      "voice": "",
+      "speed": 0,
+      "format": "",
+      "timeout_seconds": 0,
+      "channels": {},
+      "exclude_channels": {},
+      "fallback_to_text": false,
+      "trigger_prefix": ""
+    }
+  },
+  "mcp": {
+    "enabled": false,
+    "servers": []
+  }
+}
