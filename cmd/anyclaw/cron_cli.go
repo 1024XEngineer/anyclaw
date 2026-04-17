@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/cron"
-	"github.com/anyclaw/anyclaw/pkg/ui"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
+	cron "github.com/anyclaw/anyclaw/pkg/runtime/execution/schedule"
 )
 
 func runCronCommand(ctx context.Context, args []string) error {

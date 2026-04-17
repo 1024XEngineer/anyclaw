@@ -183,13 +183,13 @@ func pythonModuleArgs(module string) ([]string, error) {
 				return []string{path, "-m", module}, nil
 			}
 		}
+		return []string{"py", "-3", "-m", module}, nil
 	} else {
 		for _, candidate := range []string{"python3", "python"} {
 			if path, err := exec.LookPath(candidate); err == nil {
 				return []string{path, "-m", module}, nil
 			}
 		}
+		return []string{"python3", "-m", module}, nil
 	}
-
-	return nil, fmt.Errorf("python launcher not found in PATH")
 }

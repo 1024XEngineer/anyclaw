@@ -5,26 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
+	routehandoff "github.com/anyclaw/anyclaw/pkg/route/handoff"
 	runtimedelegation "github.com/anyclaw/anyclaw/pkg/runtime/delegation"
-	"github.com/anyclaw/anyclaw/pkg/tools"
 )
 
 type DelegationRequest = runtimedelegation.Request
 type DelegationResult = runtimedelegation.Result
 
 type DelegationService struct {
-	app *App
+	mainRuntime *MainRuntime
 }
 
-func newDelegationService(app *App) *DelegationService {
-	if app == nil {
+func newDelegationService(mainRuntime *MainRuntime) *DelegationService {
+	if mainRuntime == nil {
 		return nil
 	}
-	return &DelegationService{app: app}
+	return &DelegationService{mainRuntime: mainRuntime}
 }
 
 func (s *DelegationService) Delegate(ctx context.Context, req DelegationRequest) (*DelegationResult, error) {
-	if s == nil || s.app == nil || s.app.Orchestrator == nil {
+	if s == nil || s.mainRuntime == nil || s.mainRuntime.Orchestrator == nil {
 		return nil, fmt.Errorf("delegation is unavailable: orchestrator is not enabled")
 	}
 	req.Task = runtimedelegation.StringFromAny(req.Task)
@@ -32,8 +33,18 @@ func (s *DelegationService) Delegate(ctx context.Context, req DelegationRequest)
 		return nil, fmt.Errorf("task is required")
 	}
 
-	brief := runtimedelegation.BuildBrief(req)
-	result, err := s.app.Orchestrator.RunTaskResult(ctx, brief, runtimedelegation.NormalizeNames(req.AgentNames))
+	plan, err := routehandoff.NewService(s.mainRuntime.Orchestrator).BuildPlan(routehandoff.Request{
+		Task:            req.Task,
+		AgentNames:      req.AgentNames,
+		Reason:          req.Reason,
+		SuccessCriteria: req.SuccessCriteria,
+		UserContext:     req.UserContext,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := s.mainRuntime.Orchestrator.RunPlan(ctx, plan)
 	if result == nil {
 		if err == nil {
 			err = fmt.Errorf("delegation failed without a result")
@@ -49,8 +60,8 @@ func (s *DelegationService) Delegate(ctx context.Context, req DelegationRequest)
 	return &DelegationResult{
 		Status:          runtimedelegation.StatusForResult(result, err),
 		TaskID:          result.TaskID,
-		DelegationBrief: brief,
-		SelectedAgents:  runtimedelegation.NormalizeNames(req.AgentNames),
+		DelegationBrief: plan.Brief,
+		SelectedAgents:  plan.TargetAgents,
 		Summary:         result.Summary,
 		ErrorSummary:    errorSummary,
 		Stats:           result.Stats,
@@ -58,15 +69,15 @@ func (s *DelegationService) Delegate(ctx context.Context, req DelegationRequest)
 	}, nil
 }
 
-func registerDelegationTool(app *App) {
-	if app == nil || app.Tools == nil || app.Orchestrator == nil {
+func registerDelegationTool(mainRuntime *MainRuntime) {
+	if mainRuntime == nil || mainRuntime.Tools == nil || mainRuntime.Orchestrator == nil {
 		return
 	}
 
-	service := newDelegationService(app)
-	app.Delegation = service
+	service := newDelegationService(mainRuntime)
+	mainRuntime.Delegation = service
 
-	app.Tools.Register(&tools.Tool{
+	mainRuntime.Tools.Register(&tools.Tool{
 		Name:        "delegate_task",
 		Description: "Delegate a clearly-scoped sub-task to the orchestrator so specialized sub-agents can complete it.",
 		Category:    tools.ToolCategoryCustom,

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/config"
+	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
 )
 
 const gatewayRequestTimeout = 5 * time.Second
@@ -27,7 +27,7 @@ func newGatewayRequestContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), gatewayRequestTimeout)
 }
 
-func channelStateLabel(item channel.Status, disabledLabel string) string {
+func channelStateLabel(item inputlayer.Status, disabledLabel string) string {
 	switch {
 	case item.Enabled && item.Running && item.Healthy:
 		return "healthy"
@@ -40,7 +40,7 @@ func channelStateLabel(item channel.Status, disabledLabel string) string {
 	}
 }
 
-func printChannelStatusLines(items []channel.Status, opts channelStatusPrintOptions) {
+func printChannelStatusLines(items []inputlayer.Status, opts channelStatusPrintOptions) {
 	for _, item := range items {
 		fmt.Printf("  - %s: %s\n", item.Name, channelStateLabel(item, opts.DisabledLabel))
 		if opts.IncludeLastActivity && !item.LastActivity.IsZero() {

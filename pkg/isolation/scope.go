@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	ctxengine "github.com/anyclaw/anyclaw/pkg/context-engine"
+	ctxengine "github.com/anyclaw/anyclaw/pkg/runtime/context/window"
 )
 
 type ContextScopeMiddleware struct {

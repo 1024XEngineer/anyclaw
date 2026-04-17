@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/gateway"
+	gatewaysdk "github.com/anyclaw/anyclaw/pkg/gateway/transport/client"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
 	"github.com/anyclaw/anyclaw/pkg/runtime"
-	"github.com/anyclaw/anyclaw/pkg/ui"
 )
 
 func runPairingCommand(ctx context.Context, args []string) error {
@@ -57,7 +57,7 @@ func runPairingGenerate(ctx context.Context, args []string) error {
 	}
 
 	gatewayURL := runtime.GatewayURL(cfg)
-	client := gateway.NewWSClient(gatewayURL, cfg.Security.APIToken)
+	client := gatewaysdk.NewWSClient(gatewayURL, cfg.Security.APIToken)
 	if client == nil {
 		return fmt.Errorf("failed to create Gateway client")
 	}
@@ -100,7 +100,7 @@ func runPairingList(ctx context.Context, args []string) error {
 	}
 
 	gatewayURL := runtime.GatewayURL(cfg)
-	client := gateway.NewWSClient(gatewayURL, cfg.Security.APIToken)
+	client := gatewaysdk.NewWSClient(gatewayURL, cfg.Security.APIToken)
 	if client == nil {
 		return fmt.Errorf("failed to create Gateway client")
 	}
@@ -158,7 +158,7 @@ func runPairingStatus(ctx context.Context, args []string) error {
 	}
 
 	gatewayURL := runtime.GatewayURL(cfg)
-	client := gateway.NewWSClient(gatewayURL, cfg.Security.APIToken)
+	client := gatewaysdk.NewWSClient(gatewayURL, cfg.Security.APIToken)
 	if client == nil {
 		return fmt.Errorf("failed to create Gateway client")
 	}
@@ -207,7 +207,7 @@ func runPairingUnpair(ctx context.Context, args []string) error {
 	}
 
 	gatewayURL := runtime.GatewayURL(cfg)
-	client := gateway.NewWSClient(gatewayURL, cfg.Security.APIToken)
+	client := gatewaysdk.NewWSClient(gatewayURL, cfg.Security.APIToken)
 	if client == nil {
 		return fmt.Errorf("failed to create Gateway client")
 	}
@@ -247,7 +247,7 @@ func runPairingRenew(ctx context.Context, args []string) error {
 	}
 
 	gatewayURL := runtime.GatewayURL(cfg)
-	client := gateway.NewWSClient(gatewayURL, cfg.Security.APIToken)
+	client := gatewaysdk.NewWSClient(gatewayURL, cfg.Security.APIToken)
 	if client == nil {
 		return fmt.Errorf("failed to create Gateway client")
 	}

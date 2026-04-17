@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	ctxpkg "github.com/anyclaw/anyclaw/pkg/context"
-	ctxengine "github.com/anyclaw/anyclaw/pkg/context-engine"
+	ctxpkg "github.com/anyclaw/anyclaw/pkg/runtime/context/store"
+	ctxengine "github.com/anyclaw/anyclaw/pkg/runtime/context/window"
 )
 
 var snapshotCounter uint64

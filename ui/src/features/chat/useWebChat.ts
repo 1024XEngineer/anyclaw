@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 
 export type ChatMessage = {
   agent_name?: string;
@@ -57,10 +57,13 @@ type GatewaySessionMessage = {
 
 type GatewaySession = {
   agent?: string;
+  created_at?: string;
   id: string;
   messages?: GatewaySessionMessage[];
   presence?: string;
+  title?: string;
   typing?: boolean;
+  updated_at?: string;
 };
 
 type GatewayApproval = {
@@ -88,15 +91,21 @@ type ChatSelectDetail = {
   sessionKey?: string;
 };
 
+type ChatDeleteDetail = {
+  sessionKey?: string;
+};
+
 export const CHAT_STORAGE_KEY = "anyclaw-control-ui-chat-v1";
 export const CHAT_SYNC_EVENT = "anyclaw:chat-sync";
 export const CHAT_RESET_EVENT = "anyclaw:chat-reset";
 export const CHAT_SELECT_EVENT = "anyclaw:chat-select";
+export const CHAT_DELETE_EVENT = "anyclaw:chat-delete";
 
 const STORAGE_VERSION = 2;
 const DEFAULT_WORKSPACE_ID = "workspace-default";
 const APPROVAL_POLL_ATTEMPTS = 18;
 const APPROVAL_POLL_INTERVAL_MS = 900;
+const REMOTE_SESSION_SYNC_INTERVAL_MS = 4000;
 const EMPTY_PERSISTED_STATE: PersistedChatState = {
   selectedSessionKey: null,
   sessions: [],
@@ -119,11 +128,20 @@ async function requestJSON<T>(input: string, init?: RequestInit): Promise<T> {
   });
 
   const text = await response.text();
-  const payload = text === "" ? null : (JSON.parse(text) as T | { error?: string });
+  let payload: T | { error?: string } | string | null = null;
+  if (text !== "") {
+    try {
+      payload = JSON.parse(text) as T | { error?: string };
+    } catch {
+      payload = text;
+    }
+  }
 
   if (!response.ok) {
     const message =
-      payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+      typeof payload === "string" && payload.trim() !== ""
+        ? payload.trim()
+        : payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
         ? payload.error
         : `${response.status} ${response.statusText}`.trim();
 
@@ -149,6 +167,23 @@ function looksAbsoluteWorkspacePath(workingDir: string | null | undefined) {
 function normalizeAgentName(value: string | null | undefined) {
   const normalized = (value ?? "").trim();
   return normalized === "" ? null : normalized;
+}
+
+function normalizeTextValue(value: string | null | undefined) {
+  const normalized = (value ?? "").trim();
+  return normalized === "" ? null : normalized;
+}
+
+function normalizeTimestamp(value: string | null | undefined) {
+  const normalized = normalizeTextValue(value);
+  if (!normalized) return null;
+  return Number.isNaN(new Date(normalized).getTime()) ? null : normalized;
+}
+
+function getTimeValue(value: string | null | undefined) {
+  const normalized = normalizeTimestamp(value);
+  if (!normalized) return 0;
+  return new Date(normalized).getTime();
 }
 
 function isSameAgentName(left: string | null | undefined, right: string | null | undefined) {
@@ -252,24 +287,62 @@ function deriveUpdatedAt(messages: ChatMessage[]) {
   return messages[messages.length - 1]?.timestamp ?? new Date().toISOString();
 }
 
+function resolveStoredSessionTitle(messages: ChatMessage[], fallbackTitle?: string | null) {
+  const titleSource =
+    messages.find((message) => message.role === "user" && message.content.trim() !== "")?.content ??
+    messages.find((message) => message.content.trim() !== "")?.content ??
+    normalizeTextValue(fallbackTitle) ??
+    "新对话";
+
+  return truncateText(titleSource);
+}
+
+function resolveStoredSessionCreatedAt(
+  messages: ChatMessage[],
+  explicitCreatedAt?: string | null,
+  fallbackCreatedAt?: string | null,
+) {
+  return normalizeTimestamp(explicitCreatedAt) ?? normalizeTimestamp(fallbackCreatedAt) ?? deriveCreatedAt(messages);
+}
+
+function resolveStoredSessionUpdatedAt(
+  messages: ChatMessage[],
+  explicitUpdatedAt?: string | null,
+  fallbackUpdatedAt?: string | null,
+) {
+  const explicit = normalizeTimestamp(explicitUpdatedAt);
+  if (explicit) return explicit;
+
+  const fallback = normalizeTimestamp(fallbackUpdatedAt);
+  const derived = deriveUpdatedAt(messages);
+  if (!fallback) return derived;
+
+  return getTimeValue(derived) > getTimeValue(fallback) ? derived : fallback;
+}
+
 function buildStoredSession(params: {
   agentName: string | null | undefined;
+  createdAt?: string | null;
   existing?: StoredChatSession;
   key?: string | null;
   messages: ChatMessage[];
   remoteSessionId: string | null | undefined;
+  title?: string | null;
+  updatedAt?: string | null;
 }) {
   const normalizedMessages = normalizeMessages(params.messages);
-  const createdAt = params.existing?.createdAt ?? deriveCreatedAt(normalizedMessages);
+  const createdAt = resolveStoredSessionCreatedAt(normalizedMessages, params.createdAt, params.existing?.createdAt);
+  const updatedAt = resolveStoredSessionUpdatedAt(normalizedMessages, params.updatedAt, params.existing?.updatedAt);
+  const title = resolveStoredSessionTitle(normalizedMessages, params.title ?? params.existing?.title);
 
   return {
-    agentName: inferAgentName(normalizedMessages, params.agentName),
+    agentName: inferAgentName(normalizedMessages, params.agentName ?? params.existing?.agentName),
     createdAt,
     key: params.key || params.existing?.key || params.remoteSessionId || createSessionKey(),
     messages: normalizedMessages,
     remoteSessionId: typeof params.remoteSessionId === "string" ? params.remoteSessionId : null,
-    title: deriveSessionTitle(normalizedMessages),
-    updatedAt: deriveUpdatedAt(normalizedMessages),
+    title,
+    updatedAt,
   } satisfies StoredChatSession;
 }
 
@@ -279,11 +352,12 @@ function normalizeStoredSession(input: unknown): StoredChatSession | null {
   const session = input as Partial<StoredChatSession> & {
     agent?: string;
     agent_name?: string;
+    created_at?: string;
     id?: string;
     sessionId?: string | null;
+    updated_at?: string;
   };
   const messages = normalizeMessages(session.messages);
-  if (messages.length === 0) return null;
 
   const remoteSessionId =
     typeof session.remoteSessionId === "string"
@@ -298,30 +372,47 @@ function normalizeStoredSession(input: unknown): StoredChatSession | null {
       : typeof session.id === "string" && session.id.trim() !== ""
         ? session.id
         : remoteSessionId || createSessionKey();
+  const providedTitle = normalizeTextValue(session.title);
+
+  if (messages.length === 0 && !remoteSessionId && !providedTitle) return null;
 
   return buildStoredSession({
     agentName: session.agentName ?? session.agent ?? session.agent_name ?? inferAgentName(messages),
+    createdAt:
+      typeof session.createdAt === "string" && session.createdAt.trim() !== ""
+        ? session.createdAt
+        : typeof session.created_at === "string" && session.created_at.trim() !== ""
+          ? session.created_at
+          : null,
     existing: {
       agentName: normalizeAgentName(session.agentName ?? session.agent ?? session.agent_name),
       createdAt:
         typeof session.createdAt === "string" && session.createdAt.trim() !== ""
           ? session.createdAt
+          : typeof session.created_at === "string" && session.created_at.trim() !== ""
+            ? session.created_at
           : deriveCreatedAt(messages),
       key,
       messages,
       remoteSessionId,
-      title:
-        typeof session.title === "string" && session.title.trim() !== ""
-          ? session.title
-          : deriveSessionTitle(messages),
+      title: providedTitle ?? resolveStoredSessionTitle(messages),
       updatedAt:
         typeof session.updatedAt === "string" && session.updatedAt.trim() !== ""
           ? session.updatedAt
+          : typeof session.updated_at === "string" && session.updated_at.trim() !== ""
+            ? session.updated_at
           : deriveUpdatedAt(messages),
     },
     key,
     messages,
     remoteSessionId,
+    title: providedTitle,
+    updatedAt:
+      typeof session.updatedAt === "string" && session.updatedAt.trim() !== ""
+        ? session.updatedAt
+        : typeof session.updated_at === "string" && session.updated_at.trim() !== ""
+          ? session.updated_at
+          : null,
   });
 }
 
@@ -453,6 +544,130 @@ function sortSessions(sessions: StoredChatSession[]) {
   return [...sessions].sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
 }
 
+function mapGatewaySessionToStoredSession(session: GatewaySession, existing?: StoredChatSession | null) {
+  if (!session?.id) return null;
+
+  return buildStoredSession({
+    agentName: session.agent ?? existing?.agentName,
+    createdAt: session.created_at ?? existing?.createdAt ?? null,
+    existing: existing ?? undefined,
+    key: existing?.key ?? session.id,
+    messages: mapSessionMessages(session, existing?.agentName ?? session.agent ?? null),
+    remoteSessionId: session.id,
+    title: session.title ?? existing?.title ?? null,
+    updatedAt: session.updated_at ?? existing?.updatedAt ?? null,
+  });
+}
+
+function pickPreferredSessionVersion(
+  localSession: StoredChatSession | null,
+  remoteSession: StoredChatSession,
+  selectedSessionKey: string | null,
+  isSending: boolean,
+) {
+  if (!localSession) {
+    return remoteSession;
+  }
+
+  const localUpdatedAt = getTimeValue(localSession.updatedAt);
+  const remoteUpdatedAt = getTimeValue(remoteSession.updatedAt);
+  const shouldKeepLocalDraft =
+    isSending &&
+    selectedSessionKey === localSession.key &&
+    localSession.messages.length >= remoteSession.messages.length &&
+    localUpdatedAt >= remoteUpdatedAt;
+
+  if (shouldKeepLocalDraft || localUpdatedAt > remoteUpdatedAt) {
+    return {
+      ...localSession,
+      key: localSession.key,
+      remoteSessionId: remoteSession.remoteSessionId,
+    };
+  }
+
+  return {
+    ...remoteSession,
+    key: localSession.key,
+  };
+}
+
+function mergeRemoteSessions(
+  state: ChatState,
+  agentName: string | null,
+  remoteSessions: GatewaySession[],
+  isSending: boolean,
+): ChatState {
+  const remoteSessionIDs = new Set(remoteSessions.map((session) => session.id));
+  const localSessionsByRemoteId = new Map(
+    state.sessions
+      .filter((session) => session.remoteSessionId)
+      .map((session) => [session.remoteSessionId!, session]),
+  );
+
+  const mergedRemoteSessions = remoteSessions
+    .map((session) => {
+      const existing = localSessionsByRemoteId.get(session.id) ?? null;
+      const mapped = mapGatewaySessionToStoredSession(session, existing);
+      if (!mapped) return null;
+
+      return pickPreferredSessionVersion(existing, mapped, state.selectedSessionKey, isSending);
+    })
+    .filter((session): session is StoredChatSession => session !== null);
+
+  const localOnlySessions = state.sessions.filter((session) => !session.remoteSessionId);
+  const retainedActiveSessions = state.sessions.filter((session) => {
+    if (!session.remoteSessionId || remoteSessionIDs.has(session.remoteSessionId)) {
+      return false;
+    }
+    return session.key === state.selectedSessionKey || session.remoteSessionId === state.sessionId;
+  });
+
+  const sessions = sortSessions([...localOnlySessions, ...mergedRemoteSessions, ...retainedActiveSessions]);
+  const keepBlankConversation =
+    state.selectedSessionKey === null &&
+    state.sessionId === null &&
+    state.messages.length === 0 &&
+    state.sessions.length > 0;
+
+  if (keepBlankConversation) {
+    return {
+      ...state,
+      sessions,
+    };
+  }
+
+  const currentSelection =
+    getSessionByKey(sessions, state.selectedSessionKey) ??
+    findSessionByRemoteId(sessions, state.sessionId) ??
+    null;
+
+  if (currentSelection) {
+    return {
+      messages: currentSelection.messages,
+      selectedSessionKey: currentSelection.key,
+      sessionId: currentSelection.remoteSessionId,
+      sessions,
+    };
+  }
+
+  const fallbackSession = findLatestSessionForAgent(sessions, agentName);
+  if (!fallbackSession) {
+    return {
+      messages: [],
+      selectedSessionKey: null,
+      sessionId: null,
+      sessions,
+    };
+  }
+
+  return {
+    messages: fallbackSession.messages,
+    selectedSessionKey: fallbackSession.key,
+    sessionId: fallbackSession.remoteSessionId,
+    sessions,
+  };
+}
+
 function createInitialChatState(agentName: string | null): ChatState {
   const persistedState = readPersistedChatState();
   const rememberedSession = getSessionByKey(persistedState.sessions, persistedState.selectedSessionKey);
@@ -539,12 +754,83 @@ function upsertConversation(
   };
 }
 
+function bindRemoteSession(
+  state: ChatState,
+  agentName: string | null,
+  remoteSessionId: string,
+  messages: ChatMessage[],
+  options?: {
+    createdAt?: string | null;
+    title?: string | null;
+    updatedAt?: string | null;
+  },
+) {
+  if (!remoteSessionId) return state;
+
+  const existingSession = findSessionByRemoteId(state.sessions, remoteSessionId) ?? undefined;
+  const storedSession = buildStoredSession({
+    agentName,
+    createdAt: options?.createdAt ?? existingSession?.createdAt ?? null,
+    existing: existingSession,
+    key: existingSession?.key ?? remoteSessionId,
+    messages,
+    remoteSessionId,
+    title: options?.title ?? existingSession?.title ?? null,
+    updatedAt: options?.updatedAt ?? existingSession?.updatedAt ?? null,
+  });
+
+  const sessions = sortSessions(
+    state.sessions.filter((session) => session.key !== storedSession.key && session.remoteSessionId !== storedSession.remoteSessionId),
+  );
+
+  return {
+    messages: storedSession.messages,
+    selectedSessionKey: storedSession.key,
+    sessionId: storedSession.remoteSessionId,
+    sessions: sortSessions([storedSession, ...sessions]),
+  };
+}
+
+function removeConversation(state: ChatState, agentName: string | null, sessionKey: string): ChatState {
+  const sessions = sortSessions(state.sessions.filter((session) => session.key !== sessionKey));
+  if (state.selectedSessionKey !== sessionKey) {
+    return {
+      ...state,
+      sessions,
+    };
+  }
+
+  const fallbackSession = findLatestSessionForAgent(sessions, agentName);
+  if (!fallbackSession) {
+    return {
+      messages: [],
+      selectedSessionKey: null,
+      sessionId: null,
+      sessions,
+    };
+  }
+
+  return {
+    messages: fallbackSession.messages,
+    selectedSessionKey: fallbackSession.key,
+    sessionId: fallbackSession.remoteSessionId,
+    sessions,
+  };
+}
+
+function removeConversationByRemoteId(state: ChatState, agentName: string | null, remoteSessionId: string) {
+  const session = findSessionByRemoteId(state.sessions, remoteSessionId);
+  if (!session) return state;
+  return removeConversation(state, agentName, session.key);
+}
+
 export function useWebChat(agentName: string | null, workspacePath: string | null) {
   const [chatState, setChatState] = useState<ChatState>(() => createInitialChatState(agentName));
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [approvalActionId, setApprovalActionId] = useState<string | null>(null);
+  const [allPendingApprovals, setAllPendingApprovals] = useState<ChatApproval[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<ChatApproval[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(() =>
     looksAbsoluteWorkspacePath(workspacePath) ? deriveWorkspaceId(workspacePath) : null,
@@ -552,6 +838,7 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
   const previousAgentNameRef = useRef<string | null>(normalizeAgentName(agentName));
 
   const { messages, selectedSessionKey, sessionId, sessions } = chatState;
+  const approvalNoticeApprovals = pendingApprovals.length > 0 ? pendingApprovals : allPendingApprovals;
 
   useEffect(() => {
     const payload = toPersistedState(chatState);
@@ -610,14 +897,22 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
       setChatState((current) => hydrateSession(current, detail.sessionKey!));
     };
 
+    const onDelete = (event: Event) => {
+      const detail = (event as CustomEvent<ChatDeleteDetail>).detail;
+      if (!detail?.sessionKey) return;
+      void deleteSession(detail.sessionKey);
+    };
+
     window.addEventListener(CHAT_RESET_EVENT, onReset);
     window.addEventListener(CHAT_SELECT_EVENT, onSelect as EventListener);
+    window.addEventListener(CHAT_DELETE_EVENT, onDelete as EventListener);
 
     return () => {
       window.removeEventListener(CHAT_RESET_EVENT, onReset);
       window.removeEventListener(CHAT_SELECT_EVENT, onSelect as EventListener);
+      window.removeEventListener(CHAT_DELETE_EVENT, onDelete as EventListener);
     };
-  }, []);
+  }, [sessions, selectedSessionKey, agentName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -678,15 +973,17 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
     });
   }
 
+  async function fetchSessionsList(activeWorkspaceId: string) {
+    return requestJSON<GatewaySession[]>(`/sessions?workspace=${encodeURIComponent(activeWorkspaceId)}`);
+  }
+
   async function fetchSessionSnapshot(activeSessionId: string | null) {
     if (!activeSessionId) return null;
     return requestJSON<GatewaySession>(`/sessions/${encodeURIComponent(activeSessionId)}`);
   }
 
-  async function fetchPendingApprovals(activeSessionId: string | null) {
-    if (!activeSessionId) return [];
-    const approvals = normalizeApprovals(await requestJSON<GatewayApproval[]>("/approvals?status=pending"));
-    return filterSessionApprovals(approvals, activeSessionId);
+  async function fetchAllPendingApprovals() {
+    return normalizeApprovals(await requestJSON<GatewayApproval[]>("/approvals?status=pending"));
   }
 
   function applySessionSnapshot(session: GatewaySession | null) {
@@ -695,14 +992,54 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
     const mappedMessages = mapSessionMessages(session, agentName);
     if (mappedMessages.length === 0) return;
 
-    setChatState((current) =>
-      upsertConversation(current, agentName, mappedMessages, session.id ?? current.sessionId),
-    );
+    setChatState((current) => {
+      if (session.id) {
+        return bindRemoteSession(current, agentName, session.id, mappedMessages, {
+          createdAt: session.created_at ?? null,
+          title: session.title ?? null,
+          updatedAt: session.updated_at ?? null,
+        });
+      }
+
+      return upsertConversation(current, agentName, mappedMessages, current.sessionId);
+    });
+  }
+
+  function applyApprovalSnapshot(approvals: ChatApproval[], activeSessionId: string | null) {
+    setAllPendingApprovals(approvals);
+    setPendingApprovals(filterSessionApprovals(approvals, activeSessionId));
+  }
+
+  async function focusApprovalSession(targetSessionId: string) {
+    let baselineMessageCount = findSessionByRemoteId(sessions, targetSessionId)?.messages.length ?? 0;
+
+    try {
+      const session = await fetchSessionSnapshot(targetSessionId);
+      if (!session) return baselineMessageCount;
+
+      const mappedMessages = mapSessionMessages(session, agentName);
+      baselineMessageCount = mappedMessages.length;
+
+      setChatState((current) =>
+        bindRemoteSession(current, agentName, targetSessionId, mappedMessages, {
+          createdAt: session.created_at ?? null,
+          title: session.title ?? null,
+          updatedAt: session.updated_at ?? null,
+        }),
+      );
+      return baselineMessageCount;
+    } catch {
+      const existingSession = findSessionByRemoteId(sessions, targetSessionId);
+      if (existingSession) {
+        setChatState((current) => hydrateSession(current, existingSession.key));
+      }
+      return baselineMessageCount;
+    }
   }
 
   async function syncSessionState(activeSessionId: string | null, options?: { skipSession?: boolean }) {
     if (!activeSessionId) {
-      setPendingApprovals([]);
+      applyApprovalSnapshot(await fetchAllPendingApprovals(), null);
       return { approvals: [] as ChatApproval[], session: null as GatewaySession | null };
     }
 
@@ -711,11 +1048,58 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
       applySessionSnapshot(session);
     }
 
-    const approvals = await fetchPendingApprovals(session?.id ?? activeSessionId);
-    setPendingApprovals(approvals);
+    const allApprovals = await fetchAllPendingApprovals();
+    const approvals = filterSessionApprovals(allApprovals, session?.id ?? activeSessionId);
+    applyApprovalSnapshot(allApprovals, session?.id ?? activeSessionId);
 
     return { approvals, session };
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof fetch !== "function") return;
+
+    let cancelled = false;
+
+    async function syncRemoteSessions(forceRefresh = false) {
+      try {
+        const activeWorkspaceId = await resolveWorkspaceId(forceRefresh);
+        if (cancelled) return;
+
+        const remoteSessions = await fetchSessionsList(activeWorkspaceId);
+        if (cancelled) return;
+
+        setChatState((current) => mergeRemoteSessions(current, agentName, remoteSessions, isSending));
+      } catch {
+        // Keep local sessions when the gateway list is temporarily unavailable.
+      }
+    }
+
+    void syncRemoteSessions();
+
+    const intervalId = window.setInterval(() => {
+      void syncRemoteSessions();
+    }, REMOTE_SESSION_SYNC_INTERVAL_MS);
+
+    const onFocus = () => {
+      void syncRemoteSessions(true);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void syncRemoteSessions(true);
+      }
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [agentName, isSending, workspaceId, workspacePath]);
 
   async function waitForApprovalResult(activeSessionId: string, baselineMessageCount: number) {
     let idleStreak = 0;
@@ -727,8 +1111,9 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
         const session = await fetchSessionSnapshot(activeSessionId);
         applySessionSnapshot(session);
 
-        const approvals = await fetchPendingApprovals(session?.id ?? activeSessionId);
-        setPendingApprovals(approvals);
+        const allApprovals = await fetchAllPendingApprovals();
+        const approvals = filterSessionApprovals(allApprovals, session?.id ?? activeSessionId);
+        applyApprovalSnapshot(allApprovals, session?.id ?? activeSessionId);
 
         const messageCount = session?.messages?.length ?? baselineMessageCount;
         const waitingApproval = isWaitingApprovalStatus(session?.presence);
@@ -745,7 +1130,8 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
         if (idleStreak >= 2) return;
       } catch (pollError) {
         if (getErrorMessage(pollError).includes("session not found")) {
-          setPendingApprovals([]);
+          applyApprovalSnapshot([], null);
+          setChatState((current) => removeConversationByRemoteId(current, agentName, activeSessionId));
           return;
         }
       }
@@ -754,11 +1140,13 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
 
   async function resolveApproval(approvalId: string, approved: boolean, comment?: string) {
     const activeSessionId = sessionId;
+    const targetApproval =
+      allPendingApprovals.find((approval) => approval.id === approvalId) ??
+      pendingApprovals.find((approval) => approval.id === approvalId) ??
+      null;
     if (!approvalId || approvalActionId) return;
-
     setApprovalActionId(approvalId);
     setError(null);
-
     try {
       await requestJSON<ChatApproval>(`/approvals/${encodeURIComponent(approvalId)}/resolve`, {
         body: JSON.stringify({
@@ -767,29 +1155,29 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
         }),
         method: "POST",
       });
-
       setPendingApprovals((current) => current.filter((approval) => approval.id !== approvalId));
-
-      if (!activeSessionId) return;
-
+      setAllPendingApprovals((current) => current.filter((approval) => approval.id !== approvalId));
+      const targetSessionId = targetApproval?.session_id ?? activeSessionId;
+      if (!targetSessionId) return;
       if (approved) {
-        await waitForApprovalResult(activeSessionId, messages.length);
+        const baselineMessageCount =
+          targetSessionId === activeSessionId ? messages.length : await focusApprovalSession(targetSessionId);
+        await waitForApprovalResult(targetSessionId, baselineMessageCount);
         return;
       }
-
-      await syncSessionState(activeSessionId);
-      setError("已拒绝本次权限请求。");
+      await syncSessionState(targetSessionId);
+      setError("Approval request was rejected.");
     } catch (resolveError) {
       setError(getErrorMessage(resolveError));
     } finally {
       setApprovalActionId(null);
     }
   }
-
   function resetConversation() {
     setDraft("");
     setError(null);
     setApprovalActionId(null);
+    setAllPendingApprovals([]);
     setPendingApprovals([]);
     setChatState((current) => startNewConversation(current));
   }
@@ -798,8 +1186,39 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
     setDraft("");
     setError(null);
     setApprovalActionId(null);
+    setAllPendingApprovals([]);
     setPendingApprovals([]);
     setChatState((current) => hydrateSession(current, sessionKey));
+  }
+
+  async function deleteSession(sessionKey: string) {
+    const sessionToDelete = getSessionByKey(sessions, sessionKey);
+    if (!sessionToDelete) return;
+
+    const deletingSelectedSession = selectedSessionKey === sessionKey;
+    setError(null);
+
+    if (sessionToDelete.remoteSessionId) {
+      try {
+        await requestJSON<{ status: string }>(`/sessions/${encodeURIComponent(sessionToDelete.remoteSessionId)}`, {
+          method: "DELETE",
+        });
+      } catch (deleteError) {
+        if (!getErrorMessage(deleteError).includes("session not found")) {
+          setError(getErrorMessage(deleteError));
+          return;
+        }
+      }
+    }
+
+    if (deletingSelectedSession) {
+      setDraft("");
+      setApprovalActionId(null);
+      setAllPendingApprovals([]);
+      setPendingApprovals([]);
+    }
+
+    setChatState((current) => removeConversation(current, agentName, sessionKey));
   }
 
   useEffect(() => {
@@ -807,7 +1226,7 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
 
     async function syncCurrentSession() {
       if (!sessionId) {
-        setPendingApprovals([]);
+        applyApprovalSnapshot(await fetchAllPendingApprovals(), null);
         return;
       }
 
@@ -817,14 +1236,15 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
 
         applySessionSnapshot(session);
 
-        const approvals = await fetchPendingApprovals(session?.id ?? sessionId);
+        const allApprovals = await fetchAllPendingApprovals();
         if (cancelled) return;
 
-        setPendingApprovals(approvals);
+        applyApprovalSnapshot(allApprovals, session?.id ?? sessionId);
       } catch (syncError) {
         if (cancelled) return;
         if (getErrorMessage(syncError).includes("session not found")) {
-          setPendingApprovals([]);
+          applyApprovalSnapshot([], null);
+          setChatState((current) => removeConversationByRemoteId(current, agentName, sessionId));
         }
       }
     }
@@ -874,9 +1294,17 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
       const resolvedSessionId = response.session?.id ?? currentSessionId;
       const mappedMessages = mapSessionMessages(response.session, agentName);
       if (mappedMessages.length > 0) {
-        setChatState((current) =>
-          upsertConversation(current, agentName, mappedMessages, resolvedSessionId ?? current.sessionId),
-        );
+        setChatState((current) => {
+          if (response.session?.id) {
+            return bindRemoteSession(current, agentName, response.session.id, mappedMessages, {
+              createdAt: response.session.created_at ?? null,
+              title: response.session.title ?? null,
+              updatedAt: response.session.updated_at ?? null,
+            });
+          }
+
+          return upsertConversation(current, agentName, mappedMessages, resolvedSessionId ?? current.sessionId);
+        });
       } else if (response.response) {
         const assistantMessage: ChatMessage = {
           agent_name: normalizeAgentName(agentName ?? response.session?.agent) ?? undefined,
@@ -888,22 +1316,33 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
         setChatState((current) =>
           upsertConversation(current, agentName, [...current.messages, assistantMessage], resolvedSessionId ?? current.sessionId),
         );
+      } else if (resolvedSessionId) {
+        // A brand-new remote session can enter waiting_approval before the backend
+        // has persisted any messages. Bind the remote session id now so approval
+        // resolution can poll and resume against the correct session.
+        setChatState((current) =>
+          upsertConversation(
+            current,
+            agentName,
+            current.messages.length > 0 ? current.messages : [optimisticMessage],
+            resolvedSessionId,
+          ),
+        );
       }
 
       if (response.status === "waiting_approval") {
         const immediateApprovals = filterSessionApprovals(normalizeApprovals(response.approvals), resolvedSessionId);
-
         if (immediateApprovals.length > 0) {
+          setAllPendingApprovals(immediateApprovals);
           setPendingApprovals(immediateApprovals);
         } else {
           await syncSessionState(resolvedSessionId, { skipSession: true });
         }
-        setError("当前请求正在等待审批，批准后会继续执行。");
       }
       if (response.status === "waiting_approval") {
         setError(null);
       } else {
-        setPendingApprovals([]);
+        await syncSessionState(resolvedSessionId ?? currentSessionId, { skipSession: true });
       }
     } catch (error) {
       setError(getErrorMessage(error));
@@ -914,6 +1353,8 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
 
   return {
     approvalActionId,
+    approvalNoticeApprovals,
+    deleteSession,
     draft,
     error,
     isSending,
@@ -929,3 +1370,4 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
     setDraft,
   };
 }
+

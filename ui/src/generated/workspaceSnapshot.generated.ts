@@ -3,13 +3,13 @@
 // Do not edit manually.
 
 export const workspaceSnapshot = {
-  "generatedAt": "2026-04-11T16:18:04.808Z",
+  "generatedAt": "2026-04-17T18:41:39.632Z",
   "agent": {
-    "name": "黑塔",
+    "name": "binbin",
     "description": "Your AI assistant with file-based memory",
     "permissionLevel": "limited",
-    "workDir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\.anyclaw",
-    "workingDir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\workflows",
+    "workDir": ".anyclaw",
+    "workingDir": "workflows/default",
     "language": "zh-CN",
     "activeProfile": ""
   },
@@ -33,9 +33,9 @@ export const workspaceSnapshot = {
       "name": "Primary OpenAI-compatible",
       "type": "openai-compatible",
       "provider": "compatible",
-      "defaultModel": "gpt-4o-mini",
+      "defaultModel": "deepseek/deepseek-v3.2-251201",
       "enabled": true,
-      "isDefault": false,
+      "isDefault": true,
       "capabilitiesCount": 0
     },
     {
@@ -44,8 +44,8 @@ export const workspaceSnapshot = {
       "type": "qwen",
       "provider": "qwen",
       "defaultModel": "qwen-max",
-      "enabled": true,
-      "isDefault": true,
+      "enabled": false,
+      "isDefault": false,
       "capabilitiesCount": 0
     },
     {
@@ -61,11 +61,11 @@ export const workspaceSnapshot = {
   ],
   "agents": [
     {
-      "name": "黑塔",
+      "name": "binbin",
       "description": "Your AI assistant with file-based memory",
       "role": "main",
       "permissionLevel": "limited",
-      "workingDir": "D:\\anyclaw\\anyclaw\\anyclaw\\anyclaw-mvp\\anyclaw\\workflows",
+      "workingDir": "workflows/default",
       "providerRef": "",
       "defaultModel": "",
       "enabled": true,

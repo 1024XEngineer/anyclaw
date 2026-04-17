@@ -11,18 +11,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/agent"
-	"github.com/anyclaw/anyclaw/pkg/audit"
+	"github.com/anyclaw/anyclaw/pkg/capability/agents"
+	"github.com/anyclaw/anyclaw/pkg/capability/models"
+	"github.com/anyclaw/anyclaw/pkg/capability/skills"
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/consoleio"
-	"github.com/anyclaw/anyclaw/pkg/gateway"
-	"github.com/anyclaw/anyclaw/pkg/llm"
-	"github.com/anyclaw/anyclaw/pkg/routing"
+	gatewaysdk "github.com/anyclaw/anyclaw/pkg/gateway/transport/client"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/consoleio"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/setup"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
+	routeworkflow "github.com/anyclaw/anyclaw/pkg/route/workflow"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	"github.com/anyclaw/anyclaw/pkg/setup"
-	"github.com/anyclaw/anyclaw/pkg/skills"
-	"github.com/anyclaw/anyclaw/pkg/tools"
-	"github.com/anyclaw/anyclaw/pkg/ui"
+	"github.com/anyclaw/anyclaw/pkg/state/audit"
 )
 
 var version = appRuntime.Version
@@ -38,7 +38,7 @@ type RuntimeState struct {
 	workDir    string
 	workingDir string
 	gatewayURL string
-	client     *gateway.WSClient
+	client     *gatewaysdk.WSClient
 	rawOutput  bool
 }
 
@@ -84,8 +84,6 @@ func run(ctx context.Context, args []string) error {
 			return runDoctorCommand(args[1:])
 		case "claw":
 			return runClawCommand(args[1:])
-		case "app":
-			return runAppCommand(args[1:])
 		case "cron":
 			return runCronCommand(ctx, args[1:])
 		case "models":
@@ -124,8 +122,6 @@ func normalizeRootCommand(name string) string {
 		return "plugin"
 	case "agents":
 		return "agent"
-	case "apps":
-		return "app"
 	case "channel":
 		return "channels"
 	case "session":
@@ -461,8 +457,8 @@ func resolveGatewayRuntimeURL(cfg *config.Config, override string) string {
 	return appRuntime.GatewayURL(cfg)
 }
 
-func connectGatewayClient(ctx context.Context, gatewayURL string, token string) (*gateway.WSClient, error) {
-	client := gateway.NewWSClient(gatewayURL, token)
+func connectGatewayClient(ctx context.Context, gatewayURL string, token string) (*gatewaysdk.WSClient, error) {
+	client := gatewaysdk.NewWSClient(gatewayURL, token)
 	if client == nil {
 		return nil, fmt.Errorf("failed to create Gateway client")
 	}
@@ -477,7 +473,7 @@ func connectGatewayClient(ctx context.Context, gatewayURL string, token string) 
 	return client, nil
 }
 
-func newGatewayRuntimeState(cfg *config.Config, configPath string, gatewayURL string, client *gateway.WSClient) *RuntimeState {
+func newGatewayRuntimeState(cfg *config.Config, configPath string, gatewayURL string, client *gatewaysdk.WSClient) *RuntimeState {
 	return &RuntimeState{
 		llmClient:  nil,
 		cfg:        cfg,
@@ -676,7 +672,7 @@ func applyLLMRouteStable(state *RuntimeState, input string) string {
 	if state.llmClient == nil {
 		return ""
 	}
-	routeDecision := routing.DecideLLM(state.cfg.LLM, input)
+	routeDecision := routeworkflow.DecideLLM(state.cfg.LLM, input)
 	providerChanged := strings.TrimSpace(routeDecision.Provider) != "" && routeDecision.Provider != state.cfg.LLM.Provider
 	modelChanged := strings.TrimSpace(routeDecision.Model) != "" && routeDecision.Model != state.cfg.LLM.Model
 

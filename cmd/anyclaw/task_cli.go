@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/agentstore"
+	"github.com/anyclaw/anyclaw/pkg/capability/catalogs"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	"github.com/anyclaw/anyclaw/pkg/ui"
 )
 
 func runTaskCommand(ctx context.Context, args []string) error {

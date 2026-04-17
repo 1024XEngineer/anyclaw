@@ -1,109 +1,89 @@
 package auth
 
 import (
-	"context"
+	"crypto/subtle"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
 )
 
-type contextKey string
-
-const UserContextKey contextKey = "user"
-
 type Middleware struct {
-	config *config.Config
-	users  map[string]*User
+	cfg *config.SecurityConfig
 }
 
-type User struct {
-	ID       string
-	Username string
-	Role     string
-	Token    string
+func NewMiddleware(cfg *config.SecurityConfig) *Middleware {
+	return &Middleware{cfg: cfg}
 }
 
-func NewMiddleware(cfg *config.Config) *Middleware {
-	return &Middleware{
-		config: cfg,
-		users:  make(map[string]*User),
-	}
-}
-
-func (m *Middleware) RequirePermission(permission string, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, req *http.Request) {
-		token := extractToken(req)
-		if token == "" {
+func (m *Middleware) Wrap(path string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		adminCtx := func(req *http.Request) *http.Request {
+			admin := &User{Name: "local-admin", Role: "admin", Permissions: []string{"*"}}
+			return req.WithContext(WithUser(req.Context(), admin))
+		}
+		if !m.requiresAuth(path) {
+			next(w, adminCtx(r))
+			return
+		}
+		token := strings.TrimSpace(m.cfg.APIToken)
+		if token == "" && len(m.cfg.Users) == 0 {
+			next(w, adminCtx(r))
+			return
+		}
+		provided := bearerToken(r.Header.Get("Authorization"))
+		if provided == "" && r.URL.Query().Get("token") != "" {
+			provided = strings.TrimSpace(r.URL.Query().Get("token"))
+		}
+		user, ok := m.authenticate(provided, token)
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="anyclaw"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		next(w, r.WithContext(WithUser(r.Context(), user)))
+	}
+}
 
-		user := m.validateToken(token)
-		if user == nil {
-			http.Error(w, "invalid token", http.StatusUnauthorized)
-			return
+func (m *Middleware) authenticate(provided string, fallbackToken string) (*User, bool) {
+	if fallbackToken != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(fallbackToken)) == 1 {
+		return &User{Name: "admin", Role: "admin", Permissions: []string{"*"}}, true
+	}
+	for _, user := range m.cfg.Users {
+		if user.Token == "" {
+			continue
 		}
-
-		ctx := context.WithValue(req.Context(), UserContextKey, user)
-		next(w, req.WithContext(ctx))
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(user.Token)) == 1 {
+			permissions := resolveRolePermissions(m.cfg, user.Role)
+			permissions = append(permissions, user.PermissionOverrides...)
+			return &User{Name: user.Name, Role: user.Role, Permissions: permissions, PermissionOverrides: user.PermissionOverrides, Scopes: user.Scopes, Orgs: user.Orgs, Projects: user.Projects, Workspaces: user.Workspaces}, true
+		}
 	}
+	return nil, false
 }
 
-func (m *Middleware) validateToken(token string) *User {
-	if user, ok := m.users[token]; ok {
-		return user
+func (m *Middleware) requiresAuth(path string) bool {
+	if m == nil || m.cfg == nil {
+		return false
 	}
-	if token == "dev" {
-		return &User{ID: "1", Username: "dev", Role: "admin", Token: token}
+	for _, publicPath := range m.cfg.PublicPaths {
+		if strings.TrimSpace(publicPath) == path {
+			return false
+		}
 	}
-	return nil
+	if strings.HasPrefix(path, "/events") && !m.cfg.ProtectEvents {
+		return false
+	}
+	return true
 }
 
-func extractToken(req *http.Request) string {
-	auth := req.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") {
-		return strings.TrimPrefix(auth, "Bearer ")
+func bearerToken(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
 	}
-	return req.URL.Query().Get("token")
-}
-
-func GetUserFromContext(ctx context.Context) *User {
-	if user, ok := ctx.Value(UserContextKey).(*User); ok {
-		return user
+	if len(value) >= 7 && strings.EqualFold(value[:7], "Bearer ") {
+		return strings.TrimSpace(value[7:])
 	}
-	return nil
-}
-
-func (m *Middleware) HandleUsers(w http.ResponseWriter, req *http.Request) {
-	users := make([]map[string]string, 0, len(m.users))
-	for _, u := range m.users {
-		users = append(users, map[string]string{
-			"id":       u.ID,
-			"username": u.Username,
-			"role":     u.Role,
-		})
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-}
-
-type AuthResponse struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
-	User      *User     `json:"user"`
-}
-
-func (m *Middleware) HandleLogin(w http.ResponseWriter, req *http.Request) {
-	token := "dev-token-" + time.Now().Format("20060102150405")
-	user := &User{
-		ID:       "1",
-		Username: "dev",
-		Role:     "admin",
-		Token:    token,
-	}
-	m.users[token] = user
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	return ""
 }

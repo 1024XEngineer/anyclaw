@@ -1,9 +1,9 @@
 package runtime
 
 import (
+	"github.com/anyclaw/anyclaw/pkg/capability/skills"
 	"github.com/anyclaw/anyclaw/pkg/config"
 	runtimebootstrap "github.com/anyclaw/anyclaw/pkg/runtime/bootstrap"
-	"github.com/anyclaw/anyclaw/pkg/skills"
 )
 
 func resolveMainAgentPersonality(cfg *config.Config) config.PersonalitySpec {

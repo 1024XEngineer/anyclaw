@@ -1,8 +1,9 @@
 import { LoaderCircle, MessageSquareText, Plus, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type MouseEvent, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import {
+  CHAT_DELETE_EVENT,
   CHAT_RESET_EVENT,
   CHAT_SELECT_EVENT,
   CHAT_SYNC_EVENT,
@@ -73,6 +74,7 @@ function ChatSessionSidebar() {
   const openSettings = useShellStore((state) => state.openSettings);
   const [query, setQuery] = useState("");
   const [chatState, setChatState] = useState<PersistedChatState>(() => readPersistedChatState());
+  const [contextMenu, setContextMenu] = useState<{ sessionKey: string; x: number; y: number } | null>(null);
   const [sendingSessionKey, setSendingSessionKey] = useState<string | null>(null);
   const defaultProvider = data.providers.find((provider) => provider.isDefault) ?? data.providers[0] ?? null;
   const activeAgent = data.localAgents.find((agent) => agent.active) ?? data.localAgents[0] ?? null;
@@ -103,6 +105,32 @@ function ChatSessionSidebar() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const closeMenu = () => {
+      setContextMenu(null);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextMenu(null);
+      }
+    };
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+    };
+  }, [contextMenu]);
+
   const activeSessions = useMemo(() => {
     return chatState.sessions
       .filter((session) => {
@@ -113,12 +141,29 @@ function ChatSessionSidebar() {
   }, [activeAgent, chatState.sessions, query]);
 
   function handleOpenConversation(sessionKey: string) {
+    setContextMenu(null);
     window.dispatchEvent(new CustomEvent(CHAT_SELECT_EVENT, { detail: { sessionKey } }));
     navigate("/");
   }
 
   function handleNewConversation() {
+    setContextMenu(null);
     window.dispatchEvent(new Event(CHAT_RESET_EVENT));
+    navigate("/");
+  }
+
+  function handleSessionContextMenu(event: MouseEvent<HTMLDivElement>, sessionKey: string) {
+    event.preventDefault();
+    setContextMenu({
+      sessionKey,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }
+
+  function handleDeleteConversation(sessionKey: string) {
+    setContextMenu(null);
+    window.dispatchEvent(new CustomEvent(CHAT_DELETE_EVENT, { detail: { sessionKey } }));
     navigate("/");
   }
 
@@ -184,38 +229,45 @@ function ChatSessionSidebar() {
               const isThinking = sendingSessionKey === session.key;
 
               return (
-                <button
+                <div
                   className={[
-                    "flex w-full items-start gap-3 px-4 py-3 text-left transition-colors duration-150 hover:bg-[#f8fafc]",
                     isActive ? "bg-[#f8fafc]" : "bg-white",
                     index === 0 ? "" : "border-t border-[rgba(15,23,42,0.06)]",
                   ].join(" ")}
                   key={session.key}
-                  onClick={() => handleOpenConversation(session.key)}
-                  type="button"
+                  onContextMenu={(event) => handleSessionContextMenu(event, session.key)}
                 >
-                  <span
+                  <button
                     className={[
-                      "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px]",
-                      isThinking ? "bg-[#eef4ff] text-[#2563eb]" : "bg-[#f4f5f7] text-[#667085]",
+                      "flex w-full items-start gap-3 px-4 py-3 text-left transition-colors duration-150 hover:bg-[#f8fafc]",
+                      isActive ? "bg-[#f8fafc]" : "bg-white",
                     ].join(" ")}
+                    onClick={() => handleOpenConversation(session.key)}
+                    type="button"
                   >
-                    {isThinking ? (
-                      <LoaderCircle className="animate-spin" size={17} strokeWidth={2.1} />
-                    ) : (
-                      <MessageSquareText size={17} strokeWidth={2.1} />
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center justify-between gap-3">
-                      <span className="truncate text-[14px] font-medium text-[#1d1f25]">{session.title}</span>
-                      <span className="shrink-0 text-[11px] text-[#98a2b3]">
-                        {isThinking ? "思考中" : formatSessionTime(session.updatedAt)}
-                      </span>
+                    <span
+                      className={[
+                        "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px]",
+                        isThinking ? "bg-[#eef4ff] text-[#2563eb]" : "bg-[#f4f5f7] text-[#667085]",
+                      ].join(" ")}
+                    >
+                      {isThinking ? (
+                        <LoaderCircle className="animate-spin" size={17} strokeWidth={2.1} />
+                      ) : (
+                        <MessageSquareText size={17} strokeWidth={2.1} />
+                      )}
                     </span>
-                    <span className="mt-1 block truncate text-sm text-[#667085]">{getLastPreview(session)}</span>
-                  </span>
-                </button>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-3">
+                        <span className="truncate text-[14px] font-medium text-[#1d1f25]">{session.title}</span>
+                        <span className="shrink-0 text-[11px] text-[#98a2b3]">
+                          {isThinking ? "思考中" : formatSessionTime(session.updatedAt)}
+                        </span>
+                      </span>
+                      <span className="mt-1 block truncate text-sm text-[#667085]">{getLastPreview(session)}</span>
+                    </span>
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -229,6 +281,26 @@ function ChatSessionSidebar() {
           </div>
         )}
       </div>
+
+      {contextMenu ? (
+        <div
+          className="fixed z-50 min-w-[156px] rounded-[18px] border border-[rgba(15,23,42,0.08)] bg-white p-2 shadow-[0_18px_48px_rgba(15,23,42,0.18)]"
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+          style={{
+            left: `${contextMenu.x}px`,
+            top: `${contextMenu.y}px`,
+          }}
+        >
+          <button
+            className="flex w-full items-center rounded-[12px] px-3 py-2 text-left text-sm font-medium text-[#b42318] transition-colors duration-150 hover:bg-[#fff2f0]"
+            onClick={() => handleDeleteConversation(contextMenu.sessionKey)}
+            type="button"
+          >
+            删除对话
+          </button>
+        </div>
+      ) : null}
 
       <div className="mt-6 shrink-0 border-t border-[rgba(15,23,42,0.06)] px-1 pb-1 pt-5">
         <div className="text-sm font-medium text-[#1d1f25]">{activeAgent?.name || "AnyClaw"}</div>

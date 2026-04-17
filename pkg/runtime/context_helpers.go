@@ -2,9 +2,9 @@ package runtime
 
 import (
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/memory"
 	runtimecontext "github.com/anyclaw/anyclaw/pkg/runtime/context"
-	"github.com/anyclaw/anyclaw/pkg/secrets"
+	"github.com/anyclaw/anyclaw/pkg/state/memory"
+	"github.com/anyclaw/anyclaw/pkg/state/policy/secrets"
 )
 
 func deriveAgentContextTokenBudget(llmMaxTokens int) int {

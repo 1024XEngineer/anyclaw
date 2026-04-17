@@ -34,7 +34,7 @@ func normalizeAgentAlias(name string) string {
 
 func IsMainAgentAlias(name string) bool {
 	switch normalizeAgentAlias(name) {
-	case "mainagent", "defaultagent":
+	case "main", "default", "mainagent", "defaultagent":
 		return true
 	default:
 		return false

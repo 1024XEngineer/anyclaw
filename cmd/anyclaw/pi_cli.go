@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/pi"
+	"github.com/anyclaw/anyclaw/pkg/capability/agents/pi"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	"github.com/anyclaw/anyclaw/pkg/ui"
 )
 
 func runPiCommand(ctx context.Context, args []string) error {

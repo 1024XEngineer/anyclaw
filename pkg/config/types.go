@@ -327,18 +327,23 @@ type RoutingConfig struct {
 }
 
 type ChannelRoutingRule struct {
-	Channel      string `json:"channel"`
-	Match        string `json:"match"`
-	SessionMode  string `json:"session_mode"`
-	SessionID    string `json:"session_id"`
-	QueueMode    string `json:"queue_mode"`
-	ReplyBack    *bool  `json:"reply_back,omitempty"`
-	TitlePrefix  string `json:"title_prefix"`
-	Agent        string `json:"agent"`
-	Workspace    string `json:"workspace"`
-	Org          string `json:"org"`
-	Project      string `json:"project"`
-	WorkspaceRef string `json:"workspace_ref"`
+	Channel     string `json:"channel"`
+	Match       string `json:"match"`
+	SessionMode string `json:"session_mode"`
+	SessionID   string `json:"session_id"`
+	QueueMode   string `json:"queue_mode"`
+	ReplyBack   *bool  `json:"reply_back,omitempty"`
+	TitlePrefix string `json:"title_prefix"`
+	// Deprecated: ingress routing no longer selects agents directly.
+	Agent string `json:"agent,omitempty"`
+	// Deprecated: ingress routing no longer selects workspaces directly.
+	Workspace string `json:"workspace,omitempty"`
+	// Deprecated: ingress routing no longer selects orgs directly.
+	Org string `json:"org,omitempty"`
+	// Deprecated: ingress routing no longer selects projects directly.
+	Project string `json:"project,omitempty"`
+	// Deprecated: ingress routing no longer selects workspace refs directly.
+	WorkspaceRef string `json:"workspace_ref,omitempty"`
 }
 
 type SpeechConfig struct {

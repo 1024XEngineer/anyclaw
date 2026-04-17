@@ -1,31 +1,53 @@
 package middleware
 
 import (
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/anyclaw/anyclaw/pkg/config"
 )
 
 type RateLimiter struct {
-	mu        sync.Mutex
-	requests  map[string][]time.Time
-	maxReqs   int
-	windowSec int
+	mu      sync.Mutex
+	rpm     int
+	entries map[string]*rateEntry
+	trusted []*net.IPNet
 }
 
-func NewRateLimiter(maxReqs int, windowSec int) *RateLimiter {
-	return &RateLimiter{
-		requests:  make(map[string][]time.Time),
-		maxReqs:   maxReqs,
-		windowSec: windowSec,
+type rateEntry struct {
+	windowStart time.Time
+	count       int
+}
+
+func NewRateLimiter(cfg *config.SecurityConfig) *RateLimiter {
+	rl := &RateLimiter{entries: map[string]*rateEntry{}}
+	if cfg == nil {
+		return rl
 	}
+	rl.rpm = cfg.RateLimitRPM
+	for _, cidr := range cfg.TrustedCIDRs {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(cidr))
+		if err == nil && network != nil {
+			rl.trusted = append(rl.trusted, network)
+		}
+	}
+	return rl
 }
 
 func (r *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		ip := getClientIP(req)
-		if !r.allow(ip) {
+		if r == nil || r.rpm <= 0 || r.isTrusted(req.RemoteAddr) {
+			next(w, req)
+			return
+		}
+		allowed, remaining := r.allow(req.RemoteAddr)
+		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(r.rpm))
+		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+		if !allowed {
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -33,35 +55,39 @@ func (r *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (r *RateLimiter) allow(ip string) bool {
+func (r *RateLimiter) allow(remoteAddr string) (bool, int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	now := time.Now()
-	window := now.Add(-time.Duration(r.windowSec) * time.Second)
-
-	reqs := r.requests[ip]
-	var valid []time.Time
-	for _, t := range reqs {
-		if t.After(window) {
-			valid = append(valid, t)
-		}
+	key := remoteAddr
+	now := time.Now().UTC()
+	entry, ok := r.entries[key]
+	if !ok || now.Sub(entry.windowStart) >= time.Minute {
+		entry = &rateEntry{windowStart: now, count: 0}
+		r.entries[key] = entry
 	}
-
-	if len(valid) >= r.maxReqs {
-		r.requests[ip] = valid
-		return false
+	if entry.count >= r.rpm {
+		return false, 0
 	}
-
-	r.requests[ip] = append(valid, now)
-	return true
+	entry.count++
+	return true, max(0, r.rpm-entry.count)
 }
 
-func getClientIP(req *http.Request) string {
-	xff := req.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
+func (r *RateLimiter) isTrusted(remoteAddr string) bool {
+	if len(r.trusted) == 0 {
+		return false
 	}
-	return req.RemoteAddr
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil {
+		return false
+	}
+	for _, network := range r.trusted {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

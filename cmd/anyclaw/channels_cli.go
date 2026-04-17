@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/plugin"
+	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
+	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
 )
 
 func runChannelsCommand(args []string) error {
@@ -93,7 +93,7 @@ Usage:
 `)
 }
 
-func collectChannelStatuses(configPath string, requireGateway bool) (*config.Config, []channel.Status, bool, error) {
+func collectChannelStatuses(configPath string, requireGateway bool) (*config.Config, []inputlayer.Status, bool, error) {
 	cfg, err := loadGatewayConfig(configPath)
 	if err != nil {
 		return nil, nil, false, err
@@ -103,7 +103,7 @@ func collectChannelStatuses(configPath string, requireGateway bool) (*config.Con
 	ctx, cancel := newGatewayRequestContext()
 	defer cancel()
 
-	var remote []channel.Status
+	var remote []inputlayer.Status
 	err = doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/channels", nil, &remote)
 	if err != nil {
 		if requireGateway {
@@ -114,8 +114,8 @@ func collectChannelStatuses(configPath string, requireGateway bool) (*config.Con
 	return cfg, mergeChannelStatuses(local, remote), true, nil
 }
 
-func configuredChannelStatuses(cfg *config.Config) []channel.Status {
-	items := map[string]channel.Status{
+func configuredChannelStatuses(cfg *config.Config) []inputlayer.Status {
+	items := map[string]inputlayer.Status{
 		"discord":  {Name: "discord", Enabled: cfg.Channels.Discord.Enabled},
 		"signal":   {Name: "signal", Enabled: cfg.Channels.Signal.Enabled},
 		"slack":    {Name: "slack", Enabled: cfg.Channels.Slack.Enabled},
@@ -140,11 +140,11 @@ func configuredChannelStatuses(cfg *config.Config) []channel.Status {
 			if _, exists := items[lower]; exists {
 				continue
 			}
-			items[lower] = channel.Status{Name: name, Enabled: manifest.Enabled}
+			items[lower] = inputlayer.Status{Name: name, Enabled: manifest.Enabled}
 		}
 	}
 
-	merged := make([]channel.Status, 0, len(items))
+	merged := make([]inputlayer.Status, 0, len(items))
 	for _, item := range items {
 		merged = append(merged, item)
 	}
@@ -154,8 +154,8 @@ func configuredChannelStatuses(cfg *config.Config) []channel.Status {
 	return merged
 }
 
-func mergeChannelStatuses(local []channel.Status, remote []channel.Status) []channel.Status {
-	items := map[string]channel.Status{}
+func mergeChannelStatuses(local []inputlayer.Status, remote []inputlayer.Status) []inputlayer.Status {
+	items := map[string]inputlayer.Status{}
 	for _, item := range local {
 		items[strings.ToLower(strings.TrimSpace(item.Name))] = item
 	}
@@ -169,7 +169,7 @@ func mergeChannelStatuses(local []channel.Status, remote []channel.Status) []cha
 		items[key] = item
 	}
 
-	merged := make([]channel.Status, 0, len(items))
+	merged := make([]inputlayer.Status, 0, len(items))
 	for _, item := range items {
 		merged = append(merged, item)
 	}
@@ -179,7 +179,7 @@ func mergeChannelStatuses(local []channel.Status, remote []channel.Status) []cha
 	return merged
 }
 
-func printChannelStatuses(items []channel.Status) {
+func printChannelStatuses(items []inputlayer.Status) {
 	printChannelStatusLines(items, channelStatusPrintOptions{
 		DisabledLabel:       "disabled",
 		IncludeLastActivity: true,

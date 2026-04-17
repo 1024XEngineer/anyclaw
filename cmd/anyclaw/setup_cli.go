@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/setup"
-	"github.com/anyclaw/anyclaw/pkg/ui"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/setup"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
 )
 
 func terminalInteractive() bool {

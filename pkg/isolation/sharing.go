@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	ctxpkg "github.com/anyclaw/anyclaw/pkg/context"
+	ctxpkg "github.com/anyclaw/anyclaw/pkg/runtime/context/store"
 )
 
 type ContextBridge struct {

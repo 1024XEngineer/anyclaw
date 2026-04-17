@@ -8,22 +8,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/agent"
-	"github.com/anyclaw/anyclaw/pkg/audit"
+	"github.com/anyclaw/anyclaw/pkg/capability/agents"
+	"github.com/anyclaw/anyclaw/pkg/capability/models"
+	"github.com/anyclaw/anyclaw/pkg/capability/skills"
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/llm"
-	"github.com/anyclaw/anyclaw/pkg/memory"
-	"github.com/anyclaw/anyclaw/pkg/orchestrator"
-	"github.com/anyclaw/anyclaw/pkg/plugin"
+	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
 	"github.com/anyclaw/anyclaw/pkg/qmd"
-	"github.com/anyclaw/anyclaw/pkg/secrets"
-	"github.com/anyclaw/anyclaw/pkg/skills"
-	"github.com/anyclaw/anyclaw/pkg/tools"
+	"github.com/anyclaw/anyclaw/pkg/runtime/orchestrator"
+	"github.com/anyclaw/anyclaw/pkg/state/audit"
+	"github.com/anyclaw/anyclaw/pkg/state/memory"
+	"github.com/anyclaw/anyclaw/pkg/state/policy/secrets"
 	"github.com/anyclaw/anyclaw/pkg/workspace"
 )
 
-// NewTargetApp creates a runtime-targeted App with isolated work dir.
-func NewTargetApp(configPath string, agentName string, workingDir string) (*App, error) {
+// NewTargetRuntime creates a main runtime with an isolated work dir for a target agent/workspace.
+func NewTargetRuntime(configPath string, agentName string, workingDir string) (*MainRuntime, error) {
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
@@ -52,16 +52,21 @@ func NewTargetApp(configPath string, agentName string, workingDir string) (*App,
 	return Bootstrap(BootstrapOptions{ConfigPath: configPath, Config: cfg, WorkingDirOverride: workingDir})
 }
 
+// NewTargetApp preserves the legacy constructor name while callers migrate to MainRuntime naming.
+func NewTargetApp(configPath string, agentName string, workingDir string) (*App, error) {
+	return NewTargetRuntime(configPath, agentName, workingDir)
+}
+
 // Bootstrap initializes the application in well-defined phases.
 // Each phase emits a BootEvent through opts.Progress (if set).
-func Bootstrap(opts BootstrapOptions) (*App, error) {
+func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 	start := time.Now()
 	progress := opts.Progress
 	if progress == nil {
 		progress = func(BootEvent) {}
 	}
 
-	app := &App{ConfigPath: opts.ConfigPath}
+	app := &MainRuntime{ConfigPath: opts.ConfigPath}
 
 	progress(BootEvent{Phase: PhaseConfig, Status: "start", Message: "loading configuration"})
 	t := time.Now()
@@ -163,10 +168,7 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 		return nil, fmt.Errorf("storage: create working dir %q: %w", workingDir, err)
 	}
 	app.WorkingDir = workingDir
-	if err := workspace.EnsureBootstrap(workingDir, workspace.BootstrapOptions{
-		AgentName:        app.Config.Agent.Name,
-		AgentDescription: app.Config.Agent.Description,
-	}); err != nil {
+	if err := workspace.EnsureBootstrap(workingDir, buildWorkspaceBootstrapOptions(app.Config)); err != nil {
 		progress(BootEvent{Phase: PhaseStorage, Status: "fail", Message: "workspace bootstrap failed", Err: err, Dur: time.Since(t)})
 		return nil, fmt.Errorf("storage: bootstrap workspace %q: %w", workingDir, err)
 	}
@@ -322,7 +324,6 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 	}
 	plugRegistry.SetPolicyEngine(policyEngine)
 	plugRegistry.RegisterToolPlugins(registry, app.Config.Plugins.Dir)
-	plugRegistry.RegisterAppPlugins(registry, app.Config.Plugins.Dir, app.ConfigPath)
 	app.Plugins = plugRegistry
 
 	pluginCount := len(plugRegistry.List())
@@ -395,4 +396,31 @@ func Bootstrap(opts BootstrapOptions) (*App, error) {
 
 	progress(BootEvent{Phase: PhaseReady, Status: "ok", Message: fmt.Sprintf("bootstrap complete in %s", time.Since(start).Round(time.Millisecond))})
 	return app, nil
+}
+
+func buildWorkspaceBootstrapOptions(cfg *config.Config) workspace.BootstrapOptions {
+	opts := workspace.BootstrapOptions{}
+	if cfg == nil {
+		return opts
+	}
+
+	opts.AgentName = cfg.Agent.Name
+	opts.AgentDescription = cfg.Agent.Description
+	opts.UserProfile = bootstrapUserProfile(cfg)
+	opts.WorkspaceFocus = strings.TrimSpace(cfg.Agent.WorkFocus)
+	opts.AssistantStyle = strings.TrimSpace(cfg.Agent.BehaviorStyle)
+	opts.Constraints = strings.TrimSpace(cfg.Agent.Constraints)
+	return opts
+}
+
+func bootstrapUserProfile(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+
+	parts := []string{}
+	if lang := strings.TrimSpace(cfg.Agent.Lang); lang != "" {
+		parts = append(parts, "Default language: "+lang)
+	}
+	return strings.Join(parts, "; ")
 }

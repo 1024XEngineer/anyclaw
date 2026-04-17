@@ -7,13 +7,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/reply"
+	transportreply "github.com/anyclaw/anyclaw/pkg/gateway/transport/reply"
 )
 
 type Integration struct {
 	mu         sync.RWMutex
 	pipeline   *TTSPipeline
-	dispatcher *reply.Dispatcher
+	dispatcher *transportreply.Dispatcher
 	channelMgr ChannelManager
 	config     IntegrationConfig
 	hooks      []IntegrationHook
@@ -69,7 +69,7 @@ type IntegrationHook interface {
 	OnFallbackText(ctx context.Context, channel string, recipient string, text string) error
 }
 
-func NewIntegration(pipeline *TTSPipeline, dispatcher *reply.Dispatcher, channelMgr ChannelManager, cfg IntegrationConfig) *Integration {
+func NewIntegration(pipeline *TTSPipeline, dispatcher *transportreply.Dispatcher, channelMgr ChannelManager, cfg IntegrationConfig) *Integration {
 	return &Integration{
 		pipeline:   pipeline,
 		dispatcher: dispatcher,
@@ -129,7 +129,7 @@ func (i *Integration) ProcessMessage(ctx context.Context, channel string, recipi
 
 func (i *Integration) processTextOnly(ctx context.Context, channel string, recipient string, text string, metadata map[string]any) error {
 	if i.dispatcher != nil {
-		msg := &reply.Message{
+		msg := &transportreply.Message{
 			ID:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 			Channel:   channel,
 			From:      recipient,
@@ -167,7 +167,7 @@ func (i *Integration) processWithTTS(ctx context.Context, channel string, recipi
 	}
 
 	if i.dispatcher != nil {
-		msg := &reply.Message{
+		msg := &transportreply.Message{
 			ID:        fmt.Sprintf("tts-%d", time.Now().UnixNano()),
 			Channel:   channel,
 			From:      recipient,
@@ -314,13 +314,13 @@ func NewReplyDispatcherAdapter(integration *Integration) *ReplyDispatcherAdapter
 	return &ReplyDispatcherAdapter{integration: integration}
 }
 
-func (a *ReplyDispatcherAdapter) OnMessage(ctx context.Context, msg *reply.Message) error {
+func (a *ReplyDispatcherAdapter) OnMessage(ctx context.Context, msg *transportreply.Message) error {
 	_ = ctx
 	_ = msg
 	return nil
 }
 
-func (a *ReplyDispatcherAdapter) OnResponse(ctx context.Context, resp *reply.Response) error {
+func (a *ReplyDispatcherAdapter) OnResponse(ctx context.Context, resp *transportreply.Response) error {
 	a.integration.mu.RLock()
 	enabled := a.integration.config.Enabled
 	autoTTS := a.integration.config.AutoTTS

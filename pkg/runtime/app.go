@@ -5,19 +5,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/agent"
-	"github.com/anyclaw/anyclaw/pkg/audit"
+	"github.com/anyclaw/anyclaw/pkg/capability/agents"
+	"github.com/anyclaw/anyclaw/pkg/capability/models"
+	"github.com/anyclaw/anyclaw/pkg/capability/skills"
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/cron"
-	"github.com/anyclaw/anyclaw/pkg/llm"
-	"github.com/anyclaw/anyclaw/pkg/memory"
-	"github.com/anyclaw/anyclaw/pkg/orchestrator"
-	"github.com/anyclaw/anyclaw/pkg/plugin"
-	"github.com/anyclaw/anyclaw/pkg/prompt"
+	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
 	"github.com/anyclaw/anyclaw/pkg/qmd"
-	"github.com/anyclaw/anyclaw/pkg/secrets"
-	"github.com/anyclaw/anyclaw/pkg/skills"
-	"github.com/anyclaw/anyclaw/pkg/tools"
+	runtimeschedule "github.com/anyclaw/anyclaw/pkg/runtime/execution/schedule"
+	"github.com/anyclaw/anyclaw/pkg/runtime/orchestrator"
+	"github.com/anyclaw/anyclaw/pkg/state"
+	"github.com/anyclaw/anyclaw/pkg/state/audit"
+	"github.com/anyclaw/anyclaw/pkg/state/memory"
+	"github.com/anyclaw/anyclaw/pkg/state/policy/secrets"
 )
 
 const Version = "2026.3.13"
@@ -61,7 +61,8 @@ type BootstrapOptions struct {
 	WorkingDirOverride string
 }
 
-type App struct {
+// MainRuntime is the main-agent execution container for a specific target.
+type MainRuntime struct {
 	ConfigPath     string
 	Config         *config.Config
 	Agent          *agent.Agent
@@ -80,6 +81,9 @@ type App struct {
 	WorkingDir     string
 }
 
+// App is kept as a legacy alias while callers migrate to MainRuntime naming.
+type App = MainRuntime
+
 // LoadConfig loads configuration from disk with validation.
 func LoadConfig(configPath string) (*config.Config, error) {
 	if configPath == "" {
@@ -88,128 +92,140 @@ func LoadConfig(configPath string) (*config.Config, error) {
 	return config.Load(configPath)
 }
 
-// NewApp creates an App from a config file path (legacy API).
-func NewApp(configPath string) (*App, error) {
+func NewMainRuntime(configPath string) (*MainRuntime, error) {
 	if configPath == "" {
 		configPath = "anyclaw.json"
 	}
 	return Bootstrap(BootstrapOptions{ConfigPath: configPath})
 }
 
-// NewAppFromConfig creates an App from an existing config (legacy API).
-func NewAppFromConfig(configPath string, cfg *config.Config) (*App, error) {
+func NewMainRuntimeFromConfig(configPath string, cfg *config.Config) (*MainRuntime, error) {
 	return Bootstrap(BootstrapOptions{ConfigPath: configPath, Config: cfg})
 }
 
-func (a *App) GetHistory() []prompt.Message {
+// NewApp creates an App from a config file path (legacy API).
+func NewApp(configPath string) (*App, error) {
+	return NewMainRuntime(configPath)
+}
+
+// NewAppFromConfig creates an App from an existing config (legacy API).
+func NewAppFromConfig(configPath string, cfg *config.Config) (*App, error) {
+	return NewMainRuntimeFromConfig(configPath, cfg)
+}
+
+func (a *MainRuntime) GetHistory() []state.HistoryMessage {
 	if a == nil || a.Agent == nil {
 		return nil
 	}
-	return a.Agent.GetHistory()
+	return FromPromptMessages(a.Agent.GetHistory())
 }
 
-func (a *App) SetHistory(history []prompt.Message) {
+func (a *MainRuntime) SetHistory(history []state.HistoryMessage) {
 	if a == nil || a.Agent == nil {
 		return
 	}
-	a.Agent.SetHistory(history)
+	a.Agent.SetHistory(ToPromptMessages(history))
 }
 
-func (a *App) ListTools() []tools.ToolInfo {
+func (a *MainRuntime) ListTools() []tools.ToolInfo {
 	if a == nil || a.Agent == nil {
 		return nil
 	}
 	return a.Agent.ListTools()
 }
 
-func (a *App) ListSkills() []skills.SkillInfo {
+func (a *MainRuntime) ListSkills() []skills.SkillInfo {
 	if a == nil || a.Agent == nil {
 		return nil
 	}
 	return a.Agent.ListSkills()
 }
 
-func (a *App) ShowMemory() (string, error) {
+func (a *MainRuntime) ShowMemory() (string, error) {
 	if a == nil || a.Agent == nil {
 		return "", fmt.Errorf("runtime memory is unavailable: agent is not initialized")
 	}
 	return a.Agent.ShowMemory()
 }
 
-func (a *App) CallTool(ctx context.Context, name string, input map[string]any) (string, error) {
+func (a *MainRuntime) HasMemory() bool {
+	return a != nil && a.Memory != nil
+}
+
+func (a *MainRuntime) CallTool(ctx context.Context, name string, input map[string]any) (string, error) {
 	if a == nil || a.Tools == nil {
 		return "", fmt.Errorf("runtime tool registry is unavailable")
 	}
 	return a.Tools.Call(ctx, name, input)
 }
 
-func (a *App) ToolRegistry() *tools.Registry {
+func (a *MainRuntime) ToolRegistry() *tools.Registry {
 	if a == nil {
 		return nil
 	}
 	return a.Tools
 }
 
-func (a *App) PluginRegistry() *plugin.Registry {
+func (a *MainRuntime) PluginRegistry() *plugin.Registry {
 	if a == nil {
 		return nil
 	}
 	return a.Plugins
 }
 
-func (a *App) ListPlugins() []plugin.Manifest {
+func (a *MainRuntime) ListPlugins() []plugin.Manifest {
 	if a == nil || a.Plugins == nil {
 		return nil
 	}
 	return a.Plugins.List()
 }
 
-func (a *App) Chat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error) {
+func (a *MainRuntime) Chat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error) {
 	if a == nil || a.LLM == nil {
 		return nil, fmt.Errorf("runtime llm is unavailable")
 	}
 	return a.LLM.Chat(ctx, messages, toolDefs)
 }
 
-func (a *App) StreamChat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition, onChunk func(string)) error {
+func (a *MainRuntime) StreamChat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition, onChunk func(string)) error {
 	if a == nil || a.LLM == nil {
 		return fmt.Errorf("runtime llm is unavailable")
 	}
 	return a.LLM.StreamChat(ctx, messages, toolDefs, onChunk)
 }
 
-func (a *App) LLMName() string {
+func (a *MainRuntime) LLMName() string {
 	if a == nil || a.LLM == nil {
 		return ""
 	}
 	return a.LLM.Name()
 }
 
-func (a *App) Name() string {
+func (a *MainRuntime) Name() string {
 	return a.LLMName()
 }
 
-func (a *App) HasLLM() bool {
+func (a *MainRuntime) HasLLM() bool {
 	return a != nil && a.LLM != nil
 }
 
-func (a *App) SetLLMClient(client *llm.ClientWrapper) {
+func (a *MainRuntime) SetLLMClient(client *llm.ClientWrapper) {
 	if a == nil {
 		return
 	}
 	a.LLM = client
 }
 
-func (a *App) LLMClient() *llm.ClientWrapper {
+func (a *MainRuntime) LLMClient() *llm.ClientWrapper {
 	if a == nil {
 		return nil
 	}
 	return a.LLM
 }
 
-func (a *App) NewCronExecutor() *cron.AgentExecutor {
+func (a *MainRuntime) NewCronExecutor() *runtimeschedule.AgentExecutor {
 	if a == nil {
 		return nil
 	}
-	return cron.NewAgentExecutor(a.Agent, a.Orchestrator)
+	return runtimeschedule.NewAgentExecutor(a.Agent, a.Orchestrator)
 }

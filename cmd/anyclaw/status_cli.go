@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/channel"
 	"github.com/anyclaw/anyclaw/pkg/gateway"
-	"github.com/anyclaw/anyclaw/pkg/ui"
+	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
 )
 
 type sessionListItem struct {
@@ -69,7 +69,7 @@ func runStatusCommand(args []string) error {
 	includeChannels := *deep || *all
 	includeSessions := *all
 
-	var channels []channel.Status
+	var channels []inputlayer.Status
 	if includeChannels {
 		_ = doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/channels", nil, &channels)
 	}
@@ -148,7 +148,7 @@ func runHealthCommand(args []string) error {
 	}
 
 	var status gateway.Status
-	var channels []channel.Status
+	var channels []inputlayer.Status
 	if *verbose {
 		_ = doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/status", nil, &status)
 		_ = doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/channels", nil, &channels)

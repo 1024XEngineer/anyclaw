@@ -286,6 +286,7 @@ export function ChatHomePage() {
   const modelLabel = defaultProvider?.model || data.runtimeProfile.model || "默认大模型";
   const {
     approvalActionId,
+    approvalNoticeApprovals,
     draft,
     error,
     isSending,
@@ -438,7 +439,7 @@ export function ChatHomePage() {
           </div>
         </div>
 
-        <ApprovalNotice approvalActionId={approvalActionId} approvals={pendingApprovals} onResolve={resolveApproval} />
+        <ApprovalNotice approvalActionId={approvalActionId} approvals={approvalNoticeApprovals} onResolve={resolveApproval} />
 
         <Composer
           activeAgentLabel={activeAgentLabel}

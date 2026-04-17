@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/orchestrator"
+	"github.com/anyclaw/anyclaw/pkg/runtime/orchestrator"
 )
 
 func BuildOrchestratorConfig(cfg *config.Config, workDir string, workingDir string) orchestrator.OrchestratorConfig {

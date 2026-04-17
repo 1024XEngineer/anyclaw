@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/tools"
 )
 
 // runShellCommand provides a very lightweight CLI that executes a shell command

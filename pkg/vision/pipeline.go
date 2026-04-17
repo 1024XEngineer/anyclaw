@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/llm"
+	"github.com/anyclaw/anyclaw/pkg/capability/models"
 )
 
 type MediaUnderstandingConfig struct {

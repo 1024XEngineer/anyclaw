@@ -17,8 +17,8 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/config"
 	gatewayserver "github.com/anyclaw/anyclaw/pkg/gateway"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/setup"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	"github.com/anyclaw/anyclaw/pkg/setup"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -87,6 +87,13 @@ type gatewayEvent struct {
 	SessionID string         `json:"session_id"`
 	Timestamp string         `json:"timestamp"`
 	Payload   map[string]any `json:"payload"`
+}
+
+type gatewayApproval struct {
+	ID       string         `json:"id"`
+	Status   string         `json:"status"`
+	ToolName string         `json:"tool_name"`
+	Payload  map[string]any `json:"payload"`
 }
 
 type DesktopApp struct {
@@ -287,7 +294,14 @@ func (a *DesktopApp) PetSnapshot() PetSnapshot {
 		events = nil
 	}
 
-	state, label, detail, lastEvent := derivePetState(status, events)
+	var approvals []gatewayApproval
+	if status.Approvals.Pending > 0 {
+		if err := doGatewayJSONRequest(ctx, cfg, http.MethodGet, "/approvals?status=pending", nil, &approvals); err != nil {
+			approvals = nil
+		}
+	}
+
+	state, label, detail, lastEvent := derivePetState(status, events, approvals)
 	snapshot.State = state
 	snapshot.Label = label
 	snapshot.Detail = detail
@@ -397,7 +411,7 @@ func (a *DesktopApp) stopGateway() {
 }
 
 func discoverBundleRoot() string {
-	candidates := make([]string, 0, 5)
+	candidates := make([]string, 0, 3)
 
 	if env := strings.TrimSpace(os.Getenv("ANYCLAW_DESKTOP_ROOT")); env != "" {
 		candidates = append(candidates, env)
@@ -408,31 +422,11 @@ func discoverBundleRoot() string {
 	}
 
 	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		candidates = append(candidates, exeDir)
-		candidates = append(candidates, filepath.Dir(exeDir))
-		candidates = append(candidates, filepath.Dir(filepath.Dir(exeDir)))
+		candidates = append(candidates, filepath.Dir(exe))
 	}
 
-	seen := map[string]bool{}
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		abs, err := filepath.Abs(candidate)
-		if err != nil {
-			continue
-		}
-		if seen[abs] {
-			continue
-		}
-		seen[abs] = true
-		if pathExists(filepath.Join(abs, "dist", "control-ui")) ||
-			pathExists(filepath.Join(abs, "skills")) ||
-			pathExists(filepath.Join(abs, defaultDesktopConfigName)) {
-			return abs
-		}
+	if root := selectDesktopBundleRoot(candidates); root != "" {
+		return root
 	}
 
 	if cwd, err := os.Getwd(); err == nil {
@@ -446,30 +440,130 @@ func discoverBundleRoot() string {
 }
 
 func resolveDesktopConfigPath(bundleRoot string) string {
-	if raw := strings.TrimSpace(os.Getenv("ANYCLAW_DESKTOP_CONFIG")); raw != "" {
-		return resolveAbsPath(raw)
+	cwd := ""
+	if resolved, err := os.Getwd(); err == nil {
+		cwd = resolved
 	}
 
-	if cwd, err := os.Getwd(); err == nil {
-		cwdConfig := filepath.Join(cwd, defaultDesktopConfigName)
-		if pathExists(cwdConfig) {
-			return cwdConfig
+	userConfigDir := ""
+	if resolved, err := os.UserConfigDir(); err == nil {
+		userConfigDir = resolved
+	}
+
+	return resolveDesktopConfigPathWith(
+		bundleRoot,
+		cwd,
+		userConfigDir,
+		strings.TrimSpace(os.Getenv("ANYCLAW_DESKTOP_CONFIG")),
+	)
+}
+
+func selectDesktopBundleRoot(startPoints []string) string {
+	bestPath := ""
+	bestScore := -1
+
+	for _, candidate := range expandDesktopPathCandidates(startPoints) {
+		score := scoreDesktopBundleRoot(candidate)
+		if score > bestScore {
+			bestPath = candidate
+			bestScore = score
 		}
 	}
 
-	if bundleRoot != "" {
+	if bestScore <= 0 {
+		return ""
+	}
+
+	return bestPath
+}
+
+func expandDesktopPathCandidates(startPoints []string) []string {
+	seen := map[string]bool{}
+	candidates := make([]string, 0, len(startPoints)*4)
+
+	for _, point := range startPoints {
+		point = strings.TrimSpace(point)
+		if point == "" {
+			continue
+		}
+
+		abs, err := filepath.Abs(point)
+		if err != nil {
+			continue
+		}
+
+		current := filepath.Clean(abs)
+		for {
+			if !seen[current] {
+				seen[current] = true
+				candidates = append(candidates, current)
+			}
+
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+	}
+
+	return candidates
+}
+
+func scoreDesktopBundleRoot(path string) int {
+	score := 0
+
+	if pathExists(filepath.Join(path, "dist", "control-ui")) {
+		score += 4
+	}
+	if pathExists(filepath.Join(path, "skills")) {
+		score += 3
+	}
+	if pathExists(filepath.Join(path, "plugins")) {
+		score += 2
+	}
+	if pathExists(filepath.Join(path, "cmd", "anyclaw-desktop")) {
+		score += 2
+	}
+	if pathExists(filepath.Join(path, "go.mod")) {
+		score++
+	}
+	if pathExists(filepath.Join(path, defaultDesktopConfigName)) {
+		score++
+	}
+
+	return score
+}
+
+func resolveDesktopConfigPathWith(bundleRoot string, cwd string, userConfigDir string, envConfigPath string) string {
+	if raw := strings.TrimSpace(envConfigPath); raw != "" {
+		return resolveAbsPath(raw)
+	}
+
+	if bundleRoot = strings.TrimSpace(bundleRoot); bundleRoot != "" {
 		bundleConfig := filepath.Join(bundleRoot, defaultDesktopConfigName)
 		if pathExists(bundleConfig) {
 			return bundleConfig
 		}
 	}
 
-	if dir, err := os.UserConfigDir(); err == nil && strings.TrimSpace(dir) != "" {
-		return filepath.Join(dir, "AnyClaw", defaultDesktopConfigName)
+	if cwd = strings.TrimSpace(cwd); cwd != "" {
+		cwdConfig := filepath.Join(cwd, defaultDesktopConfigName)
+		if pathExists(cwdConfig) {
+			return cwdConfig
+		}
+	}
+
+	if userConfigDir = strings.TrimSpace(userConfigDir); userConfigDir != "" {
+		return filepath.Join(userConfigDir, "AnyClaw", defaultDesktopConfigName)
 	}
 
 	if bundleRoot != "" {
 		return filepath.Join(bundleRoot, defaultDesktopConfigName)
+	}
+
+	if cwd != "" {
+		return filepath.Join(cwd, defaultDesktopConfigName)
 	}
 
 	return resolveAbsPath(defaultDesktopConfigName)
@@ -666,7 +760,7 @@ func doGatewayJSONRequest(ctx context.Context, cfg *config.Config, method string
 	return json.NewDecoder(resp.Body).Decode(responseBody)
 }
 
-func derivePetState(status gatewayStatusResponse, events []gatewayEvent) (string, string, string, string) {
+func derivePetState(status gatewayStatusResponse, events []gatewayEvent, approvals []gatewayApproval) (string, string, string, string) {
 	lastType := ""
 	lastAt := time.Time{}
 	if len(events) > 0 {
@@ -679,7 +773,11 @@ func derivePetState(status gatewayStatusResponse, events []gatewayEvent) (string
 
 	switch {
 	case status.Approvals.Pending > 0:
-		return "waiting", "等待确认", "有操作正在等待你批准", lastType
+		detail := "有操作正在等待你批准"
+		if summary := summarizePendingApproval(approvals); summary != "" {
+			detail = summary
+		}
+		return "waiting", "等待确认", detail, lastType
 	case status.Runtime.Active > 0:
 		if lastType == "tool.activity" || strings.HasPrefix(lastType, "task.") {
 			return "executing", "正在执行", "桌宠正在调用工具处理任务", lastType
@@ -697,6 +795,57 @@ func derivePetState(status gatewayStatusResponse, events []gatewayEvent) (string
 			detail = fmt.Sprintf("%s · %s", status.Status.Provider, status.Status.Model)
 		}
 		return "online", "在线", detail, lastType
+	}
+}
+
+func summarizePendingApproval(approvals []gatewayApproval) string {
+	for _, approval := range approvals {
+		if !strings.EqualFold(strings.TrimSpace(approval.Status), "pending") {
+			continue
+		}
+		if summary := summarizeApprovalPayload(approval.Payload); summary != "" {
+			return "等待批准：" + summary
+		}
+		if toolName := strings.TrimSpace(approval.ToolName); toolName != "" {
+			return "等待批准：" + toolName
+		}
+	}
+	return ""
+}
+
+func summarizeApprovalPayload(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	if message, ok := payload["message"].(string); ok && strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
+	}
+	if title, ok := payload["title"].(string); ok && strings.TrimSpace(title) != "" {
+		return strings.TrimSpace(title)
+	}
+	if args, ok := payload["args"].(map[string]any); ok {
+		for _, key := range []string{"command", "target", "url", "path", "text"} {
+			if summary := approvalValueSummary(args[key]); summary != "" {
+				return summary
+			}
+		}
+	}
+	for _, key := range []string{"command", "target", "url", "path", "text"} {
+		if summary := approvalValueSummary(payload[key]); summary != "" {
+			return summary
+		}
+	}
+	return ""
+}
+
+func approvalValueSummary(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String())
+	default:
+		return ""
 	}
 }
 

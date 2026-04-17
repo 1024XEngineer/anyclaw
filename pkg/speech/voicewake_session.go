@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/prompt"
+	"github.com/anyclaw/anyclaw/pkg/capability/agents/prompt"
 )
 
 type VoiceWakeSession struct {

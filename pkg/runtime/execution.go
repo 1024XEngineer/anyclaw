@@ -5,21 +5,22 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/agent"
-	appstate "github.com/anyclaw/anyclaw/pkg/apps"
-	"github.com/anyclaw/anyclaw/pkg/prompt"
-	"github.com/anyclaw/anyclaw/pkg/tools"
+	"github.com/anyclaw/anyclaw/pkg/capability/agents"
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
+	appstate "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
+	"github.com/anyclaw/anyclaw/pkg/state"
 )
 
 type ExecutionRequest struct {
 	Input                  string
-	History                []prompt.Message
+	History                []state.HistoryMessage
 	ReplaceHistory         bool
 	SessionID              string
 	Channel                string
 	AgentApprovalHook      agent.ToolApprovalHook
+	ApprovalResumeState    *agent.ApprovalResumeState
 	ProtocolApprovalHook   tools.ToolApprovalHook
-	DesktopPlanResumeState *appstate.DesktopPlanExecutionState
+	DesktopPlanResumeState *state.DesktopPlanExecutionState
 	DesktopPlanStateHook   appstate.DesktopPlanStateHook
 }
 
@@ -28,16 +29,22 @@ type ExecutionResult struct {
 	ToolActivities []agent.ToolActivity
 }
 
-func (a *App) Execute(ctx context.Context, req ExecutionRequest) (*ExecutionResult, error) {
+func (a *MainRuntime) Execute(ctx context.Context, req ExecutionRequest) (*ExecutionResult, error) {
 	if a == nil || a.Agent == nil {
 		return nil, fmt.Errorf("runtime execution is unavailable: agent is not initialized")
 	}
 	if req.ReplaceHistory {
-		a.Agent.SetHistory(req.History)
+		a.Agent.SetHistory(ToPromptMessages(req.History))
 	}
 
 	execCtx := prepareExecutionContext(ctx, req)
-	output, err := a.Agent.Run(execCtx, req.Input)
+	output := ""
+	var err error
+	if req.ApprovalResumeState != nil {
+		output, err = a.Agent.ResumeAfterApproval(execCtx, *req.ApprovalResumeState)
+	} else {
+		output, err = a.Agent.Run(execCtx, req.Input)
+	}
 	result := &ExecutionResult{
 		Output:         output,
 		ToolActivities: a.Agent.GetLastToolActivities(),
@@ -48,12 +55,12 @@ func (a *App) Execute(ctx context.Context, req ExecutionRequest) (*ExecutionResu
 	return result, nil
 }
 
-func (a *App) Stream(ctx context.Context, req ExecutionRequest, onChunk func(string)) (*ExecutionResult, error) {
+func (a *MainRuntime) Stream(ctx context.Context, req ExecutionRequest, onChunk func(string)) (*ExecutionResult, error) {
 	if a == nil || a.Agent == nil {
 		return nil, fmt.Errorf("runtime execution is unavailable: agent is not initialized")
 	}
 	if req.ReplaceHistory {
-		a.Agent.SetHistory(req.History)
+		a.Agent.SetHistory(ToPromptMessages(req.History))
 	}
 
 	execCtx := prepareExecutionContext(ctx, req)
@@ -74,7 +81,7 @@ func (a *App) Stream(ctx context.Context, req ExecutionRequest, onChunk func(str
 	return result, nil
 }
 
-func (a *App) Run(ctx context.Context, userInput string) (string, error) {
+func (a *MainRuntime) Run(ctx context.Context, userInput string) (string, error) {
 	result, err := a.Execute(ctx, ExecutionRequest{Input: userInput})
 	if result == nil {
 		return "", err
@@ -82,7 +89,7 @@ func (a *App) Run(ctx context.Context, userInput string) (string, error) {
 	return result.Output, err
 }
 
-func (a *App) RunStream(ctx context.Context, userInput string, onChunk func(string)) error {
+func (a *MainRuntime) RunStream(ctx context.Context, userInput string, onChunk func(string)) error {
 	_, err := a.Stream(ctx, ExecutionRequest{Input: userInput}, onChunk)
 	return err
 }
@@ -105,7 +112,7 @@ func prepareExecutionContext(ctx context.Context, req ExecutionRequest) context.
 		ctx = tools.WithToolApprovalHook(ctx, req.ProtocolApprovalHook)
 	}
 	if req.DesktopPlanResumeState != nil {
-		ctx = appstate.WithDesktopPlanResumeState(ctx, req.DesktopPlanResumeState)
+		ctx = appstate.WithDesktopPlanResumeState(ctx, ToRuntimeDesktopPlanState(req.DesktopPlanResumeState))
 	}
 	if req.DesktopPlanStateHook != nil {
 		ctx = appstate.WithDesktopPlanStateHook(ctx, req.DesktopPlanStateHook)

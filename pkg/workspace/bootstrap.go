@@ -14,6 +14,10 @@ type BootstrapOptions struct {
 	AgentName         string
 	AgentDescription  string
 	BootstrapMaxChars int
+	UserProfile       string
+	WorkspaceFocus    string
+	AssistantStyle    string
+	Constraints       string
 }
 
 type BootstrapFile struct {
@@ -72,7 +76,66 @@ func EnsureBootstrap(dir string, opts BootstrapOptions) error {
 		}
 	}
 
+	if shouldAutoCompleteBootstrap(opts) && fileExists(filepath.Join(dir, "BOOTSTRAP.md")) {
+		if err := finalizeConfiguredBootstrap(dir, opts); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+func shouldAutoCompleteBootstrap(opts BootstrapOptions) bool {
+	seedCount := 0
+	for _, value := range []string{
+		opts.UserProfile,
+		opts.WorkspaceFocus,
+		opts.AssistantStyle,
+		opts.Constraints,
+	} {
+		if strings.TrimSpace(value) != "" {
+			seedCount++
+		}
+	}
+	return seedCount >= 2
+}
+
+func finalizeConfiguredBootstrap(dir string, opts BootstrapOptions) error {
+	state, err := loadBootstrapState(dir)
+	if err != nil {
+		return err
+	}
+	if state.Answers == nil {
+		state.Answers = map[string]string{}
+	}
+
+	seedBootstrapAnswer(state.Answers, "user_profile", opts.UserProfile)
+	seedBootstrapAnswer(state.Answers, "workspace_focus", opts.WorkspaceFocus)
+	seedBootstrapAnswer(state.Answers, "assistant_style", opts.AssistantStyle)
+	seedBootstrapAnswer(state.Answers, "constraints", opts.Constraints)
+
+	if err := writeBootstrapProfiles(dir, state, BootstrapRitualOptions{
+		AgentName:        opts.AgentName,
+		AgentDescription: opts.AgentDescription,
+	}); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(dir, "BOOTSTRAP.md")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return clearBootstrapState(dir)
+}
+
+func seedBootstrapAnswer(answers map[string]string, key string, value string) {
+	if answers == nil {
+		return
+	}
+	if strings.TrimSpace(answers[key]) != "" {
+		return
+	}
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		answers[key] = trimmed
+	}
 }
 
 func LoadBootstrapFiles(dir string, opts BootstrapOptions) ([]BootstrapFile, error) {

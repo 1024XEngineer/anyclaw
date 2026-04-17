@@ -9,9 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/mcp"
-	"github.com/anyclaw/anyclaw/pkg/tools"
+	"github.com/anyclaw/anyclaw/pkg/extensions/mcp"
 )
 
 func runMCPCommand(args []string) error {

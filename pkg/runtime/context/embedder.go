@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/memory"
-	"github.com/anyclaw/anyclaw/pkg/secrets"
+	"github.com/anyclaw/anyclaw/pkg/state/memory"
+	"github.com/anyclaw/anyclaw/pkg/state/policy/secrets"
 )
 
 func ResolveEmbedder(cfg *config.Config, secretsSnap *secrets.RuntimeSnapshot) memory.EmbeddingProvider {
