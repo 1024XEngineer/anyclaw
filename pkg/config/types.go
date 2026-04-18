@@ -198,22 +198,6 @@ type ChannelSecurityConfig struct {
 	MentionGate      bool     `json:"mention_gate"`
 	RiskAcknowledged bool     `json:"risk_acknowledged"`
 	DefaultDenyDM    bool     `json:"default_deny_dm"`
-
-	pairingEnabledSet bool
-	mentionGateSet    bool
-	defaultDenyDMSet  bool
-}
-
-func (c ChannelSecurityConfig) PairingEnabledSet() bool {
-	return c.pairingEnabledSet
-}
-
-func (c ChannelSecurityConfig) MentionGateSet() bool {
-	return c.mentionGateSet
-}
-
-func (c ChannelSecurityConfig) DefaultDenyDMSet() bool {
-	return c.defaultDenyDMSet
 }
 
 type TelegramChannelConfig struct {

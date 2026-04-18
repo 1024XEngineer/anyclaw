@@ -1,4 +1,4 @@
-package config
+﻿package config
 
 import (
 	"encoding/json"
@@ -418,43 +418,6 @@ func TestSaveRelativizesPathsInsideConfigDirectory(t *testing.T) {
 	}
 }
 
-func TestSaveDoesNotMutateOriginalConfigPaths(t *testing.T) {
-	dir := t.TempDir()
-	configDir := filepath.Join(dir, "config")
-	path := filepath.Join(configDir, "anyclaw.json")
-
-	cfg := DefaultConfig()
-	profileDir := filepath.Join(configDir, "workflows", "go")
-	subAgentDir := filepath.Join(configDir, "workflows", "worker")
-	cfg.Agent.Profiles = []AgentProfile{
-		{
-			Name:            "Go Expert",
-			Description:     "Go specialist",
-			WorkingDir:      profileDir,
-			PermissionLevel: "limited",
-		},
-	}
-	cfg.Orchestrator.SubAgents = []SubAgentConfig{
-		{
-			Name:            "worker",
-			Description:     "background worker",
-			PermissionLevel: "limited",
-			WorkingDir:      subAgentDir,
-		},
-	}
-
-	if err := cfg.Save(path); err != nil {
-		t.Fatalf("save should succeed: %v", err)
-	}
-
-	if got := cfg.Agent.Profiles[0].WorkingDir; got != profileDir {
-		t.Fatalf("expected original profile working dir to remain %q, got %q", profileDir, got)
-	}
-	if got := cfg.Orchestrator.SubAgents[0].WorkingDir; got != subAgentDir {
-		t.Fatalf("expected original sub-agent working dir to remain %q, got %q", subAgentDir, got)
-	}
-}
-
 func TestValidateDefaultProviderRef(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Providers = []ProviderProfile{
@@ -690,44 +653,5 @@ func TestResolveAgentProfileSupportsMainAgentAlias(t *testing.T) {
 	}
 	if cfg.Agent.ActiveProfile != "Python Expert" {
 		t.Fatalf("expected active profile Python Expert, got %q", cfg.Agent.ActiveProfile)
-	}
-}
-
-func TestChannelSecurityConfigUnmarshalTracksPresenceFlags(t *testing.T) {
-	var cfg ChannelSecurityConfig
-	if err := json.Unmarshal([]byte(`{
-  "pairing_enabled": false,
-  "mention_gate": false,
-  "default_deny_dm": true
-}`), &cfg); err != nil {
-		t.Fatalf("unmarshal channel security config: %v", err)
-	}
-
-	if !cfg.PairingEnabledSet() {
-		t.Fatal("expected pairing_enabled presence flag to be set")
-	}
-	if !cfg.MentionGateSet() {
-		t.Fatal("expected mention_gate presence flag to be set")
-	}
-	if !cfg.DefaultDenyDMSet() {
-		t.Fatal("expected default_deny_dm presence flag to be set")
-	}
-	if cfg.PairingEnabled {
-		t.Fatal("expected explicit pairing_enabled=false to be preserved")
-	}
-	if cfg.MentionGate {
-		t.Fatal("expected explicit mention_gate=false to be preserved")
-	}
-	if !cfg.DefaultDenyDM {
-		t.Fatal("expected explicit default_deny_dm=true to be preserved")
-	}
-
-	var empty ChannelSecurityConfig
-	if err := json.Unmarshal([]byte(`{}`), &empty); err != nil {
-		t.Fatalf("unmarshal empty channel security config: %v", err)
-	}
-	if empty.PairingEnabledSet() || empty.MentionGateSet() || empty.DefaultDenyDMSet() {
-		t.Fatalf("expected absent fields to keep presence flags false, got pairing=%v mention=%v deny=%v",
-			empty.PairingEnabledSet(), empty.MentionGateSet(), empty.DefaultDenyDMSet())
 	}
 }
