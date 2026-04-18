@@ -68,22 +68,100 @@ func TestDelegateTaskToolReturnsStructuredResult(t *testing.T) {
 	}
 }
 
+func TestDelegationServiceRejectsSkipDelegationRoute(t *testing.T) {
+	service := newDelegationService(&MainRuntime{
+		Orchestrator: newTestOrchestrator(t),
+	})
+
+	result, err := service.Delegate(context.Background(), DelegationRequest{
+		Task:           "Inspect the repository",
+		SkipDelegation: true,
+	})
+	if err == nil {
+		t.Fatalf("expected skip delegation route to stop execution, got result %#v", result)
+	}
+	if !strings.Contains(err.Error(), "kept the task on the main agent") {
+		t.Fatalf("expected main-agent routing error, got %v", err)
+	}
+}
+
+func TestDelegationServiceAllowsExplicitMultiAgentSelection(t *testing.T) {
+	service := newDelegationService(&MainRuntime{
+		Orchestrator: newTestOrchestratorWithNames(t, "specialist-a", "specialist-b"),
+	})
+
+	result, err := service.Delegate(context.Background(), DelegationRequest{
+		Task:       "Inspect the repository",
+		AgentNames: []string{"specialist-a", "specialist-b"},
+	})
+	if err != nil {
+		t.Fatalf("Delegate: %v", err)
+	}
+	if len(result.SelectedAgents) != 2 {
+		t.Fatalf("expected explicit multi-agent selection to be preserved, got %#v", result.SelectedAgents)
+	}
+}
+
+func TestDelegationServiceCreatesTemporarySubagentWhenNoPersistentAgentsExist(t *testing.T) {
+	service := newDelegationService(&MainRuntime{
+		Orchestrator: newTestOrchestratorWithNames(t),
+	})
+
+	result, err := service.Delegate(context.Background(), DelegationRequest{
+		Task: "Inspect the repository",
+	})
+	if err != nil {
+		t.Fatalf("Delegate: %v", err)
+	}
+	if len(result.SelectedAgents) != 1 {
+		t.Fatalf("expected one temporary agent, got %#v", result.SelectedAgents)
+	}
+	if !strings.Contains(result.SelectedAgents[0], "temporary-subagent") {
+		t.Fatalf("expected temporary agent name, got %#v", result.SelectedAgents)
+	}
+}
+
+func TestDelegationServiceUsesRequestedTemporaryAgentNameWhenPersistentTargetMissing(t *testing.T) {
+	service := newDelegationService(&MainRuntime{
+		Orchestrator: newTestOrchestratorWithNames(t),
+	})
+
+	result, err := service.Delegate(context.Background(), DelegationRequest{
+		Task:       "Inspect the repository",
+		AgentNames: []string{"UX Reviewer"},
+	})
+	if err != nil {
+		t.Fatalf("Delegate: %v", err)
+	}
+	if len(result.SelectedAgents) != 1 || result.SelectedAgents[0] != "ux-reviewer" {
+		t.Fatalf("expected requested temporary agent name to be normalized, got %#v", result.SelectedAgents)
+	}
+}
+
 func newTestOrchestrator(t *testing.T) *orchestrator.Orchestrator {
+	t.Helper()
+	return newTestOrchestratorWithNames(t, "specialist")
+}
+
+func newTestOrchestratorWithNames(t *testing.T, names ...string) *orchestrator.Orchestrator {
 	t.Helper()
 
 	mem := newTestMemory(t)
 	t.Cleanup(func() { mem.Close() })
 
+	defs := make([]orchestrator.AgentDefinition, 0, len(names))
+	for _, name := range names {
+		defs = append(defs, orchestrator.AgentDefinition{
+			Name:            name,
+			Description:     "Handles delegated sub-tasks",
+			PermissionLevel: "limited",
+		})
+	}
+
 	orch, err := orchestrator.NewOrchestrator(orchestrator.OrchestratorConfig{
 		MaxConcurrentAgents: 1,
 		EnableDecomposition: false,
-		AgentDefinitions: []orchestrator.AgentDefinition{
-			{
-				Name:            "specialist",
-				Description:     "Handles delegated sub-tasks",
-				PermissionLevel: "limited",
-			},
-		},
+		AgentDefinitions:    defs,
 	}, &testRuntimeLLM{}, skills.NewSkillsManager(""), tools.NewRegistry(), mem)
 	if err != nil {
 		t.Fatalf("NewOrchestrator: %v", err)

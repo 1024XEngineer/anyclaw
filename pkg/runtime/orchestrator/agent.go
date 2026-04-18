@@ -482,6 +482,12 @@ func (p *AgentPool) Register(name string, sa *SubAgent) {
 	p.agents[name] = sa
 }
 
+func (p *AgentPool) Unregister(name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.agents, name)
+}
+
 func (p *AgentPool) Get(name string) (*SubAgent, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

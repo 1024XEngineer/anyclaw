@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/term v0.2.2
+	github.com/anyclaw/anyclaw v0.0.0
 	github.com/chromedp/cdproto v0.0.0-20240801214329-3f85d328b335
 	github.com/chromedp/chromedp v0.10.0
 	github.com/gorilla/websocket v1.5.3
@@ -15,6 +16,8 @@ require (
 	golang.org/x/text v0.22.0
 	modernc.org/sqlite v1.48.1
 )
+
+replace github.com/anyclaw/anyclaw => .
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
