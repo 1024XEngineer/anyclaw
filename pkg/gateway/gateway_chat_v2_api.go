@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/gateway/intake/chat"
+	"github.com/1024XEngineer/anyclaw/pkg/gateway/intake/chat"
 )
 
 func (s *Server) handleV2Chat(w http.ResponseWriter, r *http.Request) {

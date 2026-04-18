@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 var runGatewayControlUIBuild = func(ctx context.Context, repoRoot string) error {

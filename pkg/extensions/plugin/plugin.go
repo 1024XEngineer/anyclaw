@@ -15,10 +15,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
-	"github.com/anyclaw/anyclaw/pkg/config"
-	desktopexec "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
-	"github.com/anyclaw/anyclaw/pkg/runtime/execution/verification"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	desktopexec "github.com/1024XEngineer/anyclaw/pkg/runtime/execution/desktop"
+	"github.com/1024XEngineer/anyclaw/pkg/runtime/execution/verification"
 )
 
 type Manifest struct {

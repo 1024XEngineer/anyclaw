@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	gatewayintake "github.com/anyclaw/anyclaw/pkg/gateway/intake"
-	"github.com/anyclaw/anyclaw/pkg/route/ingress"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	gatewayintake "github.com/1024XEngineer/anyclaw/pkg/gateway/intake"
+	"github.com/1024XEngineer/anyclaw/pkg/route/ingress"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 type ingressSessionStore struct {

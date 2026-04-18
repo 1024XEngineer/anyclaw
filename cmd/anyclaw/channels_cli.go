@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
-	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
 )
 
 func runChannelsCommand(args []string) error {

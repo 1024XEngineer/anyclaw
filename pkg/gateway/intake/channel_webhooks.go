@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
-	inputchannels "github.com/anyclaw/anyclaw/pkg/input/channels"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
+	inputchannels "github.com/1024XEngineer/anyclaw/pkg/input/channels"
 )
 
 type DiscordInteractionAdapter interface {

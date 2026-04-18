@@ -3,8 +3,8 @@ package runtime
 import (
 	"context"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
-	"github.com/anyclaw/anyclaw/pkg/qmd"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	"github.com/1024XEngineer/anyclaw/pkg/qmd"
 )
 
 type qmdAdapter struct {

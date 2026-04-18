@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
-	gatewayevents "github.com/anyclaw/anyclaw/pkg/gateway/events"
-	gatewayintake "github.com/anyclaw/anyclaw/pkg/gateway/intake"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	gatewayevents "github.com/1024XEngineer/anyclaw/pkg/gateway/events"
+	gatewayintake "github.com/1024XEngineer/anyclaw/pkg/gateway/intake"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 type SessionAgentResolver func(name string) (string, error)

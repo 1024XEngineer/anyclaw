@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	controlui "github.com/anyclaw/anyclaw/pkg/gateway/transport/controlui"
-	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	controlui "github.com/1024XEngineer/anyclaw/pkg/gateway/transport/controlui"
+	appRuntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
 func TestRegisterUIRoutesServesControlAndRedirectsLegacyPages(t *testing.T) {

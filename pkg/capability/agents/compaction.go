@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents/prompt"
-	"github.com/anyclaw/anyclaw/pkg/capability/models"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/agents/prompt"
+	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
 )
 
 // CompactionConfig controls context window management

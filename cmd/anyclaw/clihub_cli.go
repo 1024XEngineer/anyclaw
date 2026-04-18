@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/clihub"
+	"github.com/1024XEngineer/anyclaw/pkg/clihub"
 )
 
 func runCLIHubCommand(args []string) error {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/clawbridge"
+	"github.com/1024XEngineer/anyclaw/pkg/clawbridge"
 )
 
 func TestRegisterClawBridgeToolsRegistersContextToolWhenBridgeExists(t *testing.T) {

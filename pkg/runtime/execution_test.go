@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents"
-	"github.com/anyclaw/anyclaw/pkg/capability/skills"
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
-	"github.com/anyclaw/anyclaw/pkg/state"
-	"github.com/anyclaw/anyclaw/pkg/state/memory"
+	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/skills"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
+	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
 )
 
 func TestAppExecuteReplacesHistoryThroughRuntimeBoundary(t *testing.T) {

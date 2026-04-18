@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	gatewayauth "github.com/anyclaw/anyclaw/pkg/gateway/auth"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	gatewayauth "github.com/1024XEngineer/anyclaw/pkg/gateway/auth"
 )
 
 func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {

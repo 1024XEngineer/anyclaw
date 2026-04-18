@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func TestResolveRolePermissionsUsesBuiltinTemplates(t *testing.T) {

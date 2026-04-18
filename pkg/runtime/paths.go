@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	runtimebootstrap "github.com/anyclaw/anyclaw/pkg/runtime/bootstrap"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	runtimebootstrap "github.com/1024XEngineer/anyclaw/pkg/runtime/bootstrap"
 )
 
 func resolveRuntimePaths(cfg *config.Config, configPath string) {

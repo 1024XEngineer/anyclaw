@@ -3,9 +3,9 @@ package gateway
 import (
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
-	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
+	appRuntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
 func TestInitChannelsRegistersAllBuiltinChannelAdapters(t *testing.T) {

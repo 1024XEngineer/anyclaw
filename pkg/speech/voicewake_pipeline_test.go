@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents/prompt"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/agents/prompt"
 )
 
 type mockAgent struct {

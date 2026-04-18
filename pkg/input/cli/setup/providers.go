@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/models"
-	"github.com/anyclaw/anyclaw/pkg/config"
+	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 type ProviderOption struct {

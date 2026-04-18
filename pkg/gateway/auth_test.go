@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 func TestAuthMiddleware_NoToken(t *testing.T) {

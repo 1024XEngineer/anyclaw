@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	gatewayevents "github.com/anyclaw/anyclaw/pkg/gateway/events"
+	gatewayevents "github.com/1024XEngineer/anyclaw/pkg/gateway/events"
 )
 
 type ChannelID string

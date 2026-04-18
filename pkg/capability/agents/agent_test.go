@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents/prompt"
-	"github.com/anyclaw/anyclaw/pkg/capability/models"
-	"github.com/anyclaw/anyclaw/pkg/capability/skills"
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
-	"github.com/anyclaw/anyclaw/pkg/clawbridge"
-	"github.com/anyclaw/anyclaw/pkg/state/memory"
-	"github.com/anyclaw/anyclaw/pkg/workspace"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/agents/prompt"
+	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/skills"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	"github.com/1024XEngineer/anyclaw/pkg/clawbridge"
+	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
+	"github.com/1024XEngineer/anyclaw/pkg/workspace"
 )
 
 type stubAgentLLM struct {

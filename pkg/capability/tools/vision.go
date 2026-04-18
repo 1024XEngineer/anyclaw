@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/models"
+	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
 )
 
 type imageMatchResult struct {

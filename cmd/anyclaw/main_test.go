@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/input/cli/consoleio"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/consoleio"
 )
 
 func TestNormalizeRootCommandSupportsOpenClawAliases(t *testing.T) {

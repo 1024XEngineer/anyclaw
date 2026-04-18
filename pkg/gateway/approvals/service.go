@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	sessionrunner "github.com/anyclaw/anyclaw/pkg/runtime/sessionrunner"
-	taskrunner "github.com/anyclaw/anyclaw/pkg/runtime/taskrunner"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	sessionrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/sessionrunner"
+	taskrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 type Service struct {

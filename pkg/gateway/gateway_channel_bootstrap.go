@@ -3,10 +3,10 @@ package gateway
 import (
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
-	inputchannels "github.com/anyclaw/anyclaw/pkg/input/channels"
-	routeingress "github.com/anyclaw/anyclaw/pkg/route/ingress"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
+	inputchannels "github.com/1024XEngineer/anyclaw/pkg/input/channels"
+	routeingress "github.com/1024XEngineer/anyclaw/pkg/route/ingress"
 )
 
 func (s *Server) initChannels() {

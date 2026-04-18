@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents"
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
-	"github.com/anyclaw/anyclaw/pkg/config"
-	appruntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	"github.com/anyclaw/anyclaw/pkg/runtime/taskrunner"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	appruntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 type Manager struct {

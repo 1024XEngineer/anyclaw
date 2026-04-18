@@ -1,10 +1,10 @@
 package taskrunner
 
 import (
-	"github.com/anyclaw/anyclaw/pkg/capability/agents"
-	appruntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	appstate "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
+	appruntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
+	appstate "github.com/1024XEngineer/anyclaw/pkg/runtime/execution/desktop"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (m *Manager) SetPlanner(planner Planner) {

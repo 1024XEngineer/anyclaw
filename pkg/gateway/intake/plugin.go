@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
-	gatewayauth "github.com/anyclaw/anyclaw/pkg/gateway/auth"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
+	gatewayauth "github.com/1024XEngineer/anyclaw/pkg/gateway/auth"
 )
 
 type PluginIngressAPI struct {

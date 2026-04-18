@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents"
-	"github.com/anyclaw/anyclaw/pkg/capability/models"
-	appruntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
+	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
+	appruntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 type Manager struct {

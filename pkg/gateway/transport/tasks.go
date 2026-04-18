@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
-	gatewayintake "github.com/anyclaw/anyclaw/pkg/gateway/intake"
-	taskrunner "github.com/anyclaw/anyclaw/pkg/runtime/taskrunner"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	gatewayintake "github.com/1024XEngineer/anyclaw/pkg/gateway/intake"
+	taskrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 type TaskPermissionChecker func(ctx context.Context, permission string) bool

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/gateway"
-	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
+	"github.com/1024XEngineer/anyclaw/pkg/gateway"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/ui"
 )
 
 type sessionListItem struct {

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	skillscatalog "github.com/anyclaw/anyclaw/pkg/capability/skills"
+	skillscatalog "github.com/1024XEngineer/anyclaw/pkg/capability/skills"
 )
 
 type skillView = skillscatalog.View

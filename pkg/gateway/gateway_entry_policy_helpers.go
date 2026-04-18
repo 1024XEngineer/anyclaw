@@ -1,6 +1,6 @@
 package gateway
 
-import gatewayintake "github.com/anyclaw/anyclaw/pkg/gateway/intake"
+import gatewayintake "github.com/1024XEngineer/anyclaw/pkg/gateway/intake"
 
 func (s *Server) mainEntryPolicy() gatewayintake.MainEntryPolicy {
 	return gatewayintake.MainEntryPolicy{

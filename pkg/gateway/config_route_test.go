@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	routeingress "github.com/anyclaw/anyclaw/pkg/route/ingress"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	routeingress "github.com/1024XEngineer/anyclaw/pkg/route/ingress"
 )
 
 func TestConfigRouteAllowsReadPermission(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	taskrunner "github.com/anyclaw/anyclaw/pkg/runtime/taskrunner"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	taskrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 )
 
 func BridgeToToolRegistry(registry *tools.Registry, mcpRegistry *Registry) error {

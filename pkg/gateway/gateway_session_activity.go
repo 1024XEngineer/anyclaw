@@ -1,8 +1,8 @@
 package gateway
 
 import (
-	"github.com/anyclaw/anyclaw/pkg/capability/agents"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (s *Server) recordSessionToolActivities(session *state.Session, activities []agent.ToolActivity) {

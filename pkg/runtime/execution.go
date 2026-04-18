@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents"
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
-	appstate "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	appstate "github.com/1024XEngineer/anyclaw/pkg/runtime/execution/desktop"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 type ExecutionRequest struct {

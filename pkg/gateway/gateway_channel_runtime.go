@@ -3,7 +3,7 @@ package gateway
 import (
 	"context"
 
-	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
 )
 
 func (s *Server) runChannels(ctx context.Context) {

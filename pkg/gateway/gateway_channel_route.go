@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	routeingress "github.com/anyclaw/anyclaw/pkg/route/ingress"
-	sessionrunner "github.com/anyclaw/anyclaw/pkg/runtime/sessionrunner"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	routeingress "github.com/1024XEngineer/anyclaw/pkg/route/ingress"
+	sessionrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/sessionrunner"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (s *Server) resolveChannelRoute(source string, sessionID string, message string, meta map[string]string) (routeingress.RouteOutput, error) {

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/catalogs"
+	agentstore "github.com/1024XEngineer/anyclaw/pkg/capability/catalogs"
 )
 
 func (s *Server) handleV2Store(w http.ResponseWriter, r *http.Request) {

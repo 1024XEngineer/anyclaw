@@ -15,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	gatewayserver "github.com/anyclaw/anyclaw/pkg/gateway"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/setup"
-	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	gatewayserver "github.com/1024XEngineer/anyclaw/pkg/gateway"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/setup"
+	appRuntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

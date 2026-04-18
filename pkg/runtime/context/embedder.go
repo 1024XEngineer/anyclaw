@@ -3,9 +3,9 @@ package context
 import (
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/state/memory"
-	"github.com/anyclaw/anyclaw/pkg/state/policy/secrets"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
+	"github.com/1024XEngineer/anyclaw/pkg/state/policy/secrets"
 )
 
 func ResolveEmbedder(cfg *config.Config, secretsSnap *secrets.RuntimeSnapshot) memory.EmbeddingProvider {

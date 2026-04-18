@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 	"github.com/gorilla/websocket"
 )
 

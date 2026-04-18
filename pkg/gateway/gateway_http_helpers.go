@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	gatewayevents "github.com/anyclaw/anyclaw/pkg/gateway/events"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	gatewayevents "github.com/1024XEngineer/anyclaw/pkg/gateway/events"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (s *Server) appendEvent(eventType string, sessionID string, payload map[string]any) {

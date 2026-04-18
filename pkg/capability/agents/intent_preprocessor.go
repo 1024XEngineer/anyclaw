@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents/prompt"
-	"github.com/anyclaw/anyclaw/pkg/clihub"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/agents/prompt"
+	"github.com/1024XEngineer/anyclaw/pkg/clihub"
 )
 
 type IntentPreprocessor struct {

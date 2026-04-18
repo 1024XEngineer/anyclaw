@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
 type RPCServer struct {

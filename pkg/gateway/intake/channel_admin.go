@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
 )
 
 type MentionGate interface {

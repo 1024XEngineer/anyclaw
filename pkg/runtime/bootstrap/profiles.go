@@ -3,8 +3,8 @@ package bootstrap
 import (
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/skills"
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/skills"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 func ResolveMainAgentPersonality(cfg *config.Config) config.PersonalitySpec {

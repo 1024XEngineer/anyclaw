@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
-	desktopexec "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	desktopexec "github.com/1024XEngineer/anyclaw/pkg/runtime/execution/desktop"
 )
 
 func TestExecuteProtocolOutputRunsDesktopSteps(t *testing.T) {

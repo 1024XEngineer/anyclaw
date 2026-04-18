@@ -3,7 +3,7 @@ package gateway
 import (
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/state"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (c *openClawWSConn) filteredSessions(params map[string]any) []*state.Session {

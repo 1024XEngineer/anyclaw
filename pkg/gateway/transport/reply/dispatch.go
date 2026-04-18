@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/models"
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
+	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 )
 
 type Dispatcher struct {

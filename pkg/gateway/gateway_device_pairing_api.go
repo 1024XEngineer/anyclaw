@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	appsecurity "github.com/anyclaw/anyclaw/pkg/gateway/auth/security"
+	appsecurity "github.com/1024XEngineer/anyclaw/pkg/gateway/auth/security"
 )
 
 func (s *Server) handleDevicePairing(w http.ResponseWriter, r *http.Request) {

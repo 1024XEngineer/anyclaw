@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/setup"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/setup"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/ui"
 )
 
 func terminalInteractive() bool {

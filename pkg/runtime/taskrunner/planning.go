@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/models"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (m *Manager) planTask(ctx context.Context, input string) (string, []plannedStep) {

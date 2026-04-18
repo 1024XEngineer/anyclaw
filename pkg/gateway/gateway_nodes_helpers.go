@@ -3,7 +3,7 @@ package gateway
 import (
 	"context"
 
-	nodepkg "github.com/anyclaw/anyclaw/pkg/gateway/resources/nodes"
+	nodepkg "github.com/1024XEngineer/anyclaw/pkg/gateway/resources/nodes"
 )
 
 func (s *Server) nodesAPI() nodepkg.API {

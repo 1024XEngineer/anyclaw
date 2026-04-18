@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	desktopexec "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
+	desktopexec "github.com/1024XEngineer/anyclaw/pkg/runtime/execution/desktop"
 )
 
 type ToolExecutor func(ctx context.Context, toolName string, input map[string]any) (string, error)

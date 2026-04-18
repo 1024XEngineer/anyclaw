@@ -3,8 +3,8 @@ package gateway
 import (
 	"net/http"
 
-	gatewayresources "github.com/anyclaw/anyclaw/pkg/gateway/resources"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	gatewayresources "github.com/1024XEngineer/anyclaw/pkg/gateway/resources"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (s *Server) resourcesAPI() gatewayresources.API {

@@ -3,7 +3,7 @@ package ingress
 import (
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 // AgentResolver implements M2 by combining explicit hints and the configured main agent.

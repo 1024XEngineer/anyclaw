@@ -3,7 +3,7 @@ package bootstrap
 import (
 	"path/filepath"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 func ResolveRuntimePaths(cfg *config.Config, configPath string) {

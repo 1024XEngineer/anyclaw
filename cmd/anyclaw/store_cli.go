@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/catalogs"
-	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/catalogs"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/ui"
 )
 
 func runStoreCommand(args []string) error {

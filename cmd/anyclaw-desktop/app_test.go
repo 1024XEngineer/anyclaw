@@ -13,7 +13,7 @@ func TestSelectDesktopBundleRootPrefersRepositoryRoot(t *testing.T) {
 	mustMkdirAll(t, filepath.Join(root, "dist", "control-ui"))
 	mustMkdirAll(t, filepath.Join(root, "skills"))
 	mustMkdirAll(t, binDir)
-	mustWriteFile(t, filepath.Join(root, "go.mod"), "module github.com/anyclaw/anyclaw\n")
+	mustWriteFile(t, filepath.Join(root, "go.mod"), "module github.com/1024XEngineer/anyclaw\n")
 	mustWriteFile(t, filepath.Join(root, defaultDesktopConfigName), "{}\n")
 	mustWriteFile(t, filepath.Join(binDir, defaultDesktopConfigName), "{}\n")
 

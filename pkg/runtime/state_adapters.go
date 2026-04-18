@@ -1,9 +1,9 @@
 package runtime
 
 import (
-	"github.com/anyclaw/anyclaw/pkg/capability/agents/prompt"
-	appstate "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/agents/prompt"
+	appstate "github.com/1024XEngineer/anyclaw/pkg/runtime/execution/desktop"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func ToPromptMessages(history []state.HistoryMessage) []prompt.Message {

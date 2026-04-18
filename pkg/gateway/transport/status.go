@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
-	runtimepkg "github.com/anyclaw/anyclaw/pkg/runtime"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
+	runtimepkg "github.com/1024XEngineer/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 type Status struct {

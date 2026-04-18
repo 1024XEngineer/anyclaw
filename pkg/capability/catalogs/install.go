@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 var installHTTPClient = &http.Client{Timeout: 60 * time.Second}

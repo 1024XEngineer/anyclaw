@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/extensions/mcp"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/mcp"
 )
 
 func (s *Server) initMCP(ctx context.Context) {

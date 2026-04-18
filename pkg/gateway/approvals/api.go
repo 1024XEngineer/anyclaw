@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	gatewayauth "github.com/anyclaw/anyclaw/pkg/gateway/auth"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	gatewayauth "github.com/1024XEngineer/anyclaw/pkg/gateway/auth"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 type API struct {

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	skillscatalog "github.com/anyclaw/anyclaw/pkg/capability/skills"
-	"github.com/anyclaw/anyclaw/pkg/config"
+	skillscatalog "github.com/1024XEngineer/anyclaw/pkg/capability/skills"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 func (s *Server) currentConfiguredSkillRefs() []config.AgentSkillRef {

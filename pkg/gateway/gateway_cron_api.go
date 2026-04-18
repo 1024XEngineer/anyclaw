@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	runtimeschedule "github.com/anyclaw/anyclaw/pkg/runtime/execution/schedule"
+	runtimeschedule "github.com/1024XEngineer/anyclaw/pkg/runtime/execution/schedule"
 )
 
 var cronScheduler *runtimeschedule.Scheduler

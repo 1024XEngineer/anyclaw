@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
 )
 
 const gatewayRequestTimeout = 5 * time.Second

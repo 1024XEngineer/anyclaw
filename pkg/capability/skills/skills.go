@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 )
 
 type Skill struct {

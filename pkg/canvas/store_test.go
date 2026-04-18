@@ -219,7 +219,7 @@ func TestA2UIParseAndRender(t *testing.T) {
 			{"type": "section", "props": {"title": "Details", "description": "More context"}, "children": [
 				{"type": "stack", "props": {"gap": "8px"}, "children": [
 					{"type": "textarea", "props": {"rows": "6", "placeholder": "Write here"}, "content": "Draft"},
-					{"type": "link", "content": "AnyClaw", "props": {"href": "https://github.com/anyclaw/anyclaw"}}
+					{"type": "link", "content": "AnyClaw", "props": {"href": "https://github.com/1024XEngineer/anyclaw"}}
 				]}
 			]}
 		]
@@ -249,7 +249,7 @@ func TestA2UIParseAndRender(t *testing.T) {
 		`--accent:#0f766e`,
 		`<section class="a2ui-section"`,
 		`<textarea rows="6" placeholder="Write here">Draft</textarea>`,
-		`<a href="https://github.com/anyclaw/anyclaw">AnyClaw</a>`,
+		`<a href="https://github.com/1024XEngineer/anyclaw">AnyClaw</a>`,
 	}) {
 		t.Fatalf("rendered HTML missing expected upgraded A2UI content:\n%s", html)
 	}

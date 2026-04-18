@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	cr "github.com/anyclaw/anyclaw/pkg/extensions/adapters/cli/registry"
+	cr "github.com/1024XEngineer/anyclaw/pkg/extensions/adapters/cli/registry"
 )
 
 type Executor struct {

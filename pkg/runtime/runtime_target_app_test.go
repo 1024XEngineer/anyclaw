@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/state/memory"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
 )
 
 func TestNewTargetAppAppliesAgentProfileProviderAndPreservesWorkspaceOverride(t *testing.T) {

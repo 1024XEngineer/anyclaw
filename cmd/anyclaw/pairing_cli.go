@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	gatewaysdk "github.com/anyclaw/anyclaw/pkg/gateway/transport/client"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
-	"github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	gatewaysdk "github.com/1024XEngineer/anyclaw/pkg/gateway/transport/client"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/ui"
+	"github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
 func runPairingCommand(ctx context.Context, args []string) error {

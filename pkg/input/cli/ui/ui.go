@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/input/cli/consoleio"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/consoleio"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

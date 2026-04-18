@@ -1,6 +1,6 @@
 package gateway
 
-import sessionrunner "github.com/anyclaw/anyclaw/pkg/runtime/sessionrunner"
+import sessionrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/sessionrunner"
 
 func (s *Server) ensureSessionRunner() *sessionrunner.Manager {
 	if s == nil {

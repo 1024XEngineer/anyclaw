@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/tools"
-	routehandoff "github.com/anyclaw/anyclaw/pkg/route/handoff"
-	runtimedelegation "github.com/anyclaw/anyclaw/pkg/runtime/delegation"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	routehandoff "github.com/1024XEngineer/anyclaw/pkg/route/handoff"
+	runtimedelegation "github.com/1024XEngineer/anyclaw/pkg/runtime/delegation"
 )
 
 type DelegationRequest = runtimedelegation.Request

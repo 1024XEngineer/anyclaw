@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {

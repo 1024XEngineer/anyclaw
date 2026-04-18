@@ -1,6 +1,6 @@
 package auth
 
-import "github.com/anyclaw/anyclaw/pkg/config"
+import "github.com/1024XEngineer/anyclaw/pkg/config"
 
 func BuiltinRoleTemplates() []config.SecurityRole {
 	return []config.SecurityRole{

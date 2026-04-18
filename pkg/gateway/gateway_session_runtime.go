@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"net/http"
 
-	gatewayapprovals "github.com/anyclaw/anyclaw/pkg/gateway/approvals"
-	sessionrunner "github.com/anyclaw/anyclaw/pkg/runtime/sessionrunner"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	gatewayapprovals "github.com/1024XEngineer/anyclaw/pkg/gateway/approvals"
+	sessionrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/sessionrunner"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (s *Server) approvalsAPI() gatewayapprovals.API {

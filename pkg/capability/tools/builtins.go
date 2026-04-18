@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	webtool "github.com/anyclaw/anyclaw/pkg/capability/tools/web"
+	webtool "github.com/1024XEngineer/anyclaw/pkg/capability/tools/web"
 )
 
 func resolvePath(path string, cwd string) string {

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
 )
 
 type pluginChannelAdapter struct {

@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 	_ "modernc.org/sqlite/vec"
 
-	"github.com/anyclaw/anyclaw/pkg/index"
+	"github.com/1024XEngineer/anyclaw/pkg/index"
 )
 
 func setupTestServer(t *testing.T) (*Server, *mockEmbedder) {

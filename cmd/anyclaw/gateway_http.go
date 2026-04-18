@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	appRuntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
 func gatewayHTTPClient(timeout time.Duration) *http.Client {

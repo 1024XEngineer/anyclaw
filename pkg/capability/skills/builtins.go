@@ -98,7 +98,7 @@ func builtinSkillDefinition(seed builtinSkillSeed) skillFileDefinition {
 		Version:        "2.1.0",
 		Source:         "builtin",
 		Registry:       "builtin",
-		Homepage:       "https://github.com/anyclaw/anyclaw",
+		Homepage:       "https://github.com/1024XEngineer/anyclaw",
 		Entrypoint:     "builtin://" + name,
 		Permissions:    append([]string(nil), seed.Permissions...),
 		InstallCommand: "anyclaw skill install " + name,

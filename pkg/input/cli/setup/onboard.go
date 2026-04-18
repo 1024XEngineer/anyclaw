@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/consoleio"
-	"github.com/anyclaw/anyclaw/pkg/workspace"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/consoleio"
+	"github.com/1024XEngineer/anyclaw/pkg/workspace"
 )
 
 type OnboardOptions struct {

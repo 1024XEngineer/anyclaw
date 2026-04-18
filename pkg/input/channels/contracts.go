@@ -1,6 +1,6 @@
 package channels
 
-import inputlayer "github.com/anyclaw/anyclaw/pkg/input"
+import inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
 
 type InboundHandler = inputlayer.InboundHandler
 type StreamChunkHandler = inputlayer.StreamChunkHandler

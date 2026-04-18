@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/state/policy/secrets"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/state/policy/secrets"
 )
 
 func buildInitialSecretsSnapshot(store *secrets.Store, cfg *config.Config) *secrets.RuntimeSnapshot {

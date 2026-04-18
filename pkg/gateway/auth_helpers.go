@@ -3,8 +3,8 @@ package gateway
 import (
 	"context"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	gatewayauth "github.com/anyclaw/anyclaw/pkg/gateway/auth"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	gatewayauth "github.com/1024XEngineer/anyclaw/pkg/gateway/auth"
 )
 
 type AuthUser = gatewayauth.User

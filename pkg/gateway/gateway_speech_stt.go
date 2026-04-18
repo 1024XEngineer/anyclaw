@@ -3,7 +3,7 @@ package gateway
 import (
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/speech"
+	"github.com/1024XEngineer/anyclaw/pkg/speech"
 )
 
 func (s *Server) initSTT() {

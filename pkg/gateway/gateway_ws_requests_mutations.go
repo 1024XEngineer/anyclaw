@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 func (c *openClawWSConn) handleMutationWSRequest(ctx context.Context, frame openClawWSFrame, method string) (bool, error) {

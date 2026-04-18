@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/models"
-	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
+	appRuntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
 type RuntimeResolver func(requestedModel string) (*appRuntime.App, string, error)

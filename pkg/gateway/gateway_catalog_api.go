@@ -3,10 +3,10 @@ package gateway
 import (
 	"net/http"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
-	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
-	routeingress "github.com/anyclaw/anyclaw/pkg/route/ingress"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
+	routeingress "github.com/1024XEngineer/anyclaw/pkg/route/ingress"
 )
 
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents"
-	"github.com/anyclaw/anyclaw/pkg/runtime/orchestrator"
+	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
+	"github.com/1024XEngineer/anyclaw/pkg/runtime/orchestrator"
 )
 
 // AgentExecutor bridges the cron scheduler to the agent system.

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/models"
-	"github.com/anyclaw/anyclaw/pkg/state/memory"
+	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
+	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
 )
 
 // MemoryBackend is an alias for memory.MemoryBackend to avoid import cycles.

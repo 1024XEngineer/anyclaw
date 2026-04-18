@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	appruntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	appstate "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	appruntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
+	appstate "github.com/1024XEngineer/anyclaw/pkg/runtime/execution/desktop"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (m *Manager) desktopPlanStateHook(task *state.Task) appstate.DesktopPlanStateHook {

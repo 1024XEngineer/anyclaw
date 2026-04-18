@@ -3,7 +3,7 @@ package gateway
 import (
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 type providerHealth struct {

@@ -7,10 +7,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/consoleio"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
-	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/consoleio"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/ui"
+	appRuntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
 func runAgentCommand(ctx context.Context, args []string) error {

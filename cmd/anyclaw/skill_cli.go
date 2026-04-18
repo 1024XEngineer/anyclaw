@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/skills"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/consoleio"
-	"github.com/anyclaw/anyclaw/pkg/input/cli/ui"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/skills"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/consoleio"
+	"github.com/1024XEngineer/anyclaw/pkg/input/cli/ui"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )

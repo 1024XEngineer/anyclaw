@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/clihub"
+	"github.com/1024XEngineer/anyclaw/pkg/clihub"
 )
 
 func RegisterCLIHubSkillTools(r *Registry, root string, opts BuiltinOptions) {

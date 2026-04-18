@@ -3,7 +3,7 @@ package ingress
 import (
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 func TestRouterDecideIncludesThreadInConversationKey(t *testing.T) {

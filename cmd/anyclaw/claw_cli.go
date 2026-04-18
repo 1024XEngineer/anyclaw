@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/anyclaw/anyclaw/pkg/clawbridge"
+	"github.com/1024XEngineer/anyclaw/pkg/clawbridge"
 )
 
 func runClawCommand(args []string) error {

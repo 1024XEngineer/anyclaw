@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/anyclaw/anyclaw/pkg/gateway/resources/discovery"
-	nodepkg "github.com/anyclaw/anyclaw/pkg/gateway/resources/nodes"
+	"github.com/1024XEngineer/anyclaw/pkg/gateway/resources/discovery"
+	nodepkg "github.com/1024XEngineer/anyclaw/pkg/gateway/resources/nodes"
 )
 
 func (s *Server) initDiscovery(ctx context.Context) {

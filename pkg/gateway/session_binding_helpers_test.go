@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/capability/agents"
-	taskrunner "github.com/anyclaw/anyclaw/pkg/runtime/taskrunner"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
+	taskrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func TestSessionExecutionHelpersPreferExecutionBinding(t *testing.T) {

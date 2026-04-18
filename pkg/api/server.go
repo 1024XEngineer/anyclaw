@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/embedding"
-	"github.com/anyclaw/anyclaw/pkg/index"
-	"github.com/anyclaw/anyclaw/pkg/vec"
+	"github.com/1024XEngineer/anyclaw/pkg/embedding"
+	"github.com/1024XEngineer/anyclaw/pkg/index"
+	"github.com/1024XEngineer/anyclaw/pkg/vec"
 )
 
 type Server struct {

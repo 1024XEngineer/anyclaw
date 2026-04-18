@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/anyclaw/anyclaw/pkg/clawbridge"
+	"github.com/1024XEngineer/anyclaw/pkg/clawbridge"
 )
 
 func RegisterClawBridgeTools(r *Registry, opts BuiltinOptions) {

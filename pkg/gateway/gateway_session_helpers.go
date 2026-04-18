@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 
-	gatewaytransport "github.com/anyclaw/anyclaw/pkg/gateway/transport"
-	"github.com/anyclaw/anyclaw/pkg/state"
+	gatewaytransport "github.com/1024XEngineer/anyclaw/pkg/gateway/transport"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (s *Server) sessionAPI() gatewaytransport.SessionAPI {

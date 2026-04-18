@@ -3,8 +3,8 @@ package gateway
 import (
 	"net/http"
 
-	gatewayintake "github.com/anyclaw/anyclaw/pkg/gateway/intake"
-	scheduleui "github.com/anyclaw/anyclaw/pkg/gateway/transport/scheduleui"
+	gatewayintake "github.com/1024XEngineer/anyclaw/pkg/gateway/intake"
+	scheduleui "github.com/1024XEngineer/anyclaw/pkg/gateway/transport/scheduleui"
 )
 
 func (s *Server) registerGatewayPlatformRoutes(mux *http.ServeMux) {

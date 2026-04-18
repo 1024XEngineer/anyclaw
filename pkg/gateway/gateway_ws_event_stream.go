@@ -1,6 +1,6 @@
 package gateway
 
-import "github.com/anyclaw/anyclaw/pkg/state"
+import "github.com/1024XEngineer/anyclaw/pkg/state"
 
 func (c *openClawWSConn) startEventStream() {
 	if c.eventStream != nil || c.server.bus == nil {

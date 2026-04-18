@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	transportreply "github.com/anyclaw/anyclaw/pkg/gateway/transport/reply"
+	transportreply "github.com/1024XEngineer/anyclaw/pkg/gateway/transport/reply"
 )
 
 type Integration struct {
