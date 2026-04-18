@@ -16,7 +16,7 @@ func (s *Server) processChannelMessage(ctx context.Context, sessionID string, me
 	}
 
 	if s.ttsIntegration != nil && response != "" {
-		recipient := firstNonEmpty(strings.TrimSpace(meta["chat_id"]), strings.TrimSpace(meta["reply_target"]), strings.TrimSpace(meta["user_id"]), sessionID)
+		recipient := firstNonEmpty(strings.TrimSpace(meta["chat_id"]), strings.TrimSpace(session.ReplyTarget), strings.TrimSpace(meta["reply_target"]), strings.TrimSpace(meta["user_id"]), sessionID)
 		metadata := make(map[string]any, len(meta))
 		for k, v := range meta {
 			metadata[k] = v
@@ -40,7 +40,7 @@ func (s *Server) processChannelMessageStream(ctx context.Context, sessionID stri
 	}
 
 	if s.ttsIntegration != nil {
-		recipient := firstNonEmpty(strings.TrimSpace(meta["chat_id"]), strings.TrimSpace(meta["reply_target"]), strings.TrimSpace(meta["user_id"]), sessionID)
+		recipient := firstNonEmpty(strings.TrimSpace(meta["chat_id"]), strings.TrimSpace(session.ReplyTarget), strings.TrimSpace(meta["reply_target"]), strings.TrimSpace(meta["user_id"]), sessionID)
 		metadata := make(map[string]any, len(meta))
 		for k, v := range meta {
 			metadata[k] = v

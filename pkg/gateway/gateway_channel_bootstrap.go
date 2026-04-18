@@ -13,7 +13,11 @@ func (s *Server) initChannels() {
 	s.initSTT()
 	s.initTTS()
 
-	s.ingress = routeingress.NewService(routeingress.NewRouter(s.mainRuntime.Config.Channels.Routing))
+	s.ingress = routeingress.NewService(
+		routeingress.NewRouter(s.mainRuntime.Config.Channels.Routing),
+		routeingress.WithMainAgentNameResolver(s.mainRuntime.Config.ResolveMainAgentName),
+		routeingress.WithSessionStore(ingressSessionStore{server: s, manager: s.sessions}),
+	)
 	if s.plugins != nil {
 		s.ingressPlugins = s.plugins.IngressRunners(s.mainRuntime.Config.Plugins.Dir)
 	}

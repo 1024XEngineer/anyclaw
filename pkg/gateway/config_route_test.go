@@ -116,13 +116,23 @@ func TestEnsureChannelSessionUsesMainAgentAndDefaultWorkspace(t *testing.T) {
 			},
 		},
 	}
-	server.ingress = routeingress.NewService(routeingress.NewRouter(server.mainRuntime.Config.Channels.Routing))
+	server.ingress = routeingress.NewService(
+		routeingress.NewRouter(server.mainRuntime.Config.Channels.Routing),
+		routeingress.WithMainAgentNameResolver(server.mainRuntime.Config.ResolveMainAgentName),
+		routeingress.WithSessionStore(ingressSessionStore{server: server, manager: server.sessions}),
+	)
 
-	decision := server.resolveChannelRouteDecision("telegram", "", "please deploy", map[string]string{
+	routed, err := server.resolveChannelRoute("telegram", "", "please deploy", map[string]string{
 		"reply_target": "chat-123",
 	})
+	if err != nil {
+		t.Fatalf("resolveChannelRoute: %v", err)
+	}
+	if routed.Request.Route.Session.SessionID == "" || !routed.Request.Route.Session.Created {
+		t.Fatalf("expected route layer to create session before gateway ensure, got %#v", routed.Request.Route.Session)
+	}
 
-	sessionID, err := server.ensureChannelSession("telegram", "", decision, map[string]string{
+	sessionID, err := server.ensureChannelSession("telegram", "", routed, map[string]string{
 		"reply_target": "chat-123",
 	}, false)
 	if err != nil {
@@ -139,24 +149,50 @@ func TestEnsureChannelSessionUsesMainAgentAndDefaultWorkspace(t *testing.T) {
 	if session.Workspace != workspaceID {
 		t.Fatalf("expected default workspace %q, got %q", workspaceID, session.Workspace)
 	}
+	if session.ReplyTarget != "chat-123" {
+		t.Fatalf("expected reply target chat-123, got %q", session.ReplyTarget)
+	}
+	if session.TransportMeta["chat_id"] != "chat-123" {
+		t.Fatalf("expected transport meta chat_id chat-123, got %#v", session.TransportMeta)
+	}
 }
 
 func TestEnsureChannelSessionReusesConversationKeyWithoutAdapterCache(t *testing.T) {
 	server, _ := newAgentManagementTestServer(t)
-	decision := routeingress.SessionRoute{
-		Key:         "telegram:chat-123",
-		SessionMode: "per-chat",
-		Title:       "Telegram chat-123",
+	server.ingress = routeingress.NewService(
+		routeingress.NewRouter(config.RoutingConfig{Mode: "per-chat"}),
+		routeingress.WithMainAgentNameResolver(server.mainRuntime.Config.ResolveMainAgentName),
+		routeingress.WithSessionStore(ingressSessionStore{server: server, manager: server.sessions}),
+	)
+
+	firstRoute, err := server.resolveChannelRoute("telegram", "", "hello", map[string]string{
+		"reply_target": "chat-123",
+	})
+	if err != nil {
+		t.Fatalf("first resolveChannelRoute: %v", err)
+	}
+	if firstRoute.Request.Route.Session.SessionID == "" || !firstRoute.Request.Route.Session.Created {
+		t.Fatalf("expected first route to create session in route layer, got %#v", firstRoute.Request.Route.Session)
 	}
 
-	firstSessionID, err := server.ensureChannelSession("telegram", "", decision, map[string]string{
+	firstSessionID, err := server.ensureChannelSession("telegram", "", firstRoute, map[string]string{
 		"reply_target": "chat-123",
 	}, false)
 	if err != nil {
 		t.Fatalf("first ensureChannelSession: %v", err)
 	}
 
-	secondSessionID, err := server.ensureChannelSession("telegram", "", decision, map[string]string{
+	secondRoute, err := server.resolveChannelRoute("telegram", "", "hello again", map[string]string{
+		"reply_target": "chat-123",
+	})
+	if err != nil {
+		t.Fatalf("second resolveChannelRoute: %v", err)
+	}
+	if secondRoute.Request.Route.Session.Created {
+		t.Fatalf("expected second route to reuse existing session, got %#v", secondRoute.Request.Route.Session)
+	}
+
+	secondSessionID, err := server.ensureChannelSession("telegram", "", secondRoute, map[string]string{
 		"reply_target": "chat-123",
 	}, false)
 	if err != nil {

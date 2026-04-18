@@ -15,7 +15,10 @@ func NewRouter(cfg config.RoutingConfig) *Router {
 	return &Router{config: cfg}
 }
 
-func (r *Router) Decide(req RouteRequest) SessionRoute {
+func (r *Router) Decide(req RouteRequest) RouteDecision {
+	if r == nil {
+		return RouteDecision{}
+	}
 	mode := strings.TrimSpace(r.config.Mode)
 	if mode == "" {
 		mode = "per-chat"
@@ -30,7 +33,7 @@ func (r *Router) Decide(req RouteRequest) SessionRoute {
 		}
 		decision := buildDecision(req, defaultString(rule.SessionMode, mode), rule.TitlePrefix)
 		if strings.TrimSpace(rule.SessionID) != "" {
-			decision.SessionID = strings.TrimSpace(rule.SessionID)
+			decision.ForcedSessionID = strings.TrimSpace(rule.SessionID)
 		}
 		decision.QueueMode = strings.TrimSpace(rule.QueueMode)
 		if rule.ReplyBack != nil {
@@ -43,20 +46,19 @@ func (r *Router) Decide(req RouteRequest) SessionRoute {
 	return buildDecision(req, mode, "")
 }
 
-func buildDecision(req RouteRequest, mode string, titlePrefix string) SessionRoute {
-	decision := SessionRoute{SessionMode: mode}
+func buildDecision(req RouteRequest, mode string, titlePrefix string) RouteDecision {
+	decision := RouteDecision{SessionMode: mode}
 	switch mode {
 	case "shared":
-		decision.Key = req.Channel + ":shared"
+		decision.RouteKey = req.Channel + ":shared"
 	case "per-message":
-		decision.Key = fmt.Sprintf("%s:%s:%d", req.Channel, req.Source, len(req.Text))
+		decision.RouteKey = fmt.Sprintf("%s:%s:%d", req.Channel, req.Source, len(req.Text))
 	default:
 		decision.SessionMode = "per-chat"
-		decision.Key = req.Channel + ":" + req.Source
+		decision.RouteKey = req.Channel + ":" + req.Source
 	}
 	if strings.TrimSpace(req.ThreadID) != "" {
-		decision.Key = decision.Key + ":thread:" + req.ThreadID
-		decision.IsThread = true
+		decision.RouteKey = decision.RouteKey + ":thread:" + req.ThreadID
 		decision.ThreadID = req.ThreadID
 	}
 	baseTitle := req.Channel + " " + req.Source
@@ -66,7 +68,7 @@ func buildDecision(req RouteRequest, mode string, titlePrefix string) SessionRou
 	if strings.TrimSpace(titlePrefix) != "" {
 		baseTitle = strings.TrimSpace(titlePrefix) + " " + req.Source
 	}
-	decision.Title = strings.TrimSpace(baseTitle)
+	decision.TitleHint = strings.TrimSpace(baseTitle)
 	return decision
 }
 

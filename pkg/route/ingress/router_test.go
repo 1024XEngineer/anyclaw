@@ -16,11 +16,8 @@ func TestRouterDecideIncludesThreadInConversationKey(t *testing.T) {
 		ThreadID: "thread-9",
 	})
 
-	if decision.Key != "telegram:chat-1:thread:thread-9" {
-		t.Fatalf("expected thread-scoped key, got %q", decision.Key)
-	}
-	if !decision.IsThread {
-		t.Fatal("expected decision to mark thread routing")
+	if decision.RouteKey != "telegram:chat-1:thread:thread-9" {
+		t.Fatalf("expected thread-scoped key, got %q", decision.RouteKey)
 	}
 	if decision.ThreadID != "thread-9" {
 		t.Fatalf("expected thread id to be preserved, got %q", decision.ThreadID)
@@ -58,8 +55,8 @@ func TestRouterDecideAppliesSessionFieldsFromRule(t *testing.T) {
 	if decision.SessionMode != "shared" {
 		t.Fatalf("expected shared mode, got %q", decision.SessionMode)
 	}
-	if decision.SessionID != "sess-fixed" {
-		t.Fatalf("expected fixed session id, got %q", decision.SessionID)
+	if decision.ForcedSessionID != "sess-fixed" {
+		t.Fatalf("expected fixed session id, got %q", decision.ForcedSessionID)
 	}
 	if decision.QueueMode != "fifo" {
 		t.Fatalf("expected fifo queue mode, got %q", decision.QueueMode)
@@ -67,7 +64,7 @@ func TestRouterDecideAppliesSessionFieldsFromRule(t *testing.T) {
 	if !decision.ReplyBack {
 		t.Fatal("expected reply_back to be applied")
 	}
-	if decision.Title != "Ops channel:user-1" {
-		t.Fatalf("expected prefixed title, got %q", decision.Title)
+	if decision.TitleHint != "Ops channel:user-1" {
+		t.Fatalf("expected prefixed title, got %q", decision.TitleHint)
 	}
 }

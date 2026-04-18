@@ -12,40 +12,58 @@ import (
 
 var titleCase = cases.Title(language.English)
 
-func (s *Server) ensureChannelSession(source string, sessionID string, decision routeingress.SessionRoute, meta map[string]string, streaming bool) (string, error) {
-	createOpts, err := s.buildChannelSessionCreateOptions(source, sessionID, decision, meta)
+func (s *Server) ensureChannelSession(source string, sessionID string, routed routeingress.RouteOutput, meta map[string]string, streaming bool) (string, error) {
+	sessionResolution := routed.Request.Route.Session
+	if routedSessionID := strings.TrimSpace(sessionResolution.SessionID); routedSessionID != "" {
+		if sessionResolution.Created {
+			s.appendChannelSessionCreatedEvent(source, routedSessionID, sessionResolution.TitleHint, meta, streaming)
+		}
+		return routedSessionID, nil
+	}
+
+	createOpts, err := s.buildChannelSessionCreateOptions(source, sessionID, routed.Request.Route, meta)
 	if err != nil {
 		return "", err
 	}
-	resolution, err := s.sessions.ResolveConversationSession(state.ConversationSessionResolveOptions{
-		SessionID:       sessionID,
-		RoutedSessionID: decision.SessionID,
-		ConversationKey: decision.Key,
-		CreateOptions:   createOpts,
-	})
+	session, err := s.sessions.CreateWithOptions(createOpts)
 	if err != nil {
 		return "", err
 	}
-	if resolution == nil || resolution.Session == nil {
+	if session == nil {
 		return "", nil
 	}
 
-	session := resolution.Session
-	if resolution.Created {
-		payload := channelMetaPayload(map[string]any{
-			"title":  session.Title,
-			"source": source,
-		}, meta)
-		if streaming {
-			payload["streaming"] = true
-		}
-		s.appendEvent("session.created", session.ID, payload)
+	if sessionResolution.NeedsCreate {
+		s.appendChannelSessionCreatedEvent(source, session.ID, session.Title, meta, streaming)
 	}
 	return session.ID, nil
 }
 
-func (s *Server) buildChannelSessionCreateOptions(source string, sessionID string, decision routeingress.SessionRoute, meta map[string]string) (state.SessionCreateOptions, error) {
-	agentName := s.mainRuntime.Config.ResolveMainAgentName()
+func (s *Server) appendChannelSessionCreatedEvent(source string, sessionID string, title string, meta map[string]string, streaming bool) {
+	sessionTitle := strings.TrimSpace(title)
+	if sessionTitle == "" && s.sessions != nil {
+		if session, ok := s.sessions.Get(sessionID); ok && session != nil {
+			sessionTitle = strings.TrimSpace(session.Title)
+		}
+	}
+	if sessionTitle == "" {
+		sessionTitle = titleCase.String(source) + " session"
+	}
+	payload := channelMetaPayload(map[string]any{
+		"title":  sessionTitle,
+		"source": source,
+	}, meta)
+	if streaming {
+		payload["streaming"] = true
+	}
+	s.appendEvent("session.created", sessionID, payload)
+}
+
+func (s *Server) buildChannelSessionCreateOptions(source string, sessionID string, resolution routeingress.RouteResolution, meta map[string]string) (state.SessionCreateOptions, error) {
+	agentName := strings.TrimSpace(resolution.Agent.AgentName)
+	if agentName == "" {
+		agentName = s.mainRuntime.Config.ResolveMainAgentName()
+	}
 	orgID, projectID, workspaceID := defaultResourceIDs(s.mainRuntime.WorkingDir)
 
 	org, project, workspace, err := s.validateResourceSelection(orgID, projectID, workspaceID)
@@ -53,7 +71,7 @@ func (s *Server) buildChannelSessionCreateOptions(source string, sessionID strin
 		return state.SessionCreateOptions{}, err
 	}
 
-	title := strings.TrimSpace(decision.Title)
+	title := strings.TrimSpace(resolution.Session.TitleHint)
 	if title == "" {
 		title = titleCase.String(source) + " session"
 	}
@@ -64,17 +82,17 @@ func (s *Server) buildChannelSessionCreateOptions(source string, sessionID strin
 		Org:             org.ID,
 		Project:         project.ID,
 		Workspace:       workspace.ID,
-		SessionMode:     gatewayintake.NormalizeSingleAgentSessionMode(decision.SessionMode, "channel-dm"),
-		QueueMode:       decision.QueueMode,
-		ReplyBack:       decision.ReplyBack,
+		SessionMode:     gatewayintake.NormalizeSingleAgentSessionMode(resolution.Session.SessionMode, "channel-dm"),
+		QueueMode:       resolution.Session.QueueMode,
+		ReplyBack:       resolution.Session.ReplyBack,
 		SourceChannel:   source,
-		SourceID:        channelSourceID(meta, sessionID),
+		SourceID:        channelSourceID(resolution.Delivery.TransportMeta, sessionID),
 		UserID:          strings.TrimSpace(meta["user_id"]),
 		UserName:        firstNonEmpty(strings.TrimSpace(meta["username"]), strings.TrimSpace(meta["user_name"])),
-		ReplyTarget:     strings.TrimSpace(meta["reply_target"]),
-		ThreadID:        strings.TrimSpace(meta["thread_id"]),
-		ConversationKey: decision.Key,
-		TransportMeta:   channelSessionTransportMeta(meta),
+		ReplyTarget:     strings.TrimSpace(resolution.Delivery.ReplyTo),
+		ThreadID:        strings.TrimSpace(resolution.Delivery.ThreadID),
+		ConversationKey: resolution.Session.SessionKey,
+		TransportMeta:   channelSessionTransportMeta(resolution.Delivery.TransportMeta),
 	}
 	if createOpts.SessionMode == "" {
 		createOpts.SessionMode = "main"
