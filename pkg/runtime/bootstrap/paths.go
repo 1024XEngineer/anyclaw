@@ -37,6 +37,9 @@ func ResolveRuntimePaths(cfg *config.Config, configPath string) {
 	if resolved := config.ResolvePath(configPath, cfg.Daemon.LogFile); resolved != "" {
 		cfg.Daemon.LogFile = resolved
 	}
+	if resolved := config.ResolvePath(configPath, cfg.Gateway.ControlUI.Root); resolved != "" {
+		cfg.Gateway.ControlUI.Root = resolved
+	}
 	for i := range cfg.Agent.Profiles {
 		if resolved := config.ResolvePath(configPath, cfg.Agent.Profiles[i].WorkingDir); resolved != "" {
 			cfg.Agent.Profiles[i].WorkingDir = resolved

@@ -61,6 +61,9 @@ func runGatewayServer(ctx context.Context, args []string) error {
 	if err := ensureConfigOnboarded(ctx, *configPath, true); err != nil {
 		return err
 	}
+	if err := ensureGatewayControlUIBuilt(ctx, *configPath); err != nil {
+		return err
+	}
 
 	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
 		ConfigPath: *configPath,
@@ -98,6 +101,14 @@ func runGatewayDaemon(args []string) error {
 		return fmt.Errorf("usage: anyclaw gateway daemon <start|stop>")
 	}
 	configPath := "anyclaw.json"
+	if err := ensureConfigOnboarded(context.Background(), configPath, true); err != nil {
+		return err
+	}
+	if args[0] == "start" {
+		if err := ensureGatewayControlUIBuilt(context.Background(), configPath); err != nil {
+			return err
+		}
+	}
 	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
 		ConfigPath: configPath,
 		Progress:   bootProgress,
