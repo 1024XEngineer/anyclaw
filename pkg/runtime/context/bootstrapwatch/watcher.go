@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,12 +35,20 @@ type FileEntry struct {
 	Checksum uint32
 }
 
+type ChangeAction string
+
+const (
+	ActionCreated  ChangeAction = "created"
+	ActionModified ChangeAction = "modified"
+	ActionDeleted  ChangeAction = "deleted"
+)
+
 type ChangeEvent struct {
 	Type    FileType
 	Path    string
 	OldSize int64
 	NewSize int64
-	Action  string // "created", "modified", "deleted"
+	Action  ChangeAction
 	Time    time.Time
 }
 
@@ -171,13 +180,13 @@ func (w *Watcher) ReloadAll() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	var lastErr error
+	var errs []error
 	for ft := range w.files {
 		if err := w.loadFileLocked(ft); err != nil {
-			lastErr = err
+			errs = append(errs, err)
 		}
 	}
-	return lastErr
+	return errors.Join(errs...)
 }
 
 func (w *Watcher) OnChange(handler ChangeHandler) {
@@ -213,7 +222,7 @@ func (w *Watcher) checkChanges() {
 					Path:    entry.Path,
 					OldSize: entry.Size,
 					NewSize: 0,
-					Action:  "deleted",
+					Action:  ActionDeleted,
 					Time:    time.Now(),
 				})
 				delete(w.files, ft)
@@ -249,7 +258,7 @@ func (w *Watcher) checkChanges() {
 			Path:    entry.Path,
 			OldSize: oldSize,
 			NewSize: info.Size(),
-			Action:  "modified",
+			Action:  ActionModified,
 			Time:    time.Now(),
 		})
 	}
@@ -291,7 +300,7 @@ func (w *Watcher) checkChanges() {
 			Path:    path,
 			OldSize: 0,
 			NewSize: info.Size(),
-			Action:  "created",
+			Action:  ActionCreated,
 			Time:    time.Now(),
 		})
 	}

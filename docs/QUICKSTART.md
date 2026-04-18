@@ -6,7 +6,7 @@ macOS / Linux:
 
 ```bash
 # 克隆仓库
-git clone https://github.com/anyclaw/anyclaw.git
+git clone https://github.com/1024XEngineer/anyclaw.git
 cd anyclaw
 
 # 构建

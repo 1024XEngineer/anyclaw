@@ -22,6 +22,7 @@ type CompactionConfig struct {
 	MinKeepMessages  int
 	MaxSummaryTokens int
 	CompactThreshold float64
+	TargetTokenRatio float64
 	SummaryPrefix    string
 }
 
@@ -31,6 +32,7 @@ func DefaultCompactionConfig() CompactionConfig {
 		MinKeepMessages:  3,
 		MaxSummaryTokens: 200,
 		CompactThreshold: 0.8,
+		TargetTokenRatio: 0.5,
 		SummaryPrefix:    "[Summary of previous conversation]",
 	}
 }
@@ -77,6 +79,12 @@ func NewCompactor(guard *WindowGuard, cfg CompactionConfig) *Compactor {
 	}
 	if cfg.CompactThreshold <= 0 || cfg.CompactThreshold > 1 {
 		cfg.CompactThreshold = 0.8
+	}
+	if cfg.TargetTokenRatio <= 0 || cfg.TargetTokenRatio > 1 {
+		cfg.TargetTokenRatio = 0.5
+	}
+	if cfg.TargetTokenRatio > cfg.CompactThreshold {
+		cfg.TargetTokenRatio = cfg.CompactThreshold
 	}
 
 	return &Compactor{
@@ -175,7 +183,7 @@ func (c *Compactor) Compact(ctx context.Context, summarizer Summarizer) (*Summar
 		return &SummaryResult{}, nil
 	}
 
-	targetTokens := int(float64(max) * 0.5)
+	targetTokens := int(float64(max) * c.config.TargetTokenRatio)
 	needToRemove := currentTokens - targetTokens
 	if needToRemove <= 0 {
 		return &SummaryResult{}, nil

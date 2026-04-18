@@ -40,7 +40,7 @@ func New(cfg ContextConfig) *Engine {
 	return engine
 }
 
-func (e *Engine) Set(ctx context.Context, key string, value any) error {
+func (e *Engine) Set(_ context.Context, key string, value any) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -56,20 +56,20 @@ func (e *Engine) Set(ctx context.Context, key string, value any) error {
 	return nil
 }
 
-func (e *Engine) Get(ctx context.Context, key string) (any, error) {
+func (e *Engine) Get(_ context.Context, key string) (any, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	if ctx, ok := e.contexts[key]; ok {
-		if time.Now().Before(ctx.ExpiresAt) {
-			return ctx.Value, nil
+	if stored, ok := e.contexts[key]; ok {
+		if time.Now().Before(stored.ExpiresAt) {
+			return stored.Value, nil
 		}
 		return nil, fmt.Errorf("context expired: %s", key)
 	}
 	return nil, fmt.Errorf("context not found: %s", key)
 }
 
-func (e *Engine) Delete(ctx context.Context, key string) error {
+func (e *Engine) Delete(_ context.Context, key string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.contexts, key)

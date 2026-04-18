@@ -331,7 +331,7 @@ sudo ufw allow 18789/tcp
 
 ### 社区支持
 
-- GitHub Issues: https://github.com/anyclaw/anyclaw/issues
+- GitHub Issues: https://github.com/1024XEngineer/anyclaw/issues
 - Discord: https://discord.gg/anyclaw
 
 ### 报告问题

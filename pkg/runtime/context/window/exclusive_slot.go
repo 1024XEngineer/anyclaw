@@ -116,7 +116,9 @@ func (s *ExclusiveSlot) Acquire(ctx context.Context, id string, cfg ContextConfi
 
 		for i, p := range s.pendingQueue {
 			if p.Priority < req.Priority {
-				s.pendingQueue = append(s.pendingQueue[:i], append([]*SlotRequest{req}, s.pendingQueue[i:]...)...)
+				s.pendingQueue = append(s.pendingQueue, nil)
+				copy(s.pendingQueue[i+1:], s.pendingQueue[i:])
+				s.pendingQueue[i] = req
 				goto queued
 			}
 		}
