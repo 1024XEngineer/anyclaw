@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+
+	"github.com/clipperhouse/uax29/v2/words"
 )
 
 type ContextEngine interface {
@@ -147,6 +152,10 @@ func (e *InMemoryContextEngine) Search(ctx context.Context, query string, option
 		}
 	}
 
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
 	if len(results) > options.TopK {
 		results = results[:options.TopK]
 	}
@@ -202,38 +211,43 @@ func calculateSimilarity(query, content string) float64 {
 }
 
 func countWords(s string) int {
-	count := 0
-	inWord := false
-	for _, r := range s {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
-			if !inWord {
-				count++
-				inWord = true
-			}
-		} else {
-			inWord = false
-		}
-	}
-	return count
+	return len(searchTokens(s))
 }
 
 func wordSet(s string) map[string]bool {
-	words := make(map[string]bool)
-	current := []rune{}
-	for _, r := range s {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
-			current = append(current, r)
-		} else {
-			if len(current) > 0 {
-				words[string(current)] = true
-				current = nil
-			}
+	set := make(map[string]bool)
+	for _, token := range searchTokens(s) {
+		set[token] = true
+	}
+	return set
+}
+
+func searchTokens(s string) []string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return nil
+	}
+
+	iter := words.FromString(s)
+	tokens := make([]string, 0)
+	for iter.Next() {
+		token := strings.TrimSpace(iter.Value())
+		if token == "" || !hasSearchableRune(token) {
+			continue
+		}
+		tokens = append(tokens, token)
+	}
+
+	return tokens
+}
+
+func hasSearchableRune(token string) bool {
+	for _, r := range token {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
 		}
 	}
-	if len(current) > 0 {
-		words[string(current)] = true
-	}
-	return words
+	return false
 }
 
 type PluginContextEngine struct {

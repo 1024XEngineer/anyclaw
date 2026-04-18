@@ -411,3 +411,34 @@ func TestCompactorConcurrent(t *testing.T) {
 		t.Errorf("expected 100 messages, got %d", compactor.Count())
 	}
 }
+
+func TestCompactorTargetTokenRatio(t *testing.T) {
+	guard := NewWindowGuard(GuardConfig{
+		MaxTokens:    1000,
+		SafetyMargin: 0,
+	})
+	compactor := NewCompactor(guard, CompactionConfig{
+		Strategy:         StrategyOldestFirst,
+		MinKeepMessages:  2,
+		MaxSummaryTokens: 10,
+		CompactThreshold: 0.5,
+		TargetTokenRatio: 0.3,
+		SummaryPrefix:    "s",
+	})
+
+	for i := 0; i < 10; i++ {
+		compactor.Add(newTestMessage(fmt.Sprintf("m%d", i), "user", "message content", 60))
+	}
+
+	result, err := compactor.Compact(context.Background(), &StaticSummarizer{Summary: "x"})
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+
+	if result.CompactedCount != 5 {
+		t.Errorf("expected 5 compacted messages, got %d", result.CompactedCount)
+	}
+	if result.RemainingTokens != 300 {
+		t.Errorf("expected 300 remaining tokens, got %d", result.RemainingTokens)
+	}
+}

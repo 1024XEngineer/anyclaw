@@ -1,8 +1,10 @@
 package bootstrap
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,7 +103,7 @@ func TestWatcherModification(t *testing.T) {
 	event := changes[0]
 	mu.Unlock()
 
-	if event.Action != "modified" {
+	if event.Action != ActionModified {
 		t.Errorf("expected modified action, got %s", event.Action)
 	}
 	if event.Type != FileAgents {
@@ -145,7 +147,7 @@ func TestWatcherDeletion(t *testing.T) {
 	event := changes[0]
 	mu.Unlock()
 
-	if event.Action != "deleted" {
+	if event.Action != ActionDeleted {
 		t.Errorf("expected deleted action, got %s", event.Action)
 	}
 
@@ -230,6 +232,42 @@ func TestWatcherReloadAll(t *testing.T) {
 	soul, _ := w.Get(FileSoul)
 	if soul.Content != "soul v2" {
 		t.Errorf("expected soul v2, got %s", soul.Content)
+	}
+}
+
+func TestWatcherReloadAllReturnsAllErrors(t *testing.T) {
+	dir := setupTestDir(t)
+	writeFile(t, dir, "AGENTS.md", "agents")
+	writeFile(t, dir, "SOUL.md", "soul")
+
+	w := NewWatcher(WatcherConfig{
+		BaseDir:  dir,
+		AutoLoad: true,
+		Files:    []FileType{FileAgents, FileSoul},
+	})
+
+	w.baseDir = "\x00"
+
+	err := w.ReloadAll()
+	if err == nil {
+		t.Fatal("expected reload all error")
+	}
+
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		t.Fatalf("expected joined error, got %T", err)
+	}
+	if len(joined.Unwrap()) != 2 {
+		t.Fatalf("expected 2 underlying errors, got %d", len(joined.Unwrap()))
+	}
+	if !strings.Contains(err.Error(), string(FileAgents)) {
+		t.Errorf("expected AGENTS.md in error, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), string(FileSoul)) {
+		t.Errorf("expected SOUL.md in error, got %q", err.Error())
+	}
+	if errors.Unwrap(err) != nil {
+		t.Error("expected joined error to use multi-unwrap")
 	}
 }
 
