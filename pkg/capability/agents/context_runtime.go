@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/capability/agents/prompt"
@@ -35,6 +36,7 @@ type contextRuntime struct {
 	bootstrapCache []workspace.BootstrapFile
 	bootstrapDirty bool
 	bootstrapWatch *bootstrapwatch.Watcher
+	executionSeq   atomic.Uint64
 }
 
 type contextExecution struct {
@@ -122,7 +124,7 @@ func (r *contextRuntime) acquire(ctx context.Context, owner string) (*contextExe
 		return &contextExecution{}, nil
 	}
 
-	id := fmt.Sprintf("%s-%d", sanitizeBrowserSessionID(owner), time.Now().UnixNano())
+	id := fmt.Sprintf("%s-%d-%d", sanitizeBrowserSessionID(owner), time.Now().UnixNano(), r.executionSeq.Add(1))
 	result, err := r.slot.Acquire(ctx, id, ctxengine.ContextConfig{
 		MaxAge:          2 * time.Hour,
 		AutoExpire:      true,
