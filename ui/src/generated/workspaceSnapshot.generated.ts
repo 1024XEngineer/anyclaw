@@ -3,9 +3,9 @@
 // Do not edit manually.
 
 export const workspaceSnapshot = {
-  "generatedAt": "2026-04-17T18:41:39.632Z",
+  "generatedAt": "2026-04-18T02:50:13.286Z",
   "agent": {
-    "name": "binbin",
+    "name": "AnyClaw",
     "description": "Your AI assistant with file-based memory",
     "permissionLevel": "limited",
     "workDir": ".anyclaw",
@@ -14,10 +14,10 @@ export const workspaceSnapshot = {
     "activeProfile": ""
   },
   "orchestrator": {
-    "enabled": true,
-    "maxConcurrentAgents": 4,
-    "retryCount": 2,
-    "timeoutSeconds": 300,
+    "enabled": false,
+    "maxConcurrentAgents": 0,
+    "retryCount": 0,
+    "timeoutSeconds": 0,
     "namedAgents": 0,
     "subAgents": 0
   },
@@ -29,39 +29,19 @@ export const workspaceSnapshot = {
   },
   "providers": [
     {
-      "id": "primary-compatible",
-      "name": "Primary OpenAI-compatible",
-      "type": "openai-compatible",
-      "provider": "compatible",
-      "defaultModel": "deepseek/deepseek-v3.2-251201",
+      "id": "primary-openai",
+      "name": "Primary OpenAI",
+      "type": "openai",
+      "provider": "openai",
+      "defaultModel": "gpt-4o-mini",
       "enabled": true,
-      "isDefault": true,
-      "capabilitiesCount": 0
-    },
-    {
-      "id": "primary-qwen",
-      "name": "Primary Qwen",
-      "type": "qwen",
-      "provider": "qwen",
-      "defaultModel": "qwen-max",
-      "enabled": false,
-      "isDefault": false,
-      "capabilitiesCount": 0
-    },
-    {
-      "id": "primary-ollama",
-      "name": "Primary Ollama",
-      "type": "ollama",
-      "provider": "ollama",
-      "defaultModel": "llama3.2",
-      "enabled": false,
       "isDefault": false,
       "capabilitiesCount": 0
     }
   ],
   "agents": [
     {
-      "name": "binbin",
+      "name": "AnyClaw",
       "description": "Your AI assistant with file-based memory",
       "role": "main",
       "permissionLevel": "limited",
@@ -70,62 +50,7 @@ export const workspaceSnapshot = {
       "defaultModel": "",
       "enabled": true,
       "active": true,
-      "skills": [
-        "analyst",
-        "api-designer",
-        "app-builder",
-        "app-controller",
-        "architect",
-        "automation-engineer",
-        "backend-engineer",
-        "browser-automation",
-        "canvas-designer",
-        "changelog-writer",
-        "cli-anything",
-        "coder",
-        "compliance-reviewer",
-        "customer-support",
-        "data-engineer",
-        "database-admin",
-        "devops",
-        "docs-writer",
-        "education-coach",
-        "extension-curator",
-        "finance-analyst",
-        "find-skills",
-        "frontend-designer",
-        "github",
-        "github-issues",
-        "language-tutor",
-        "legal-assistant",
-        "marketing-strategist",
-        "meeting-notes",
-        "ml-engineer",
-        "plugin-builder",
-        "product-manager",
-        "project-planner",
-        "prompt-engineer",
-        "qa-engineer",
-        "recruiter",
-        "release-manager",
-        "research-paper",
-        "researcher",
-        "sales-assistant",
-        "security-auditor",
-        "seo-optimizer",
-        "sre",
-        "summarize",
-        "test-automation",
-        "translator",
-        "ui-ux-reviewer",
-        "vision-agent",
-        "voice-assistant",
-        "voice-designer",
-        "weather",
-        "web-search",
-        "workflow-builder",
-        "writer"
-      ]
+      "skills": []
     }
   ],
   "skills": [

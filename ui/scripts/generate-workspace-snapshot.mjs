@@ -12,6 +12,31 @@ function readJSON(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function existingDir(dirPath) {
+  return fs.existsSync(dirPath) && fs.statSync(dirPath).isDirectory();
+}
+
+function loadWorkspaceConfig() {
+  const explicitConfig = safeString(process.env.ANYCLAW_UI_SNAPSHOT_CONFIG);
+  const candidates = explicitConfig
+    ? [path.resolve(repoRoot, explicitConfig)]
+    : [
+        path.join(repoRoot, "anyclaw.json"),
+        path.join(repoRoot, "anyclaw.example.json"),
+      ];
+
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      return readJSON(candidate);
+    } catch (error) {
+      process.stderr.write(`Skipping invalid snapshot config ${candidate}: ${error.message}\n`);
+    }
+  }
+
+  return {};
+}
+
 function safeString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -68,6 +93,9 @@ function channelConfigured(entry, keys) {
 }
 
 function readSkillManifests(skillsDir) {
+  if (!existingDir(skillsDir)) {
+    return [];
+  }
   return fs
     .readdirSync(skillsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -88,6 +116,9 @@ function readSkillManifests(skillsDir) {
 }
 
 function readExtensionManifests(extensionsDir) {
+  if (!existingDir(extensionsDir)) {
+    return [];
+  }
   return fs
     .readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -204,7 +235,7 @@ function buildConfiguredChannels(config) {
 }
 
 function buildSnapshot() {
-  const config = readJSON(path.join(repoRoot, "anyclaw.json"));
+  const config = loadWorkspaceConfig();
   const skills = readSkillManifests(path.join(repoRoot, "skills"));
   const extensions = readExtensionManifests(path.join(repoRoot, "extensions"));
 

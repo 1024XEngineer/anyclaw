@@ -92,6 +92,7 @@ func (sm *storeManager) installPackage(pkg AgentPackage) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	resolveInstallConfigPaths(cfg, sm.configPath)
 	if err := sm.ensureInstallTargets(cfg); err != nil {
 		return err
 	}
@@ -217,6 +218,7 @@ func (sm *storeManager) uninstallPackage(pkg AgentPackage) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	resolveInstallConfigPaths(cfg, sm.configPath)
 
 	configChanged, err := sm.cleanupReceiptResources(cfg, receipt)
 	if err != nil {
@@ -896,6 +898,18 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func resolveInstallConfigPaths(cfg *config.Config, configPath string) {
+	if cfg == nil {
+		return
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Skills.Dir); resolved != "" {
+		cfg.Skills.Dir = resolved
+	}
+	if resolved := config.ResolvePath(configPath, cfg.Plugins.Dir); resolved != "" {
+		cfg.Plugins.Dir = resolved
+	}
 }
 
 func containsFold(values []string, target string) bool {

@@ -37,6 +37,16 @@ func ResolveRuntimePaths(cfg *config.Config, configPath string) {
 	if resolved := config.ResolvePath(configPath, cfg.Daemon.LogFile); resolved != "" {
 		cfg.Daemon.LogFile = resolved
 	}
+	for i := range cfg.Agent.Profiles {
+		if resolved := config.ResolvePath(configPath, cfg.Agent.Profiles[i].WorkingDir); resolved != "" {
+			cfg.Agent.Profiles[i].WorkingDir = resolved
+		}
+	}
+	for i := range cfg.Orchestrator.SubAgents {
+		if resolved := config.ResolvePath(configPath, cfg.Orchestrator.SubAgents[i].WorkingDir); resolved != "" {
+			cfg.Orchestrator.SubAgents[i].WorkingDir = resolved
+		}
+	}
 }
 
 func ResolveConfigPath(path string) string {
