@@ -2,6 +2,8 @@
 
 ## 安装
 
+macOS / Linux:
+
 ```bash
 # 克隆仓库
 git clone https://github.com/anyclaw/anyclaw.git
@@ -10,12 +12,39 @@ cd anyclaw
 # 构建
 go build -o anyclaw ./cmd/anyclaw
 
-# 运行设置向导
-./anyclaw --setup
+# 运行初始化向导
+./anyclaw onboard
+
+# 环境检查
+./anyclaw doctor
 
 # 启动交互模式
 ./anyclaw -i
 ```
+
+Windows:
+
+```powershell
+# 克隆仓库
+git clone https://github.com/1024XEngineer/anyclaw.git
+cd anyclaw
+
+# 构建
+go build -o anyclaw.exe ./cmd/anyclaw
+
+# 运行初始化向导
+.\anyclaw.exe onboard
+
+# 环境检查
+.\anyclaw.exe doctor
+
+# 启动交互模式
+.\anyclaw.exe -i
+```
+
+说明：Windows 下请显式使用 `anyclaw.exe` 作为输出文件名。
+如果写成 `go build -o anyclaw ./cmd/anyclaw`，生成的会是一个没有 `.exe` 后缀的文件，
+后续执行 `.\anyclaw.exe` 时会提示找不到程序。
 
 ## 基本使用
 

@@ -72,6 +72,10 @@ cd anyclaw
 go build -o anyclaw.exe ./cmd/anyclaw
 ```
 
+说明：Windows 下不要把上面的输出文件名写成 `anyclaw`。
+如果执行 `go build -o anyclaw ./cmd/anyclaw`，Go 会生成一个没有 `.exe` 后缀的文件，
+后续再执行 `.\anyclaw.exe` 时就会提示找不到程序。
+
 ### 3. 首次初始化
 
 macOS / Linux:
