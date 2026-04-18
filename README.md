@@ -112,11 +112,13 @@ AnyClaw 现在默认不会直接把用户带到本地模型。
 ## 启动 Web 控制台
 
 ```bash
-corepack enable
-pnpm ui:install
-pnpm ui:build
+npm run ui:install
 go run ./cmd/anyclaw gateway start
 ```
+
+- 不需要 `corepack enable`
+- 如果 `dist/control-ui` 不存在，`gateway start` 会自动构建 Web UI
+- 如果你想手动构建，可以执行 `corepack pnpm -C ui build`
 
 启动后打开：
 
@@ -127,17 +129,17 @@ http://127.0.0.1:18789/dashboard
 开发 UI 时可以使用：
 
 ```bash
-pnpm ui:dev
+npm run ui:dev
 ```
 
 常用脚本：
 
 ```bash
-pnpm ui:install
-pnpm ui:dev
-pnpm ui:test
-pnpm ui:build
-pnpm ui:preview
+npm run ui:install
+npm run ui:dev
+npm run ui:test
+npm run ui:build
+npm run ui:preview
 ```
 
 ## 常用命令
