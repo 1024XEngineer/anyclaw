@@ -337,6 +337,16 @@ export const workspaceSnapshot = {
   ],
   "configuredChannels": [
     {
+      "key": "wechat",
+      "enabled": false,
+      "configured": false
+    },
+    {
+      "key": "feishu",
+      "enabled": false,
+      "configured": false
+    },
+    {
       "key": "telegram",
       "enabled": false,
       "configured": false

@@ -247,6 +247,10 @@ function fallbackAgentDescription(name: string) {
   return `${name} 已存在于当前仓库结构中，后续可以继续接入更细的实时状态。`;
 }
 
+function fallbackSkillDescription(name: string) {
+  return `${name} 已经存在于本地技能目录中。`;
+}
+
 function normalizeLanguage(language: string) {
   if (language.toUpperCase() === "CN") return "中文";
   if (language.toUpperCase() === "EN") return "English";
@@ -290,6 +294,28 @@ async function fetchLivePayload(): Promise<LivePayload> {
   };
 }
 
+export function mergeOverviewAgentNames(liveAgents: Array<{ name?: string }>) {
+  const snapshotNames = workspaceSnapshot.agents.map((agent) => agent.name);
+  const liveNames = [...new Set(
+    liveAgents
+      .map((agent) => agent.name?.trim() ?? "")
+      .filter((name) => name !== ""),
+  )];
+
+  return [...snapshotNames, ...liveNames.filter((name) => !snapshotNames.includes(name))];
+}
+
+export function mergeOverviewSkillNames(liveSkills: Array<{ name?: string }>) {
+  const snapshotNames = workspaceSnapshot.skills.map((skill) => skill.name);
+  const liveNames = [...new Set(
+    liveSkills
+      .map((skill) => skill.name?.trim() ?? "")
+      .filter((name) => name !== ""),
+  )];
+
+  return [...snapshotNames, ...liveNames.filter((name) => !snapshotNames.includes(name))];
+}
+
 function buildProviderRecords(live: LivePayload): ProviderRecord[] {
   const liveMap = new Map(
     live.providers
@@ -324,50 +350,61 @@ function buildProviderRecords(live: LivePayload): ProviderRecord[] {
 
 function buildAgentRecords(live: LivePayload, providers: ProviderRecord[]): AgentRecord[] {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
+  const snapshotMap = new Map<string, (typeof workspaceSnapshot.agents)[number]>(
+    workspaceSnapshot.agents.map((agent) => [agent.name, agent]),
+  );
   const liveMap = new Map(
     live.agents
       .filter((agent) => (agent.name ?? "").trim() !== "")
       .map((agent) => [agent.name!.trim(), agent]),
   );
+  const orderedNames = mergeOverviewAgentNames(live.agents);
 
-  const items: AgentRecord[] = workspaceSnapshot.agents.map((agent) => {
-    const liveAgent = liveMap.get(agent.name);
-    const linkedProvider = providerById.get(agent.providerRef);
+  const items: AgentRecord[] = orderedNames.map((name) => {
+    const agent = snapshotMap.get(name);
+    const liveAgent = liveMap.get(name);
+    const providerRef = agent?.providerRef || liveAgent?.provider?.trim() || "";
+    const linkedProvider = providerById.get(providerRef);
     const providerName =
       liveAgent?.provider_name?.trim() ||
       linkedProvider?.name ||
       liveAgent?.provider?.trim() ||
       "默认 Provider";
     const skillsCount =
-      liveAgent?.skills?.filter((skill) => skill?.enabled ?? true).length ?? agent.skills.length;
-    const active = liveAgent?.active ?? agent.active;
-    const enabled = liveAgent?.enabled ?? agent.enabled;
+      liveAgent?.skills?.filter((skill) => skill?.enabled ?? true).length ?? agent?.skills.length ?? 0;
+    const active = liveAgent?.active ?? agent?.active ?? false;
+    const enabled = liveAgent?.enabled ?? agent?.enabled ?? true;
     const model =
       liveAgent?.default_model?.trim() ||
-      agent.defaultModel ||
+      agent?.defaultModel ||
+      linkedProvider?.model ||
       (providers.find((provider) => provider.isDefault)?.model ?? "");
+    const permissionLevel = liveAgent?.permission_level?.trim() || agent?.permissionLevel || "limited";
+    const workingDir = liveAgent?.working_dir?.trim() || agent?.workingDir || workspaceSnapshot.agent.workingDir;
+    const role =
+      liveAgent?.role?.trim() || (agent?.role === "main" ? "主 Agent" : agent?.role || "Agent Profile");
 
     return {
       active,
       model,
-      name: agent.name,
-      permissionLevel: liveAgent?.permission_level?.trim() || agent.permissionLevel,
+      name,
+      permissionLevel,
       providerName,
-      role: liveAgent?.role?.trim() || (agent.role === "main" ? "主 Agent" : "Agent Profile"),
+      role,
       skillsCount,
       status: active ? "当前启用" : enabled ? "已配置" : "已停用",
       summary: compactText(
-        liveAgent?.description?.trim() || agent.description,
-        fallbackAgentDescription(agent.name),
+        liveAgent?.description?.trim() || agent?.description || "",
+        fallbackAgentDescription(name),
       ),
       tags: [
         active ? "当前入口" : "候选 Agent",
-        liveAgent?.permission_level?.trim() || agent.permissionLevel,
+        permissionLevel,
         providerName,
         model,
         `${skillsCount} skills`,
       ].filter(Boolean),
-      workingDir: liveAgent?.working_dir?.trim() || agent.workingDir,
+      workingDir,
     };
   });
 
@@ -394,28 +431,33 @@ function buildAgentRecords(live: LivePayload, providers: ProviderRecord[]): Agen
 }
 
 function buildSkillRecords(live: LivePayload): SkillRecord[] {
+  const snapshotMap = new Map<string, (typeof workspaceSnapshot.skills)[number]>(
+    workspaceSnapshot.skills.map((skill) => [skill.name, skill]),
+  );
   const liveMap = new Map(
     live.skills
       .filter((skill) => (skill.name ?? "").trim() !== "")
       .map((skill) => [skill.name!.trim(), skill]),
   );
+  const orderedNames = mergeOverviewSkillNames(live.skills);
 
-  return workspaceSnapshot.skills
-    .map((skill) => {
-      const liveSkill = liveMap.get(skill.name);
+  return orderedNames
+    .map((name) => {
+      const skill = snapshotMap.get(name);
+      const liveSkill = liveMap.get(name);
 
       return {
         description: normalizeSkillDescription(
-          liveSkill?.description?.trim() || skill.description,
-          `${skill.name} 已经存在于本地技能目录中。`,
+          liveSkill?.description?.trim() || skill?.description || "",
+          fallbackSkillDescription(name),
         ),
         enabled: resolveSkillEnabled(liveSkill),
-        installCommand: liveSkill?.installHint?.trim() || skill.installCommand,
+        installCommand: liveSkill?.installHint?.trim() || skill?.installCommand || "",
         loaded: resolveSkillLoaded(liveSkill),
-        name: skill.name,
-        registry: liveSkill?.registry?.trim() || skill.registry,
-        source: liveSkill?.source?.trim() || skill.source,
-        version: liveSkill?.version?.trim() || skill.version,
+        name,
+        registry: liveSkill?.registry?.trim() || skill?.registry || "",
+        source: liveSkill?.source?.trim() || skill?.source || "local",
+        version: liveSkill?.version?.trim() || skill?.version || "",
       };
     })
     .sort((left, right) => Number(right.loaded) - Number(left.loaded) || left.name.localeCompare(right.name));

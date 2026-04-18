@@ -92,6 +92,16 @@ function channelConfigured(entry, keys) {
   });
 }
 
+function channelConfiguredWithAliases(entry, keyGroups) {
+  if (!entry || typeof entry !== "object") return false;
+  return keyGroups.every((group) =>
+    group.some((key) => {
+      const value = entry[key];
+      return typeof value === "string" && value.trim() !== "";
+    }),
+  );
+}
+
 function readSkillManifests(skillsDir) {
   if (!existingDir(skillsDir)) {
     return [];
@@ -206,6 +216,23 @@ function buildConfiguredChannels(config) {
   const channels = config.channels ?? {};
 
   return [
+    {
+      key: "wechat",
+      enabled: safeBoolean(channels.wechat?.enabled),
+      configured: channelConfiguredWithAliases(channels.wechat, [
+        ["app_id", "appid"],
+        ["app_secret", "secret"],
+        ["token", "verify_token"],
+      ]),
+    },
+    {
+      key: "feishu",
+      enabled: safeBoolean(channels.feishu?.enabled),
+      configured: channelConfiguredWithAliases(channels.feishu, [
+        ["app_id", "appId"],
+        ["app_secret", "appSecret"],
+      ]),
+    },
     {
       key: "telegram",
       enabled: safeBoolean(channels.telegram?.enabled),

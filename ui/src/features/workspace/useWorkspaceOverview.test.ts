@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { normalizeSkillDescription } from "./skillDescription";
-import { resolveSkillEnabled, resolveSkillLoaded } from "./useWorkspaceOverview";
+import {
+  mergeOverviewAgentNames,
+  mergeOverviewSkillNames,
+  resolveSkillEnabled,
+  resolveSkillLoaded,
+} from "./useWorkspaceOverview";
 
 describe("normalizeSkillDescription", () => {
   it("strips wrapping quotes and inline code markers", () => {
@@ -31,5 +36,15 @@ describe("workspace overview skill fallback", () => {
     expect(resolveSkillEnabled({ enabled: false })).toBe(false);
     expect(resolveSkillEnabled({ loaded: true })).toBe(true);
     expect(resolveSkillLoaded({ loaded: false })).toBe(false);
+  });
+
+  it("appends live-only skills to the overview", () => {
+    expect(mergeOverviewSkillNames([{ name: "live-only-skill" }])).toContain("live-only-skill");
+  });
+});
+
+describe("workspace overview agent merge", () => {
+  it("appends live-only agents to the overview", () => {
+    expect(mergeOverviewAgentNames([{ name: "Live Agent" }])).toContain("Live Agent");
   });
 });
