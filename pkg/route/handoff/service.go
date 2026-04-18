@@ -1,119 +1,178 @@
 package handoff
 
-import (
-	"fmt"
-	"strings"
+import "strings"
+
+const (
+	ModeMain               = "main"
+	ModePersistentSubagent = "persistent_subagent"
+	ModeTemporarySubagent  = "temporary_subagent"
 )
 
-type Request struct {
-	Task            string
-	AgentNames      []string
-	Reason          string
-	SuccessCriteria string
-	UserContext     string
+type HandoffRoutingEntry struct {
+	SessionID           string
+	UserInput           string
+	PreferredSubagentID string
+	SkipDelegation      bool
+	Metadata            map[string]string
 }
 
-type Plan struct {
-	Goal            string
-	Brief           string
-	TargetAgents    []string
-	Reason          string
-	SuccessCriteria string
-	UserContext     string
-	ReturnContract  string
+type HandoffRequest struct {
+	SessionID           string
+	UserInput           string
+	PreferredSubagentID string
+	SkipDelegation      bool
 }
 
-type AgentCatalog interface {
+type PlanOptions struct {
+	PersistentFirst bool
+	AllowTemporary  bool
+}
+
+type HandoffPlan struct {
+	Mode          string
+	TargetAgentID string
+	SessionID     string
+	Persistence   string
+	Reason        string
+}
+
+type PersistentMatcher interface {
 	AvailableAgentNames() []string
 }
 
-type Service struct {
-	catalog AgentCatalog
+type Router struct {
+	persistent PersistentMatcher
 }
 
-func NewService(catalog AgentCatalog) *Service {
-	return &Service{catalog: catalog}
+func NewRouter(persistent PersistentMatcher) *Router {
+	return &Router{persistent: persistent}
 }
 
-func (s *Service) BuildPlan(req Request) (*Plan, error) {
-	task := strings.TrimSpace(req.Task)
-	if task == "" {
-		return nil, fmt.Errorf("task is required")
+func (r *Router) Prepare(entry HandoffRoutingEntry) HandoffRequest {
+	return HandoffRequest{
+		SessionID:           strings.TrimSpace(entry.SessionID),
+		UserInput:           strings.TrimSpace(entry.UserInput),
+		PreferredSubagentID: strings.TrimSpace(entry.PreferredSubagentID),
+		SkipDelegation:      entry.SkipDelegation,
+	}
+}
+
+func (r *Router) Plan(req HandoffRequest, options PlanOptions) HandoffPlan {
+	req = HandoffRequest{
+		SessionID:           strings.TrimSpace(req.SessionID),
+		UserInput:           strings.TrimSpace(req.UserInput),
+		PreferredSubagentID: strings.TrimSpace(req.PreferredSubagentID),
+		SkipDelegation:      req.SkipDelegation,
 	}
 
-	targetAgents := normalizeNames(req.AgentNames)
-	available := availableNames(s)
-	if len(targetAgents) > 0 && len(available) > 0 {
-		normalizedAvailable := make(map[string]string, len(available))
-		for _, name := range available {
-			normalizedAvailable[strings.ToLower(name)] = name
+	if req.SkipDelegation {
+		return HandoffPlan{
+			Mode:        ModeMain,
+			SessionID:   req.SessionID,
+			Persistence: "main",
+			Reason:      "skip_delegation requested",
 		}
-		resolved := make([]string, 0, len(targetAgents))
-		unknown := make([]string, 0)
-		for _, name := range targetAgents {
-			canonical, ok := normalizedAvailable[strings.ToLower(name)]
-			if !ok {
-				unknown = append(unknown, name)
-				continue
+	}
+
+	if req.UserInput == "" {
+		return HandoffPlan{
+			Mode:        ModeMain,
+			SessionID:   req.SessionID,
+			Persistence: "main",
+			Reason:      "empty user input",
+		}
+	}
+
+	available := availablePersistentNames(r.persistent)
+	if preferred := req.PreferredSubagentID; preferred != "" {
+		if resolved, ok := resolvePersistentName(available, preferred); ok {
+			return HandoffPlan{
+				Mode:          ModePersistentSubagent,
+				TargetAgentID: resolved,
+				SessionID:     req.SessionID,
+				Persistence:   "persistent",
+				Reason:        "explicit preferred persistent subagent",
 			}
-			resolved = append(resolved, canonical)
 		}
-		if len(unknown) > 0 {
-			return nil, fmt.Errorf("handoff plan contains unknown target agents: %s", strings.Join(unknown, ", "))
+		if options.AllowTemporary {
+			return HandoffPlan{
+				Mode:          ModeTemporarySubagent,
+				TargetAgentID: preferred,
+				SessionID:     req.SessionID,
+				Persistence:   "temporary",
+				Reason:        "preferred persistent subagent unavailable; falling back to temporary",
+			}
 		}
-		targetAgents = normalizeNames(resolved)
-	}
-	if len(targetAgents) == 0 {
-		switch len(available) {
-		case 0:
-			return nil, fmt.Errorf("handoff plan requires at least one target agent")
-		case 1:
-			targetAgents = available
-		default:
-			return nil, fmt.Errorf("handoff plan requires explicit target agents from the main agent when multiple specialists are available")
+		return HandoffPlan{
+			Mode:        ModeMain,
+			SessionID:   req.SessionID,
+			Persistence: "main",
+			Reason:      "preferred persistent subagent unavailable",
 		}
 	}
 
-	return &Plan{
-		Goal:            task,
-		Brief:           buildBrief(task, req.Reason, req.SuccessCriteria, req.UserContext),
-		TargetAgents:    targetAgents,
-		Reason:          strings.TrimSpace(req.Reason),
-		SuccessCriteria: strings.TrimSpace(req.SuccessCriteria),
-		UserContext:     strings.TrimSpace(req.UserContext),
-		ReturnContract:  "Return concrete output that the main agent can integrate into the user-facing response.",
-	}, nil
+	if len(available) == 1 {
+		return HandoffPlan{
+			Mode:          ModePersistentSubagent,
+			TargetAgentID: available[0],
+			SessionID:     req.SessionID,
+			Persistence:   "persistent",
+			Reason:        "single persistent subagent available",
+		}
+	}
+
+	if len(available) > 1 {
+		if !options.PersistentFirst && options.AllowTemporary {
+			return HandoffPlan{
+				Mode:        ModeTemporarySubagent,
+				SessionID:   req.SessionID,
+				Persistence: "temporary",
+				Reason:      "multiple persistent subagents available without an explicit preference",
+			}
+		}
+		return HandoffPlan{
+			Mode:        ModeMain,
+			SessionID:   req.SessionID,
+			Persistence: "main",
+			Reason:      "multiple persistent subagents available without an explicit preference",
+		}
+	}
+
+	if options.AllowTemporary {
+		return HandoffPlan{
+			Mode:        ModeTemporarySubagent,
+			SessionID:   req.SessionID,
+			Persistence: "temporary",
+			Reason:      "no persistent subagent available",
+		}
+	}
+
+	return HandoffPlan{
+		Mode:        ModeMain,
+		SessionID:   req.SessionID,
+		Persistence: "main",
+		Reason:      "no persistent subagent available",
+	}
 }
 
-func availableNames(s *Service) []string {
-	if s == nil || s.catalog == nil {
+func availablePersistentNames(matcher PersistentMatcher) []string {
+	if matcher == nil {
 		return nil
 	}
-	return normalizeNames(s.catalog.AvailableAgentNames())
+	return normalizeNames(matcher.AvailableAgentNames())
 }
 
-func buildBrief(task string, reason string, successCriteria string, userContext string) string {
-	lines := []string{
-		"You are executing a delegated task from the main agent.",
-		"",
-		"Delegated task:",
-		task,
+func resolvePersistentName(available []string, preferred string) (string, bool) {
+	preferred = strings.TrimSpace(preferred)
+	if preferred == "" {
+		return "", false
 	}
-	if trimmed := strings.TrimSpace(reason); trimmed != "" {
-		lines = append(lines, "", "Why this was delegated:", trimmed)
+	for _, name := range available {
+		if strings.EqualFold(name, preferred) {
+			return name, true
+		}
 	}
-	if trimmed := strings.TrimSpace(userContext); trimmed != "" {
-		lines = append(lines, "", "Relevant user context:", trimmed)
-	}
-	if trimmed := strings.TrimSpace(successCriteria); trimmed != "" {
-		lines = append(lines, "", "Success criteria:", trimmed)
-	}
-	lines = append(lines,
-		"",
-		"Work only within this delegated scope.",
-		"Return concrete output that the main agent can integrate back into the user-facing answer.",
-	)
-	return strings.Join(lines, "\n")
+	return "", false
 }
 
 func normalizeNames(items []string) []string {

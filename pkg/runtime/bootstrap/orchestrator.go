@@ -71,6 +71,7 @@ func BuildOrchestratorConfig(cfg *config.Config, workDir string, workingDir stri
 		Timeout:             timeout,
 		AgentDefinitions:    defs,
 		EnableDecomposition: orchCfg.EnableDecomposition,
+		DefaultWorkingDir:   workingDir,
 	}
 }
 

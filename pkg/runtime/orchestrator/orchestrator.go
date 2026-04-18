@@ -11,7 +11,6 @@ import (
 	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
 	"github.com/1024XEngineer/anyclaw/pkg/capability/skills"
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
-	routehandoff "github.com/1024XEngineer/anyclaw/pkg/route/handoff"
 	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
 )
 
@@ -21,6 +20,7 @@ type OrchestratorConfig struct {
 	Timeout             time.Duration     `json:"timeout"`
 	AgentDefinitions    []AgentDefinition `json:"agent_definitions"`
 	EnableDecomposition bool              `json:"enable_decomposition"`
+	DefaultWorkingDir   string            `json:"default_working_dir,omitempty"`
 }
 
 type OrchestratorStatus string
@@ -189,14 +189,15 @@ func (o *Orchestrator) AvailableAgentNames() []string {
 	return names
 }
 
-func (o *Orchestrator) RunPlan(ctx context.Context, plan *routehandoff.Plan) (*OrchestratorResult, error) {
-	if plan == nil {
-		return nil, fmt.Errorf("handoff plan is required")
+func (o *Orchestrator) RunPlan(ctx context.Context, brief string, targetAgents []string) (*OrchestratorResult, error) {
+	brief = strings.TrimSpace(brief)
+	if brief == "" {
+		return nil, fmt.Errorf("handoff brief is required")
 	}
-	if len(plan.TargetAgents) == 0 {
+	if len(targetAgents) == 0 {
 		return nil, fmt.Errorf("handoff plan requires explicit target agents")
 	}
-	return o.runTaskResult(ctx, plan.Brief, plan.TargetAgents, true)
+	return o.runTaskResult(ctx, brief, targetAgents, true)
 }
 
 func (o *Orchestrator) RunTaskResult(ctx context.Context, input string, agentNames []string) (*OrchestratorResult, error) {

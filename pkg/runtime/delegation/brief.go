@@ -13,6 +13,8 @@ type Request struct {
 	Reason          string   `json:"reason,omitempty"`
 	SuccessCriteria string   `json:"success_criteria,omitempty"`
 	UserContext     string   `json:"user_context,omitempty"`
+	SessionID       string   `json:"session_id,omitempty"`
+	SkipDelegation  bool     `json:"skip_delegation,omitempty"`
 }
 
 type Result struct {

@@ -60,6 +60,37 @@ func TestRunTaskResultUsesFreshExecutionStatePerRun(t *testing.T) {
 	}
 }
 
+func TestRunTemporaryPlanCreatesEphemeralAgentAndCleansItUp(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+	t.Cleanup(func() { mem.Close() })
+
+	orch, err := NewOrchestrator(OrchestratorConfig{
+		MaxConcurrentAgents: 1,
+		EnableDecomposition: false,
+		DefaultWorkingDir:   t.TempDir(),
+	}, &orchestratorTestLLM{}, skills.NewSkillsManager(""), tools.NewRegistry(), mem)
+	if err != nil {
+		t.Fatalf("NewOrchestrator: %v", err)
+	}
+
+	result, err := orch.RunTemporaryPlan(context.Background(), "temporary delegated task", "Review Bot")
+	if err != nil {
+		t.Fatalf("RunTemporaryPlan: %v", err)
+	}
+	if len(result.SubTasks) != 1 {
+		t.Fatalf("expected one temporary sub-task, got %#v", result.SubTasks)
+	}
+	if result.SubTasks[0].AssignedAgent != "review-bot" {
+		t.Fatalf("expected normalized temporary agent name, got %#v", result.SubTasks)
+	}
+	if orch.AgentCount() != 0 {
+		t.Fatalf("expected temporary agent to be cleaned up, got %d agents", orch.AgentCount())
+	}
+}
+
 type orchestratorTestLLM struct{}
 
 func (o *orchestratorTestLLM) Chat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error) {

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	routehandoff "github.com/1024XEngineer/anyclaw/pkg/route/handoff"
 	runtimedelegation "github.com/1024XEngineer/anyclaw/pkg/runtime/delegation"
+	"github.com/1024XEngineer/anyclaw/pkg/runtime/orchestrator"
 )
 
 type DelegationRequest = runtimedelegation.Request
@@ -33,18 +35,8 @@ func (s *DelegationService) Delegate(ctx context.Context, req DelegationRequest)
 		return nil, fmt.Errorf("task is required")
 	}
 
-	plan, err := routehandoff.NewService(s.mainRuntime.Orchestrator).BuildPlan(routehandoff.Request{
-		Task:            req.Task,
-		AgentNames:      req.AgentNames,
-		Reason:          req.Reason,
-		SuccessCriteria: req.SuccessCriteria,
-		UserContext:     req.UserContext,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	result, err := s.mainRuntime.Orchestrator.RunPlan(ctx, plan)
+	brief := runtimedelegation.BuildBrief(req)
+	result, selectedAgents, err := s.runDelegation(ctx, req, brief)
 	if result == nil {
 		if err == nil {
 			err = fmt.Errorf("delegation failed without a result")
@@ -60,13 +52,86 @@ func (s *DelegationService) Delegate(ctx context.Context, req DelegationRequest)
 	return &DelegationResult{
 		Status:          runtimedelegation.StatusForResult(result, err),
 		TaskID:          result.TaskID,
-		DelegationBrief: plan.Brief,
-		SelectedAgents:  plan.TargetAgents,
+		DelegationBrief: brief,
+		SelectedAgents:  selectedAgents,
 		Summary:         result.Summary,
 		ErrorSummary:    errorSummary,
 		Stats:           result.Stats,
 		SubTasks:        result.SubTasks,
 	}, nil
+}
+
+func (s *DelegationService) runDelegation(ctx context.Context, req DelegationRequest, brief string) (*orchestrator.OrchestratorResult, []string, error) {
+	selectedAgents := runtimedelegation.NormalizeNames(req.AgentNames)
+	if len(selectedAgents) > 1 {
+		result, err := s.mainRuntime.Orchestrator.RunPlan(ctx, brief, selectedAgents)
+		return result, selectedAgents, err
+	}
+
+	handoffPlan := s.resolveDelegationRoute(req, selectedAgents)
+	switch handoffPlan.Mode {
+	case routehandoff.ModePersistentSubagent:
+		target := strings.TrimSpace(handoffPlan.TargetAgentID)
+		if target == "" {
+			return nil, nil, fmt.Errorf("handoff route selected a persistent subagent without a target agent id")
+		}
+		result, err := s.mainRuntime.Orchestrator.RunPlan(ctx, brief, []string{target})
+		return result, []string{target}, err
+	case routehandoff.ModeTemporarySubagent:
+		result, err := s.mainRuntime.Orchestrator.RunTemporaryPlan(ctx, brief, handoffPlan.TargetAgentID)
+		return result, selectedAgentsFromResult(result, handoffPlan.TargetAgentID), err
+	case routehandoff.ModeMain, "":
+		reason := strings.TrimSpace(handoffPlan.Reason)
+		if reason == "" {
+			reason = "no delegation target was selected"
+		}
+		return nil, nil, fmt.Errorf("handoff route kept the task on the main agent: %s", reason)
+	default:
+		return nil, nil, fmt.Errorf("handoff route returned unsupported mode %q", handoffPlan.Mode)
+	}
+}
+
+func (s *DelegationService) resolveDelegationRoute(req DelegationRequest, selectedAgents []string) routehandoff.HandoffPlan {
+	entry := routehandoff.HandoffRoutingEntry{
+		SessionID:      strings.TrimSpace(req.SessionID),
+		UserInput:      req.Task,
+		SkipDelegation: req.SkipDelegation,
+	}
+	if len(selectedAgents) == 1 {
+		entry.PreferredSubagentID = selectedAgents[0]
+	}
+
+	router := routehandoff.NewRouter(s.mainRuntime.Orchestrator)
+	handoffReq := router.Prepare(entry)
+	return router.Plan(handoffReq, routehandoff.PlanOptions{
+		PersistentFirst: true,
+		AllowTemporary:  true,
+	})
+}
+
+func selectedAgentsFromResult(result *orchestrator.OrchestratorResult, fallback string) []string {
+	seen := map[string]struct{}{}
+	selected := make([]string, 0)
+	if result != nil {
+		for _, subTask := range result.SubTasks {
+			name := strings.TrimSpace(subTask.AssignedAgent)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			selected = append(selected, name)
+		}
+	}
+	if len(selected) > 0 {
+		return selected
+	}
+	if fallback = strings.TrimSpace(fallback); fallback != "" {
+		return []string{fallback}
+	}
+	return nil
 }
 
 func registerDelegationTool(mainRuntime *MainRuntime) {
@@ -108,6 +173,14 @@ func registerDelegationTool(mainRuntime *MainRuntime) {
 					"type":        "string",
 					"description": "Relevant user intent or context the sub-agents must preserve.",
 				},
+				"session_id": map[string]any{
+					"type":        "string",
+					"description": "Optional parent session identifier for routing continuity.",
+				},
+				"skip_delegation": map[string]any{
+					"type":        "boolean",
+					"description": "When true, keep the task on the main agent and do not delegate.",
+				},
 			},
 			"required": []string{"task"},
 		},
@@ -122,6 +195,8 @@ func registerDelegationTool(mainRuntime *MainRuntime) {
 				Reason:          runtimedelegation.StringFromAny(input["reason"]),
 				SuccessCriteria: runtimedelegation.StringFromAny(input["success_criteria"]),
 				UserContext:     runtimedelegation.StringFromAny(input["user_context"]),
+				SessionID:       runtimedelegation.StringFromAny(input["session_id"]),
+				SkipDelegation:  input["skip_delegation"] == true,
 			}
 			result, err := service.Delegate(ctx, req)
 			if result == nil {
