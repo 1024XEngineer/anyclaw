@@ -89,16 +89,35 @@ func (g *WindowGuard) Add(tokens int) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if g.hardLimit && g.currentTokens+tokens > g.maxTokens {
-		return fmt.Errorf("window guard: hard limit exceeded (%d + %d > %d)", g.currentTokens, tokens, g.maxTokens)
+	return g.addLocked(tokens, false)
+}
+
+func (g *WindowGuard) track(tokens int) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.addLocked(tokens, true)
+}
+
+func (g *WindowGuard) addLocked(tokens int, recordOnOverflow bool) error {
+	current := g.currentTokens
+	next := current + tokens
+
+	if g.hardLimit && next > g.maxTokens {
+		if recordOnOverflow {
+			g.currentTokens = next
+		}
+		return fmt.Errorf("window guard: hard limit exceeded (%d + %d > %d)", current, tokens, g.maxTokens)
 	}
 
-	if g.currentTokens+tokens+g.safetyMargin > g.maxTokens {
+	if next+g.safetyMargin > g.maxTokens {
+		if recordOnOverflow {
+			g.currentTokens = next
+		}
 		return fmt.Errorf("window guard: limit exceeded with safety margin (%d + %d + %d > %d)",
-			g.currentTokens, tokens, g.safetyMargin, g.maxTokens)
+			current, tokens, g.safetyMargin, g.maxTokens)
 	}
 
-	g.currentTokens += tokens
+	g.currentTokens = next
 	return nil
 }
 

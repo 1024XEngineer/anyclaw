@@ -25,6 +25,29 @@ func writeFile(t *testing.T, dir, name, content string) string {
 	return path
 }
 
+func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool, message string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal(message)
+}
+
+func waitForNoCondition(t *testing.T, duration time.Duration, condition func() bool, message string) {
+	t.Helper()
+	deadline := time.Now().Add(duration)
+	for time.Now().Before(deadline) {
+		if condition() {
+			t.Fatal(message)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestWatcherLoad(t *testing.T) {
 	dir := setupTestDir(t)
 	writeFile(t, dir, "AGENTS.md", "# Agent Config\nname: test")
@@ -95,11 +118,13 @@ func TestWatcherModification(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	w.checkChanges()
 
+	waitForCondition(t, time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(changes) > 0
+	}, "expected change event")
+
 	mu.Lock()
-	if len(changes) == 0 {
-		mu.Unlock()
-		t.Fatal("expected change event")
-	}
 	event := changes[0]
 	mu.Unlock()
 
@@ -139,11 +164,13 @@ func TestWatcherDeletion(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	w.checkChanges()
 
+	waitForCondition(t, time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(changes) > 0
+	}, "expected deletion event")
+
 	mu.Lock()
-	if len(changes) == 0 {
-		mu.Unlock()
-		t.Fatal("expected deletion event")
-	}
 	event := changes[0]
 	mu.Unlock()
 
@@ -180,11 +207,11 @@ func TestWatcherOnChange(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	w.checkChanges()
 
-	mu.Lock()
-	if !called {
-		t.Error("expected OnChange handler called")
-	}
-	mu.Unlock()
+	waitForCondition(t, time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return called
+	}, "expected OnChange handler called")
 }
 
 func TestWatcherReload(t *testing.T) {
@@ -380,11 +407,105 @@ func TestWatcherSameContentNoEvent(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	w.checkChanges()
 
-	mu.Lock()
-	if len(changes) > 0 {
-		t.Errorf("expected no change event for same content, got %d", len(changes))
+	waitForNoCondition(t, 200*time.Millisecond, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(changes) > 0
+	}, "expected no change event for same content")
+}
+
+func TestWatcherHandlerCanCallBackIntoWatcher(t *testing.T) {
+	dir := setupTestDir(t)
+	writeFile(t, dir, "AGENTS.md", "initial")
+
+	contentCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+
+	var w *Watcher
+	w = NewWatcher(WatcherConfig{
+		BaseDir:  dir,
+		AutoLoad: true,
+		Files:    []FileType{FileAgents},
+		OnChange: func(event ChangeEvent) {
+			if event.Action != ActionModified {
+				return
+			}
+			if err := w.Reload(FileAgents); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+
+			entry, ok := w.Get(FileAgents)
+			if !ok {
+				select {
+				case errCh <- errors.New("expected AGENTS.md entry during callback"):
+				default:
+				}
+				return
+			}
+
+			select {
+			case contentCh <- entry.Content:
+			default:
+			}
+		},
+	})
+
+	writeFile(t, dir, "AGENTS.md", "updated")
+
+	time.Sleep(200 * time.Millisecond)
+	w.checkChanges()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("callback failed: %v", err)
+	case content := <-contentCh:
+		if content != "updated" {
+			t.Fatalf("expected updated content from callback, got %s", content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for callback")
 	}
-	mu.Unlock()
+}
+
+func TestWatcherCheckChangesDoesNotBlockOnSlowHandlers(t *testing.T) {
+	dir := setupTestDir(t)
+	writeFile(t, dir, "AGENTS.md", "initial")
+
+	done := make(chan struct{}, 1)
+
+	w := NewWatcher(WatcherConfig{
+		BaseDir:  dir,
+		AutoLoad: true,
+		Files:    []FileType{FileAgents},
+		OnChange: func(event ChangeEvent) {
+			time.Sleep(300 * time.Millisecond)
+			select {
+			case done <- struct{}{}:
+			default:
+			}
+		},
+	})
+
+	writeFile(t, dir, "AGENTS.md", "updated")
+
+	time.Sleep(200 * time.Millisecond)
+	start := time.Now()
+	w.checkChanges()
+	elapsed := time.Since(start)
+
+	if elapsed >= 200*time.Millisecond {
+		t.Fatalf("expected checkChanges to return before slow handler finished, took %v", elapsed)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for slow handler")
+	}
 }
 
 func TestFileLoader(t *testing.T) {

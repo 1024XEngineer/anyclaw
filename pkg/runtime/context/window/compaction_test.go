@@ -31,6 +31,9 @@ func TestCompactorAddAndCount(t *testing.T) {
 	if compactor.TotalTokens() != 25 {
 		t.Errorf("expected 25 tokens, got %d", compactor.TotalTokens())
 	}
+	if guard.CurrentTokens() != 25 {
+		t.Errorf("expected guard to track 25 tokens, got %d", guard.CurrentTokens())
+	}
 }
 
 func TestCompactorRemove(t *testing.T) {
@@ -440,5 +443,67 @@ func TestCompactorTargetTokenRatio(t *testing.T) {
 	}
 	if result.RemainingTokens != 300 {
 		t.Errorf("expected 300 remaining tokens, got %d", result.RemainingTokens)
+	}
+}
+
+func TestCompactorTracksOverflowInGuard(t *testing.T) {
+	guard := NewWindowGuard(DefaultGuardConfig(1000))
+	compactor := NewCompactor(guard, DefaultCompactionConfig())
+
+	compactor.Add(newTestMessage("1", "user", "large", 900))
+	compactor.Add(newTestMessage("2", "assistant", "overflow", 200))
+
+	if compactor.TotalTokens() != 1100 {
+		t.Fatalf("expected 1100 total tokens, got %d", compactor.TotalTokens())
+	}
+	if guard.CurrentTokens() != 1100 {
+		t.Fatalf("expected guard to track 1100 tokens, got %d", guard.CurrentTokens())
+	}
+
+	used, max, avail := guard.Status()
+	if used != 1100 || max != 1000 {
+		t.Fatalf("expected used=1100 max=1000, got used=%d max=%d", used, max)
+	}
+	if avail != 0 {
+		t.Fatalf("expected no available tokens after overflow, got %d", avail)
+	}
+}
+
+func TestCompactorCompactKeepsGuardSyncedWhenPinnedMessagesStillOverflow(t *testing.T) {
+	guard := NewWindowGuard(GuardConfig{
+		MaxTokens:    100,
+		SafetyMargin: 0,
+	})
+	compactor := NewCompactor(guard, CompactionConfig{
+		Strategy:         StrategyOldestFirst,
+		MinKeepMessages:  2,
+		MaxSummaryTokens: 10,
+		CompactThreshold: 0.5,
+		TargetTokenRatio: 0.1,
+		SummaryPrefix:    "s",
+	})
+
+	pinnedA := newTestMessage("pinned-a", "system", "important", 60)
+	pinnedA.Pinned = true
+	pinnedB := newTestMessage("pinned-b", "system", "important", 60)
+	pinnedB.Pinned = true
+
+	compactor.Add(pinnedA)
+	compactor.Add(pinnedB)
+	compactor.Add(newTestMessage("user-1", "user", "compact me", 60))
+
+	result, err := compactor.Compact(context.Background(), &StaticSummarizer{Summary: "x"})
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+
+	if result.RemainingTokens != 120 {
+		t.Fatalf("expected 120 remaining tokens, got %d", result.RemainingTokens)
+	}
+	if compactor.TotalTokens() != 120 {
+		t.Fatalf("expected compactor to retain 120 tokens, got %d", compactor.TotalTokens())
+	}
+	if guard.CurrentTokens() != 120 {
+		t.Fatalf("expected guard to stay synced at 120 tokens, got %d", guard.CurrentTokens())
 	}
 }

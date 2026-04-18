@@ -106,7 +106,7 @@ func (c *Compactor) Add(msg *Message) {
 	}
 
 	c.messages = append(c.messages, msg)
-	c.guard.Add(msg.Tokens)
+	_ = c.guard.track(msg.Tokens)
 }
 
 func (c *Compactor) Remove(id string) {
@@ -250,7 +250,7 @@ func (c *Compactor) Compact(ctx context.Context, summarizer Summarizer) (*Summar
 	c.messages = remaining
 	c.guard.Reset()
 	for _, msg := range c.messages {
-		c.guard.Add(msg.Tokens)
+		_ = c.guard.track(msg.Tokens)
 	}
 
 	remainingTokens := 0
