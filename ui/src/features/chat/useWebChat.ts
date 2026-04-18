@@ -718,6 +718,10 @@ function upsertConversation(
   agentName: string | null,
   nextMessages: ChatMessage[],
   nextSessionId: string | null,
+  options?: {
+    preserveSelection?: boolean;
+    sessionKey?: string | null;
+  },
 ): ChatState {
   if (nextMessages.length === 0) {
     return {
@@ -728,7 +732,7 @@ function upsertConversation(
   }
 
   const remoteSessionMatch = findSessionByRemoteId(state.sessions, nextSessionId);
-  const sessionKey = remoteSessionMatch?.key ?? state.selectedSessionKey ?? createSessionKey();
+  const sessionKey = remoteSessionMatch?.key ?? options?.sessionKey ?? state.selectedSessionKey ?? createSessionKey();
   const existingSession = getSessionByKey(state.sessions, sessionKey) ?? remoteSessionMatch ?? undefined;
   const storedSession = buildStoredSession({
     agentName,
@@ -745,12 +749,24 @@ function upsertConversation(
         (!storedSession.remoteSessionId || session.remoteSessionId !== storedSession.remoteSessionId),
     ),
   );
+  const nextSessions = sortSessions([storedSession, ...sessions]);
+
+  if (options?.preserveSelection && state.selectedSessionKey !== storedSession.key) {
+    const selectedSession = getSessionByKey(nextSessions, state.selectedSessionKey);
+
+    return {
+      messages: selectedSession?.messages ?? state.messages,
+      selectedSessionKey: state.selectedSessionKey,
+      sessionId: selectedSession?.remoteSessionId ?? state.sessionId,
+      sessions: nextSessions,
+    };
+  }
 
   return {
     messages: storedSession.messages,
     selectedSessionKey: storedSession.key,
     sessionId: storedSession.remoteSessionId,
-    sessions: sortSessions([storedSession, ...sessions]),
+    sessions: nextSessions,
   };
 }
 
@@ -761,6 +777,8 @@ function bindRemoteSession(
   messages: ChatMessage[],
   options?: {
     createdAt?: string | null;
+    preserveSelection?: boolean;
+    sessionKey?: string | null;
     title?: string | null;
     updatedAt?: string | null;
   },
@@ -772,7 +790,7 @@ function bindRemoteSession(
     agentName,
     createdAt: options?.createdAt ?? existingSession?.createdAt ?? null,
     existing: existingSession,
-    key: existingSession?.key ?? remoteSessionId,
+    key: existingSession?.key ?? options?.sessionKey ?? remoteSessionId,
     messages,
     remoteSessionId,
     title: options?.title ?? existingSession?.title ?? null,
@@ -782,12 +800,24 @@ function bindRemoteSession(
   const sessions = sortSessions(
     state.sessions.filter((session) => session.key !== storedSession.key && session.remoteSessionId !== storedSession.remoteSessionId),
   );
+  const nextSessions = sortSessions([storedSession, ...sessions]);
+
+  if (options?.preserveSelection && state.selectedSessionKey !== storedSession.key) {
+    const selectedSession = getSessionByKey(nextSessions, state.selectedSessionKey);
+
+    return {
+      messages: selectedSession?.messages ?? state.messages,
+      selectedSessionKey: state.selectedSessionKey,
+      sessionId: selectedSession?.remoteSessionId ?? state.sessionId,
+      sessions: nextSessions,
+    };
+  }
 
   return {
     messages: storedSession.messages,
     selectedSessionKey: storedSession.key,
     sessionId: storedSession.remoteSessionId,
-    sessions: sortSessions([storedSession, ...sessions]),
+    sessions: nextSessions,
   };
 }
 
@@ -1259,6 +1289,8 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
   async function sendMessage() {
     const message = draft.trim();
     const currentSessionId = sessionId;
+    const sendingSessionKey = selectedSessionKey ?? createSessionKey();
+    const sendingMessages = messages;
     if (message === "" || isSending || pendingApprovals.length > 0) return;
 
     const optimisticMessage: ChatMessage = {
@@ -1270,7 +1302,11 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
     setDraft("");
     setError(null);
     setIsSending(true);
-    setChatState((current) => upsertConversation(current, agentName, [...current.messages, optimisticMessage], current.sessionId));
+    setChatState((current) =>
+      upsertConversation(current, agentName, [...sendingMessages, optimisticMessage], currentSessionId, {
+        sessionKey: sendingSessionKey,
+      }),
+    );
 
     try {
       let activeWorkspaceId = await resolveWorkspaceId();
@@ -1298,12 +1334,17 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
           if (response.session?.id) {
             return bindRemoteSession(current, agentName, response.session.id, mappedMessages, {
               createdAt: response.session.created_at ?? null,
+              preserveSelection: true,
+              sessionKey: sendingSessionKey,
               title: response.session.title ?? null,
               updatedAt: response.session.updated_at ?? null,
             });
           }
 
-          return upsertConversation(current, agentName, mappedMessages, resolvedSessionId ?? current.sessionId);
+          return upsertConversation(current, agentName, mappedMessages, resolvedSessionId, {
+            preserveSelection: true,
+            sessionKey: sendingSessionKey,
+          });
         });
       } else if (response.response) {
         const assistantMessage: ChatMessage = {
@@ -1314,7 +1355,10 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
         };
 
         setChatState((current) =>
-          upsertConversation(current, agentName, [...current.messages, assistantMessage], resolvedSessionId ?? current.sessionId),
+          upsertConversation(current, agentName, [...sendingMessages, optimisticMessage, assistantMessage], resolvedSessionId, {
+            preserveSelection: true,
+            sessionKey: sendingSessionKey,
+          }),
         );
       } else if (resolvedSessionId) {
         // A brand-new remote session can enter waiting_approval before the backend
@@ -1324,8 +1368,12 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
           upsertConversation(
             current,
             agentName,
-            current.messages.length > 0 ? current.messages : [optimisticMessage],
+            [...sendingMessages, optimisticMessage],
             resolvedSessionId,
+            {
+              preserveSelection: true,
+              sessionKey: sendingSessionKey,
+            },
           ),
         );
       }
@@ -1345,6 +1393,40 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
         await syncSessionState(resolvedSessionId ?? currentSessionId, { skipSession: true });
       }
     } catch (error) {
+      setChatState((current) => {
+        const existingSession = getSessionByKey(current.sessions, sendingSessionKey);
+
+        if (!existingSession) {
+          return current;
+        }
+
+        if (sendingMessages.length === 0) {
+          const sessions = current.sessions.filter((session) => session.key !== sendingSessionKey);
+          if (current.selectedSessionKey !== sendingSessionKey) {
+            const selectedSession = getSessionByKey(sessions, current.selectedSessionKey);
+
+            return {
+              messages: selectedSession?.messages ?? current.messages,
+              selectedSessionKey: current.selectedSessionKey,
+              sessionId: selectedSession?.remoteSessionId ?? current.sessionId,
+              sessions,
+            };
+          }
+
+          return {
+            messages: [],
+            selectedSessionKey: null,
+            sessionId: null,
+            sessions,
+          };
+        }
+
+        return upsertConversation(current, agentName, sendingMessages, currentSessionId, {
+          preserveSelection: true,
+          sessionKey: sendingSessionKey,
+        });
+      });
+      setDraft(message);
       setError(getErrorMessage(error));
     } finally {
       setIsSending(false);
@@ -1370,4 +1452,3 @@ export function useWebChat(agentName: string | null, workspacePath: string | nul
     setDraft,
   };
 }
-

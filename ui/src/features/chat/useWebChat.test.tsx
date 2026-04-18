@@ -45,12 +45,16 @@ function HookProbe({ agentName = "binbin" }: HookProbeProps) {
 function ApprovalProbe() {
   const {
     approvalNoticeApprovals,
+    error,
     draft,
     messages,
     pendingApprovals,
     resolveApproval,
+    selectSession,
+    selectedSessionKey,
     sessionId,
     sendMessage,
+    sessions,
     setDraft,
   } = useWebChat("binbin", TEST_WORKSPACE_PATH);
 
@@ -60,12 +64,25 @@ function ApprovalProbe() {
       <button onClick={sendMessage} type="button">
         send
       </button>
+      <div data-testid="error-message">{error ?? ""}</div>
       <div data-testid="approval-count">{approvalNoticeApprovals.length}</div>
       <div data-testid="approval-tool">{approvalNoticeApprovals[0]?.tool_name ?? ""}</div>
       <div data-testid="session-approval-count">{pendingApprovals.length}</div>
       <div data-testid="message-count">{messages.length}</div>
       <div data-testid="message-preview">{messages[messages.length - 1]?.content ?? ""}</div>
+      <div data-testid="selected-session-key">{selectedSessionKey ?? ""}</div>
       <div data-testid="session-id">{sessionId ?? ""}</div>
+      <button
+        onClick={() => {
+          const fallback = sessions.find((session) => session.key !== selectedSessionKey);
+          if (fallback) {
+            selectSession(fallback.key);
+          }
+        }}
+        type="button"
+      >
+        select-other
+      </button>
       <button
         disabled={approvalNoticeApprovals.length === 0}
         onClick={() => void resolveApproval(approvalNoticeApprovals[0]?.id ?? "", true)}
@@ -673,6 +690,190 @@ describe("useWebChat persistence", () => {
       expect(screen.getByTestId("message-preview")).toHaveTextContent("folder created");
     }, { timeout: 4000 });
   }, 10000);
+
+  it("restores the draft and removes the optimistic message when send fails", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestURL(input);
+
+      if (url === "/approvals?status=pending") {
+        return jsonResponse([]);
+      }
+
+      if (url.startsWith("/sessions?workspace=")) {
+        return jsonResponse([]);
+      }
+
+      if (url.startsWith("/chat?workspace=")) {
+        return Promise.resolve({
+          ok: false,
+          status: 502,
+          statusText: "Bad Gateway",
+          text: async () => "gateway down",
+        } as Response);
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ApprovalProbe />);
+
+    fireEvent.change(screen.getByLabelText("draft"), {
+      target: { value: "please retry later" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("draft")).toHaveValue("please retry later");
+      expect(screen.getByTestId("message-count")).toHaveTextContent("0");
+      expect(screen.getByTestId("session-id")).toHaveTextContent("");
+      expect(screen.getByTestId("selected-session-key")).toHaveTextContent("");
+      expect(screen.getByTestId("error-message")).toHaveTextContent("gateway down");
+    });
+  });
+
+  it("keeps the response on the originating session when the user switches sessions mid-send", async () => {
+    window.localStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify({
+        selectedSessionKey: "session-1",
+        sessions: [
+          {
+            agentName: "binbin",
+            createdAt: "2026-04-11T12:00:00.000Z",
+            key: "session-1",
+            messages: [
+              {
+                content: "first session",
+                role: "user",
+                timestamp: "2026-04-11T12:00:00.000Z",
+              },
+            ],
+            remoteSessionId: "sess_1",
+            title: "first session",
+            updatedAt: "2026-04-11T12:00:00.000Z",
+          },
+          {
+            agentName: "binbin",
+            createdAt: "2026-04-11T13:00:00.000Z",
+            key: "session-2",
+            messages: [
+              {
+                content: "second session",
+                role: "user",
+                timestamp: "2026-04-11T13:00:00.000Z",
+              },
+            ],
+            remoteSessionId: "sess_2",
+            title: "second session",
+            updatedAt: "2026-04-11T13:00:00.000Z",
+          },
+        ],
+        version: 2,
+      }),
+    );
+
+    let resolveChatRequest: ((value: Response) => void) | null = null;
+
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = requestURL(input);
+
+      if (url === "/approvals?status=pending") {
+        return jsonResponse([]);
+      }
+
+      if (url.startsWith("/sessions?workspace=")) {
+        return jsonResponse([]);
+      }
+
+      if (url.startsWith("/chat?workspace=")) {
+        return new Promise<Response>((resolve) => {
+          resolveChatRequest = resolve;
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ApprovalProbe />);
+
+    fireEvent.change(screen.getByLabelText("draft"), {
+      target: { value: "continue first session" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "send" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("selected-session-key")).toHaveTextContent("session-1");
+      expect(screen.getByTestId("message-count")).toHaveTextContent("2");
+      expect(screen.getByTestId("message-preview")).toHaveTextContent("continue first session");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "select-other" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("selected-session-key")).toHaveTextContent("session-2");
+      expect(screen.getByTestId("session-id")).toHaveTextContent("sess_2");
+      expect(screen.getByTestId("message-count")).toHaveTextContent("1");
+      expect(screen.getByTestId("message-preview")).toHaveTextContent("second session");
+    });
+
+    resolveChatRequest?.(
+      {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () =>
+          JSON.stringify({
+            session: {
+              agent: "binbin",
+              created_at: "2026-04-11T12:00:00.000Z",
+              id: "sess_1",
+              messages: [
+                {
+                  content: "first session",
+                  created_at: "2026-04-11T12:00:00.000Z",
+                  role: "user",
+                },
+                {
+                  content: "continue first session",
+                  created_at: "2026-04-11T12:01:00.000Z",
+                  role: "user",
+                },
+                {
+                  content: "first session reply",
+                  created_at: "2026-04-11T12:01:10.000Z",
+                  role: "assistant",
+                },
+              ],
+              title: "first session",
+              updated_at: "2026-04-11T12:01:10.000Z",
+            },
+            status: "completed",
+          }),
+      } as Response,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("selected-session-key")).toHaveTextContent("session-2");
+      expect(screen.getByTestId("session-id")).toHaveTextContent("sess_2");
+      expect(screen.getByTestId("message-count")).toHaveTextContent("1");
+      expect(screen.getByTestId("message-preview")).toHaveTextContent("second session");
+    });
+
+    await waitFor(() => {
+      const persisted = JSON.parse(window.localStorage.getItem(CHAT_STORAGE_KEY) || "null");
+      const firstSession = persisted.sessions.find((session: { key: string }) => session.key === "session-1");
+
+      expect(firstSession.messages).toHaveLength(3);
+      expect(firstSession.messages[2].content).toBe("first session reply");
+      expect(persisted.selectedSessionKey).toBe("session-2");
+    });
+  });
 
   it("keeps the resumed assistant message when the remote session list is briefly stale", async () => {
     const approval = {
