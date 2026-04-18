@@ -86,7 +86,7 @@ function humanizeKey(key) {
 
 function channelConfigured(entry, keys) {
   if (!entry || typeof entry !== "object") return false;
-  return keys.some((key) => {
+  return keys.every((key) => {
     const value = entry[key];
     return typeof value === "string" && value.trim() !== "";
   });
@@ -144,8 +144,8 @@ function buildMainAgent(agentConfig) {
     role: "main",
     permissionLevel: safeString(agentConfig?.permission_level) || "limited",
     workingDir: safeString(agentConfig?.working_dir),
-    providerRef: "",
-    defaultModel: "",
+    providerRef: safeString(agentConfig?.provider_ref),
+    defaultModel: safeString(agentConfig?.default_model),
     enabled: true,
     active: true,
     skills: safeArray(agentConfig?.skills)

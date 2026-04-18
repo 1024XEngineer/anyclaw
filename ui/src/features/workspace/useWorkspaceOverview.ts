@@ -177,6 +177,14 @@ type LivePayload = {
   status: LiveStatus | null;
 };
 
+export function resolveSkillEnabled(liveSkill?: LiveSkill) {
+  return liveSkill?.enabled ?? liveSkill?.loaded ?? true;
+}
+
+export function resolveSkillLoaded(liveSkill?: LiveSkill) {
+  return liveSkill?.loaded ?? true;
+}
+
 const channelMeta: Record<string, { name: string; note: string; summary: string }> = {
   wechat: {
     name: "微信",
@@ -401,9 +409,9 @@ function buildSkillRecords(live: LivePayload): SkillRecord[] {
           liveSkill?.description?.trim() || skill.description,
           `${skill.name} 已经存在于本地技能目录中。`,
         ),
-        enabled: liveSkill?.enabled ?? (liveSkill?.loaded ?? liveSkill !== undefined),
+        enabled: resolveSkillEnabled(liveSkill),
         installCommand: liveSkill?.installHint?.trim() || skill.installCommand,
-        loaded: liveSkill?.loaded ?? liveSkill !== undefined,
+        loaded: resolveSkillLoaded(liveSkill),
         name: skill.name,
         registry: liveSkill?.registry?.trim() || skill.registry,
         source: liveSkill?.source?.trim() || skill.source,
