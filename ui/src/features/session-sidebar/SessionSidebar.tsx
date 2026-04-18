@@ -13,6 +13,7 @@ import {
   readPersistedChatState,
 } from "@/features/chat/useWebChat";
 import { ChannelsSidebar } from "@/features/channels/ChannelsSidebar";
+import { DiscoverySidebar } from "@/features/discovery/DiscoverySidebar";
 import { MarketSidebar } from "@/features/market/MarketSidebar";
 import { useShellStore } from "@/features/shell/useShellStore";
 import { useWorkspaceOverview } from "@/features/workspace/useWorkspaceOverview";
@@ -321,6 +322,10 @@ export function SessionSidebar() {
 
   if (pathname.startsWith("/channels")) {
     return <ChannelsSidebar />;
+  }
+
+  if (pathname.startsWith("/discovery")) {
+    return <DiscoverySidebar />;
   }
 
   return <ChatSessionSidebar />;

@@ -13,12 +13,10 @@ import (
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
 )
 
-func TestRegisterUIRoutesServesControlAndStaticPages(t *testing.T) {
+func TestRegisterUIRoutesServesControlAndRedirectsLegacyPages(t *testing.T) {
 	root := t.TempDir()
 	mustWriteFile(t, filepath.Join(root, "index.html"), "<html><body>control-ui</body></html>")
 	mustWriteFile(t, filepath.Join(root, "assets", "app.js"), "console.log('control-ui');")
-	mustWriteFile(t, filepath.Join(root, "market", "index.html"), "<html><body>market-ui</body></html>")
-	mustWriteFile(t, filepath.Join(root, "discovery", "index.html"), "<html><body>discovery-ui</body></html>")
 
 	cfg := config.DefaultConfig()
 	cfg.Gateway.ControlUI.BasePath = "/dashboard"
@@ -36,14 +34,16 @@ func TestRegisterUIRoutesServesControlAndStaticPages(t *testing.T) {
 	mux.HandleFunc("/", server.handleRootAPI)
 
 	cases := []struct {
-		path string
-		want string
+		path         string
+		wantStatus   int
+		wantBody     string
+		wantLocation string
 	}{
-		{path: "/dashboard", want: "control-ui"},
-		{path: "/control", want: "control-ui"},
-		{path: "/dashboard/assets/app.js", want: "console.log('control-ui');"},
-		{path: "/market", want: "market-ui"},
-		{path: "/discovery", want: "discovery-ui"},
+		{path: "/dashboard", wantStatus: http.StatusOK, wantBody: "control-ui"},
+		{path: "/control", wantStatus: http.StatusOK, wantBody: "control-ui"},
+		{path: "/dashboard/assets/app.js", wantStatus: http.StatusOK, wantBody: "console.log('control-ui');"},
+		{path: "/market", wantStatus: http.StatusTemporaryRedirect, wantLocation: "/dashboard#/market"},
+		{path: "/discovery", wantStatus: http.StatusTemporaryRedirect, wantLocation: "/dashboard#/discovery"},
 	}
 
 	for _, tc := range cases {
@@ -51,11 +51,14 @@ func TestRegisterUIRoutesServesControlAndStaticPages(t *testing.T) {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
 
-		if w.Code != http.StatusOK {
-			t.Fatalf("%s: expected 200, got %d", tc.path, w.Code)
+		if w.Code != tc.wantStatus {
+			t.Fatalf("%s: expected %d, got %d", tc.path, tc.wantStatus, w.Code)
 		}
-		if !strings.Contains(w.Body.String(), tc.want) {
-			t.Fatalf("%s: expected body to contain %q, got %q", tc.path, tc.want, w.Body.String())
+		if tc.wantBody != "" && !strings.Contains(w.Body.String(), tc.wantBody) {
+			t.Fatalf("%s: expected body to contain %q, got %q", tc.path, tc.wantBody, w.Body.String())
+		}
+		if tc.wantLocation != "" && w.Header().Get("Location") != tc.wantLocation {
+			t.Fatalf("%s: expected redirect to %q, got %q", tc.path, tc.wantLocation, w.Header().Get("Location"))
 		}
 	}
 }

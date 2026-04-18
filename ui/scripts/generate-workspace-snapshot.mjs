@@ -21,8 +21,8 @@ function loadWorkspaceConfig() {
   const candidates = explicitConfig
     ? [path.resolve(repoRoot, explicitConfig)]
     : [
-        path.join(repoRoot, "anyclaw.json"),
         path.join(repoRoot, "anyclaw.example.json"),
+        path.join(repoRoot, "anyclaw.json"),
       ];
 
   for (const candidate of candidates) {

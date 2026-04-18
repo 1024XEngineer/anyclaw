@@ -30,7 +30,7 @@ export function LeftRail() {
           aria-label="Primary navigation"
           className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-1 lg:w-full lg:flex-none lg:flex-col lg:gap-3 lg:overflow-visible lg:pb-0"
         >
-          {primaryItems.map(({ icon: Icon, label, to }) => (
+          {[...primaryItems, { icon: Waypoints, label: "发现", to: "/discovery" }].map(({ icon: Icon, label, to }) => (
             <NavLink
               key={label}
               className={({ isActive }) =>

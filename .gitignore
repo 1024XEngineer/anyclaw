@@ -45,6 +45,8 @@ anyclaw.json.bak-*
 # Local runtime state
 .anyclaw/
 workflows/memory/
+workflows/*/memory/
+pkg/runtime/workflows/*/memory/
 workflows/.anyclaw-bootstrap-state.json
 workflows/BOOTSTRAP.md
 gateway.log
@@ -64,3 +66,5 @@ ui/vitest.config.js
 ui/vitest.config.d.ts
 ui/tailwind.config.js
 ui/tailwind.config.d.ts
+ui/.vite/
+ui/.vite-temp/

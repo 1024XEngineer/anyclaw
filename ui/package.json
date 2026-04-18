@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node ./scripts/generate-workspace-snapshot.mjs && vite",
-    "build": "node ./scripts/generate-workspace-snapshot.mjs && tsc -b && vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "build": "node ./scripts/generate-workspace-snapshot.mjs && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build",
     "preview": "vite preview",
     "test": "node ./scripts/generate-workspace-snapshot.mjs && vitest run"
   },

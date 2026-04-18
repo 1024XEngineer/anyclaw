@@ -13,6 +13,14 @@ type Options struct {
 	Root     string
 }
 
+func normalizeBasePath(basePath string) string {
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" {
+		return "/dashboard"
+	}
+	return basePath
+}
+
 func RegisterRoutes(mux *http.ServeMux, opts Options) {
 	if mux == nil {
 		return
@@ -20,10 +28,7 @@ func RegisterRoutes(mux *http.ServeMux, opts Options) {
 
 	handler := routeHandler{opts: opts}
 
-	basePath := strings.TrimSpace(opts.BasePath)
-	if basePath == "" {
-		basePath = "/dashboard"
-	}
+	basePath := normalizeBasePath(opts.BasePath)
 
 	controlPaths := []string{basePath, "/dashboard", "/control"}
 	seen := map[string]bool{}
@@ -45,6 +50,10 @@ func RegisterRoutes(mux *http.ServeMux, opts Options) {
 
 type routeHandler struct {
 	opts Options
+}
+
+func (h routeHandler) controlUIBasePath() string {
+	return normalizeBasePath(h.opts.BasePath)
 }
 
 func (h routeHandler) controlUIRoot() string {
@@ -121,33 +130,19 @@ func (h routeHandler) tryServeControlUIAsset(w http.ResponseWriter, r *http.Requ
 }
 
 func (h routeHandler) handleMarketUI(w http.ResponseWriter, r *http.Request) {
-	data, err := os.ReadFile("ui/market/index.html")
-	if err != nil {
-		root := h.controlUIRoot()
-		if root != "" {
-			data, err = os.ReadFile(filepath.Join(root, "market", "index.html"))
-		}
-	}
-	if err != nil {
-		http.Error(w, "market UI not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(data)
+	h.redirectLegacyUI(w, r, "market")
 }
 
 func (h routeHandler) handleDiscoveryUI(w http.ResponseWriter, r *http.Request) {
-	data, err := os.ReadFile("ui/discovery/index.html")
-	if err != nil {
-		root := h.controlUIRoot()
-		if root != "" {
-			data, err = os.ReadFile(filepath.Join(root, "discovery", "index.html"))
-		}
-	}
-	if err != nil {
-		http.Error(w, "discovery UI not found", http.StatusNotFound)
+	h.redirectLegacyUI(w, r, "discovery")
+}
+
+func (h routeHandler) redirectLegacyUI(w http.ResponseWriter, r *http.Request, section string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(data)
+
+	target := h.controlUIBasePath() + "#/" + strings.TrimPrefix(section, "/")
+	http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 }
