@@ -478,19 +478,6 @@ func TestFileLoaderClear(t *testing.T) {
 	}
 }
 
-func TestSimpleChecksum(t *testing.T) {
-	cs1 := simpleChecksum("hello")
-	cs2 := simpleChecksum("hello")
-	cs3 := simpleChecksum("world")
-
-	if cs1 != cs2 {
-		t.Error("expected same checksum for same string")
-	}
-	if cs1 == cs3 {
-		t.Error("expected different checksums for different strings")
-	}
-}
-
 func TestWatcherCustomFile(t *testing.T) {
 	dir := setupTestDir(t)
 	writeFile(t, dir, "custom", "custom content")

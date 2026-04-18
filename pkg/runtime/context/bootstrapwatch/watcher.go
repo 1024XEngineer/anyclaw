@@ -27,12 +27,11 @@ const (
 )
 
 type FileEntry struct {
-	Type     FileType
-	Path     string
-	Content  string
-	LastMod  time.Time
-	Size     int64
-	Checksum uint32
+	Type    FileType
+	Path    string
+	Content string
+	LastMod time.Time
+	Size    int64
 }
 
 type ChangeAction string
@@ -230,20 +229,22 @@ func (w *Watcher) checkChanges() {
 			continue
 		}
 
+		// Some filesystems can coalesce rapid writes into the same modtime.
+		// Once a file has been stable for a short grace window, stat metadata is
+		// enough to skip the more expensive full read.
+		if info.ModTime() == entry.LastMod && info.Size() == entry.Size && time.Since(entry.LastMod) > w.metadataGraceWindow() {
+			continue
+		}
+
 		content, err := os.ReadFile(entry.Path)
 		if err != nil {
 			continue
 		}
 
 		newContent := string(content)
-		newChecksum := simpleChecksum(newContent)
 		if newContent == entry.Content {
 			entry.LastMod = info.ModTime()
 			entry.Size = info.Size()
-			entry.Checksum = newChecksum
-			continue
-		}
-		if info.ModTime() == entry.LastMod && info.Size() == entry.Size && newChecksum == entry.Checksum {
 			continue
 		}
 
@@ -251,7 +252,6 @@ func (w *Watcher) checkChanges() {
 		entry.Content = newContent
 		entry.LastMod = info.ModTime()
 		entry.Size = info.Size()
-		entry.Checksum = newChecksum
 
 		w.notify(ChangeEvent{
 			Type:    ft,
@@ -286,12 +286,11 @@ func (w *Watcher) checkChanges() {
 		}
 
 		entry := &FileEntry{
-			Type:     ft,
-			Path:     path,
-			Content:  string(content),
-			LastMod:  info.ModTime(),
-			Size:     info.Size(),
-			Checksum: simpleChecksum(string(content)),
+			Type:    ft,
+			Path:    path,
+			Content: string(content),
+			LastMod: info.ModTime(),
+			Size:    info.Size(),
 		}
 		w.files[ft] = entry
 
@@ -329,12 +328,11 @@ func (w *Watcher) loadFileLocked(ft FileType) error {
 	}
 
 	w.files[ft] = &FileEntry{
-		Type:     ft,
-		Path:     path,
-		Content:  string(content),
-		LastMod:  info.ModTime(),
-		Size:     info.Size(),
-		Checksum: simpleChecksum(string(content)),
+		Type:    ft,
+		Path:    path,
+		Content: string(content),
+		LastMod: info.ModTime(),
+		Size:    info.Size(),
 	}
 
 	return nil
@@ -346,12 +344,11 @@ func (w *Watcher) notify(event ChangeEvent) {
 	}
 }
 
-func simpleChecksum(s string) uint32 {
-	var sum uint32
-	for i := 0; i < len(s); i++ {
-		sum = sum*31 + uint32(s[i])
+func (w *Watcher) metadataGraceWindow() time.Duration {
+	if w.interval > time.Second {
+		return w.interval
 	}
-	return sum
+	return time.Second
 }
 
 type FileLoader struct {
@@ -386,12 +383,11 @@ func (l *FileLoader) Load(ft FileType) (*FileEntry, error) {
 
 	info, _ := os.Stat(path)
 	entry := &FileEntry{
-		Type:     ft,
-		Path:     path,
-		Content:  string(content),
-		LastMod:  info.ModTime(),
-		Size:     info.Size(),
-		Checksum: simpleChecksum(string(content)),
+		Type:    ft,
+		Path:    path,
+		Content: string(content),
+		LastMod: info.ModTime(),
+		Size:    info.Size(),
 	}
 	l.entries[ft] = entry
 
