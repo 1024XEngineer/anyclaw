@@ -3,6 +3,8 @@ package gateway
 import (
 	"testing"
 	"time"
+
+	"github.com/anyclaw/anyclaw/pkg/state"
 )
 
 func TestTypingSessionActiveIgnoresStaleSessions(t *testing.T) {
@@ -12,7 +14,7 @@ func TestTypingSessionActiveIgnoresStaleSessions(t *testing.T) {
 		t.Fatal("nil session should not be active")
 	}
 
-	stale := &Session{
+	stale := &state.Session{
 		Typing:       true,
 		LastActiveAt: now.Add(-typingSessionStaleAfter - time.Second),
 		UpdatedAt:    now.Add(-typingSessionStaleAfter - time.Second),
@@ -21,7 +23,7 @@ func TestTypingSessionActiveIgnoresStaleSessions(t *testing.T) {
 		t.Fatal("stale typing session should not be treated as active")
 	}
 
-	fresh := &Session{
+	fresh := &state.Session{
 		Typing:       true,
 		LastActiveAt: now.Add(-5 * time.Second),
 		UpdatedAt:    now.Add(-5 * time.Second),
@@ -30,7 +32,7 @@ func TestTypingSessionActiveIgnoresStaleSessions(t *testing.T) {
 		t.Fatal("fresh typing session should be treated as active")
 	}
 
-	fallback := &Session{
+	fallback := &state.Session{
 		Typing:    true,
 		UpdatedAt: now.Add(-3 * time.Second),
 	}

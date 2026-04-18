@@ -7,20 +7,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/apps"
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/plugin"
 )
 
-func TestStoreInstallProvisionsSkillPluginAndBindings(t *testing.T) {
+func TestStoreInstallProvisionsSkillOnly(t *testing.T) {
 	baseDir := t.TempDir()
 	workDir := filepath.Join(baseDir, ".anyclaw")
 	storeDir := filepath.Join(workDir, "store")
 	sourcesDir := filepath.Join(workDir, "sources")
 	skillSourceDir := filepath.Join(sourcesDir, "skill-bundle")
-	appSourceDir := filepath.Join(sourcesDir, "app-bundle")
 
-	for _, dir := range []string{storeDir, skillSourceDir, appSourceDir} {
+	for _, dir := range []string{storeDir, skillSourceDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%q): %v", dir, err)
 		}
@@ -37,38 +34,9 @@ func TestStoreInstallProvisionsSkillPluginAndBindings(t *testing.T) {
 		t.Fatalf("write skill.json: %v", err)
 	}
 
-	appManifest := plugin.Manifest{
-		Name:        "demo-app",
-		Version:     "1.0.0",
-		Description: "Demo app plugin",
-		Kinds:       []string{"app"},
-		Enabled:     true,
-		Entrypoint:  "app.py",
-		Permissions: []string{"tool:exec"},
-		App: &plugin.AppSpec{
-			Name:        "Demo App",
-			Description: "Demo app plugin",
-			Actions: []plugin.AppActionSpec{
-				{Name: "ping", Description: "Ping the app", Kind: "execute"},
-			},
-			Workflows: []plugin.AppWorkflowSpec{
-				{Name: "quick-ping", Description: "Quick ping", Action: "ping"},
-			},
-		},
-	}
-	if err := writeJSONFile(filepath.Join(appSourceDir, "plugin.json"), appManifest); err != nil {
-		t.Fatalf("write plugin.json: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(appSourceDir, "app.py"), []byte("print('ok')\n"), 0o644); err != nil {
-		t.Fatalf("write app.py: %v", err)
-	}
-
 	cfg := config.DefaultConfig()
 	cfg.Skills.Dir = filepath.Join(baseDir, "skills")
 	cfg.Plugins.Dir = filepath.Join(baseDir, "plugins")
-	cfg.Plugins.AllowExec = true
-	cfg.Plugins.RequireTrust = true
-	cfg.Plugins.TrustedSigners = []string{"dev-local"}
 	cfg.Plugins.Enabled = []string{"existing-plugin"}
 	cfg.Agent.Profiles = []config.AgentProfile{
 		{
@@ -96,27 +64,6 @@ func TestStoreInstallProvisionsSkillPluginAndBindings(t *testing.T) {
 				Name: "demo-skill",
 				Source: &InstallSource{
 					LocalPath: "../sources/skill-bundle",
-				},
-			},
-			App: &AppInstallSpec{
-				Plugin: "demo-app-bundle",
-				Source: &InstallSource{
-					LocalPath: "../sources/app-bundle",
-				},
-				Signer: "dev-local",
-			},
-			Bindings: []*BindingInstallSpec{
-				{
-					Name:   "primary",
-					Config: map[string]string{"token": "abc"},
-				},
-			},
-			Pairings: []*PairingInstallSpec{
-				{
-					Name:     "quick-ping",
-					Workflow: "quick-ping",
-					Binding:  "primary",
-					Triggers: []string{"ping demo"},
 				},
 			},
 		},
@@ -148,45 +95,6 @@ func TestStoreInstallProvisionsSkillPluginAndBindings(t *testing.T) {
 	if !profileHasSkill(loadedCfg.Agent.Profiles, "Go Expert", "demo-skill") {
 		t.Fatalf("expected Go Expert profile to include demo-skill: %#v", loadedCfg.Agent.Profiles)
 	}
-	if !containsFold(loadedCfg.Plugins.Enabled, "demo-app") {
-		t.Fatalf("expected plugin enabled list to include demo-app: %#v", loadedCfg.Plugins.Enabled)
-	}
-
-	pluginDir := filepath.Join(cfg.Plugins.Dir, "demo-app")
-	pluginManifestPath := filepath.Join(pluginDir, "plugin.json")
-	manifestData, err := os.ReadFile(pluginManifestPath)
-	if err != nil {
-		t.Fatalf("read plugin manifest: %v", err)
-	}
-	var rawManifest map[string]any
-	if err := json.Unmarshal(manifestData, &rawManifest); err != nil {
-		t.Fatalf("unmarshal plugin manifest: %v", err)
-	}
-	if strings.TrimSpace(asString(rawManifest["signer"])) != "dev-local" {
-		t.Fatalf("expected plugin signer dev-local, got %#v", rawManifest["signer"])
-	}
-	if strings.TrimSpace(asString(rawManifest["signature"])) == "" {
-		t.Fatal("expected plugin signature to be written")
-	}
-
-	registry, err := plugin.NewRegistry(loadedCfg.Plugins)
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	if runners := registry.AppRunners(loadedCfg.Plugins.Dir); len(runners) != 1 {
-		t.Fatalf("expected 1 app runner, got %d manifests=%#v", len(runners), registry.List())
-	}
-
-	appStore, err := apps.NewStore(configPath)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	if bindings := appStore.ListByApp("demo-app"); len(bindings) != 1 {
-		t.Fatalf("expected 1 app binding, got %d", len(bindings))
-	}
-	if pairings := appStore.ListPairingsByApp("demo-app"); len(pairings) != 1 {
-		t.Fatalf("expected 1 app pairing, got %d", len(pairings))
-	}
 
 	if err := sm.Uninstall("demo-package"); err != nil {
 		t.Fatalf("Uninstall: %v", err)
@@ -197,9 +105,6 @@ func TestStoreInstallProvisionsSkillPluginAndBindings(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cfg.Skills.Dir, "demo-skill")); !os.IsNotExist(err) {
 		t.Fatalf("expected skill directory to be removed, got err=%v", err)
 	}
-	if _, err := os.Stat(pluginDir); !os.IsNotExist(err) {
-		t.Fatalf("expected plugin directory to be removed, got err=%v", err)
-	}
 
 	loadedCfg, err = config.Load(configPath)
 	if err != nil {
@@ -207,20 +112,6 @@ func TestStoreInstallProvisionsSkillPluginAndBindings(t *testing.T) {
 	}
 	if profileHasSkill(loadedCfg.Agent.Profiles, "Go Expert", "demo-skill") {
 		t.Fatalf("expected demo-skill to be removed from profile: %#v", loadedCfg.Agent.Profiles)
-	}
-	if containsFold(loadedCfg.Plugins.Enabled, "demo-app") {
-		t.Fatalf("expected demo-app to be removed from enabled plugins: %#v", loadedCfg.Plugins.Enabled)
-	}
-
-	appStore, err = apps.NewStore(configPath)
-	if err != nil {
-		t.Fatalf("NewStore after uninstall: %v", err)
-	}
-	if bindings := appStore.ListByApp("demo-app"); len(bindings) != 0 {
-		t.Fatalf("expected bindings to be removed, got %d", len(bindings))
-	}
-	if pairings := appStore.ListPairingsByApp("demo-app"); len(pairings) != 0 {
-		t.Fatalf("expected pairings to be removed, got %d", len(pairings))
 	}
 }
 

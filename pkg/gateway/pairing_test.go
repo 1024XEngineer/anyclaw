@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/channel"
+	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
 )
 
 func TestChannelPairing_Basic(t *testing.T) {
-	cp := channel.NewChannelPairing()
+	cp := inputlayer.NewChannelPairing()
 
 	if cp.IsEnabled() {
 		t.Error("pairing should be disabled by default")
@@ -36,7 +36,7 @@ func TestChannelPairing_Basic(t *testing.T) {
 }
 
 func TestChannelPairing_Expiration(t *testing.T) {
-	cp := channel.NewChannelPairing()
+	cp := inputlayer.NewChannelPairing()
 	cp.SetEnabled(true)
 
 	cp.Pair("user-1", "device-1", "telegram", "TestUser", 0)
@@ -51,7 +51,7 @@ func TestChannelPairing_Expiration(t *testing.T) {
 }
 
 func TestChannelPairing_ListPaired(t *testing.T) {
-	cp := channel.NewChannelPairing()
+	cp := inputlayer.NewChannelPairing()
 	cp.SetEnabled(true)
 
 	cp.Pair("user-1", "device-1", "telegram", "User1", -1)
@@ -78,7 +78,7 @@ func TestChannelPairing_ListPaired(t *testing.T) {
 }
 
 func TestChannelPairing_Wrap(t *testing.T) {
-	cp := channel.NewChannelPairing()
+	cp := inputlayer.NewChannelPairing()
 	cp.SetEnabled(true)
 	cp.Pair("user-1", "device-1", "telegram", "TestUser", 72*time.Hour)
 
@@ -104,7 +104,7 @@ func TestChannelPairing_Wrap(t *testing.T) {
 }
 
 func TestChannelPairing_Wrap_NotPaired(t *testing.T) {
-	cp := channel.NewChannelPairing()
+	cp := inputlayer.NewChannelPairing()
 	cp.SetEnabled(true)
 
 	handler := func(ctx context.Context, sessionID, message string, meta map[string]string) (string, string, error) {
@@ -127,7 +127,7 @@ func TestChannelPairing_Wrap_NotPaired(t *testing.T) {
 }
 
 func TestChannelPairing_Wrap_Disabled(t *testing.T) {
-	cp := channel.NewChannelPairing()
+	cp := inputlayer.NewChannelPairing()
 
 	handler := func(ctx context.Context, sessionID, message string, meta map[string]string) (string, string, error) {
 		return sessionID, "response", nil

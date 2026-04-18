@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	appstore "github.com/anyclaw/anyclaw/pkg/apps"
-	"github.com/anyclaw/anyclaw/pkg/tools"
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
+	desktopexec "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
 )
 
 func TestExecuteProtocolOutputRunsDesktopSteps(t *testing.T) {
@@ -24,10 +24,10 @@ func TestExecuteProtocolOutputRunsDesktopSteps(t *testing.T) {
 		return "typed", nil
 	})
 
-	payload, err := json.Marshal(appstore.DesktopPlan{
-		Protocol: appstore.DesktopProtocolVersion,
+	payload, err := json.Marshal(desktopexec.DesktopPlan{
+		Protocol: desktopexec.DesktopProtocolVersion,
 		Summary:  "plan complete",
-		Steps: []appstore.DesktopPlanStep{
+		Steps: []desktopexec.DesktopPlanStep{
 			{Tool: "desktop_open", Label: "Launch", Input: map[string]any{"target": "demo.exe"}},
 			{Tool: "desktop_type", Label: "Type", Input: map[string]any{"text": "hello"}},
 		},
@@ -87,16 +87,16 @@ func TestExecuteProtocolOutputRetriesAndVerifiesSteps(t *testing.T) {
 		return "verified", nil
 	})
 
-	payload, err := json.Marshal(appstore.DesktopPlan{
-		Protocol: appstore.DesktopProtocolVersion,
+	payload, err := json.Marshal(desktopexec.DesktopPlan{
+		Protocol: desktopexec.DesktopProtocolVersion,
 		Summary:  "retry plan complete",
-		Steps: []appstore.DesktopPlanStep{
+		Steps: []desktopexec.DesktopPlanStep{
 			{
 				Tool:  "desktop_open",
 				Label: "Launch",
 				Input: map[string]any{"target": "demo.exe"},
 				Retry: 1,
-				Verify: &appstore.DesktopPlanCheck{
+				Verify: &desktopexec.DesktopPlanCheck{
 					Tool:  "desktop_verify_text",
 					Input: map[string]any{"expected": "ready"},
 					Retry: 1,
@@ -141,16 +141,16 @@ func TestExecuteProtocolOutputCanContinueAfterFailure(t *testing.T) {
 		return "typed", nil
 	})
 
-	payload, err := json.Marshal(appstore.DesktopPlan{
-		Protocol: appstore.DesktopProtocolVersion,
+	payload, err := json.Marshal(desktopexec.DesktopPlan{
+		Protocol: desktopexec.DesktopProtocolVersion,
 		Summary:  "continued",
-		Steps: []appstore.DesktopPlanStep{
+		Steps: []desktopexec.DesktopPlanStep{
 			{
 				Tool:            "desktop_click",
 				Label:           "Try button",
 				Input:           map[string]any{"x": 1, "y": 1},
 				ContinueOnError: true,
-				OnFailure: []appstore.DesktopPlanStep{
+				OnFailure: []desktopexec.DesktopPlanStep{
 					{Tool: "desktop_focus_window", Label: "Refocus", Input: map[string]any{"title": "Demo"}},
 				},
 			},
@@ -192,10 +192,10 @@ func TestExecuteProtocolOutputResumesFromSavedState(t *testing.T) {
 		return "typed", nil
 	})
 
-	payload, err := json.Marshal(appstore.DesktopPlan{
-		Protocol: appstore.DesktopProtocolVersion,
+	payload, err := json.Marshal(desktopexec.DesktopPlan{
+		Protocol: desktopexec.DesktopProtocolVersion,
 		Summary:  "resume complete",
-		Steps: []appstore.DesktopPlanStep{
+		Steps: []desktopexec.DesktopPlanStep{
 			{Tool: "desktop_open", Label: "Launch", Input: map[string]any{"target": "demo.exe"}},
 			{Tool: "desktop_type", Label: "Type", Input: map[string]any{"text": "hello"}},
 		},
@@ -204,8 +204,8 @@ func TestExecuteProtocolOutputResumesFromSavedState(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	var states []appstore.DesktopPlanExecutionState
-	ctx := appstore.WithDesktopPlanResumeState(context.Background(), &appstore.DesktopPlanExecutionState{
+	var states []desktopexec.DesktopPlanExecutionState
+	ctx := desktopexec.WithDesktopPlanResumeState(context.Background(), &desktopexec.DesktopPlanExecutionState{
 		ToolName:          "app_demo_run",
 		Plugin:            "demo",
 		App:               "Demo App",
@@ -216,13 +216,13 @@ func TestExecuteProtocolOutputResumesFromSavedState(t *testing.T) {
 		NextStep:          2,
 		LastCompletedStep: 1,
 		LastOutput:        "Launch: opened",
-		Steps: []appstore.DesktopPlanStepExecutionState{
+		Steps: []desktopexec.DesktopPlanStepExecutionState{
 			{Index: 1, Tool: "desktop_open", Label: "Launch", Status: "completed", Attempts: 1, Output: "Launch: opened"},
 			{Index: 2, Tool: "desktop_type", Label: "Type", Status: "failed", Attempts: 1, Error: "typed failed"},
 		},
 	})
-	ctx = appstore.WithDesktopPlanStateHook(ctx, func(ctx context.Context, state appstore.DesktopPlanExecutionState) {
-		cloned := appstore.CloneDesktopPlanExecutionState(&state)
+	ctx = desktopexec.WithDesktopPlanStateHook(ctx, func(ctx context.Context, state desktopexec.DesktopPlanExecutionState) {
+		cloned := desktopexec.CloneDesktopPlanExecutionState(&state)
 		if cloned != nil {
 			states = append(states, *cloned)
 		}
@@ -274,10 +274,10 @@ func TestExecuteProtocolOutputSupportsStructuredTargetSteps(t *testing.T) {
 	})
 
 	value := "hello"
-	payload, err := json.Marshal(appstore.DesktopPlan{
-		Protocol: appstore.DesktopProtocolVersion,
+	payload, err := json.Marshal(desktopexec.DesktopPlan{
+		Protocol: desktopexec.DesktopProtocolVersion,
 		Summary:  "structured target complete",
-		Steps: []appstore.DesktopPlanStep{
+		Steps: []desktopexec.DesktopPlanStep{
 			{
 				Label:  "Open composer",
 				Target: map[string]any{"title": "QQ", "name": "消息输入框"},
@@ -326,14 +326,14 @@ func TestExecuteProtocolOutputSupportsStructuredTargetVerification(t *testing.T)
 		return `{"found":true,"strategy":"text"}`, nil
 	})
 
-	payload, err := json.Marshal(appstore.DesktopPlan{
-		Protocol: appstore.DesktopProtocolVersion,
+	payload, err := json.Marshal(desktopexec.DesktopPlan{
+		Protocol: desktopexec.DesktopProtocolVersion,
 		Summary:  "verify target complete",
-		Steps: []appstore.DesktopPlanStep{
+		Steps: []desktopexec.DesktopPlanStep{
 			{
 				Label:  "Click send",
 				Target: map[string]any{"title": "QQ", "text": "发送"},
-				Verify: &appstore.DesktopPlanCheck{
+				Verify: &desktopexec.DesktopPlanCheck{
 					Target:       map[string]any{"title": "QQ", "text": "已发送"},
 					Retry:        1,
 					RetryDelayMS: 1,
@@ -374,10 +374,10 @@ func TestExecuteProtocolOutputSupportsStructuredTargetWaitStep(t *testing.T) {
 		return `{"found":true,"strategy":"ui"}`, nil
 	})
 
-	payload, err := json.Marshal(appstore.DesktopPlan{
-		Protocol: appstore.DesktopProtocolVersion,
+	payload, err := json.Marshal(desktopexec.DesktopPlan{
+		Protocol: desktopexec.DesktopProtocolVersion,
 		Summary:  "wait target complete",
-		Steps: []appstore.DesktopPlanStep{
+		Steps: []desktopexec.DesktopPlanStep{
 			{
 				Label:        "Wait for send button",
 				Target:       map[string]any{"title": "QQ", "text": "发送"},

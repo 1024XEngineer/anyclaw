@@ -71,3 +71,65 @@ func TestEnsureBootstrapDoesNotOverwriteExistingFiles(t *testing.T) {
 		t.Fatal("did not expect BOOTSTRAP.md to be created when workspace already had bootstrap files")
 	}
 }
+
+func TestEnsureBootstrapAutoCompletesConfiguredWorkspaceAndPreservesExistingAnswers(t *testing.T) {
+	dir := t.TempDir()
+	opts := BootstrapOptions{
+		AgentName:        "assistant",
+		AgentDescription: "Execution helper",
+	}
+	if err := EnsureBootstrap(dir, opts); err != nil {
+		t.Fatalf("EnsureBootstrap(initial): %v", err)
+	}
+
+	if _, err := AdvanceBootstrapRitual(dir, "", BootstrapRitualOptions{
+		AgentName:        opts.AgentName,
+		AgentDescription: opts.AgentDescription,
+	}); err != nil {
+		t.Fatalf("AdvanceBootstrapRitual(start): %v", err)
+	}
+	if _, err := AdvanceBootstrapRitual(dir, "Use Chinese by default.", BootstrapRitualOptions{
+		AgentName:        opts.AgentName,
+		AgentDescription: opts.AgentDescription,
+	}); err != nil {
+		t.Fatalf("AdvanceBootstrapRitual(answer): %v", err)
+	}
+
+	opts.UserProfile = "Default language: zh-CN"
+	opts.WorkspaceFocus = "Help with coding in this workspace."
+	opts.AssistantStyle = "Be concise and proactive."
+	if err := EnsureBootstrap(dir, opts); err != nil {
+		t.Fatalf("EnsureBootstrap(seed): %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "BOOTSTRAP.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected BOOTSTRAP.md to be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, bootstrapStateFilename)); !os.IsNotExist(err) {
+		t.Fatalf("expected bootstrap state to be removed, stat err=%v", err)
+	}
+
+	userData, err := os.ReadFile(filepath.Join(dir, "USER.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(USER.md): %v", err)
+	}
+	userText := string(userData)
+	if !strings.Contains(userText, "Use Chinese by default.") {
+		t.Fatalf("expected USER.md to preserve existing answer, got %q", userText)
+	}
+	if !strings.Contains(userText, "<!-- anyclaw:bootstrap:start -->") {
+		t.Fatalf("expected USER.md to contain managed bootstrap block, got %q", userText)
+	}
+
+	identityData, err := os.ReadFile(filepath.Join(dir, "IDENTITY.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(IDENTITY.md): %v", err)
+	}
+	identityText := string(identityData)
+	if !strings.Contains(identityText, "Help with coding in this workspace.") {
+		t.Fatalf("expected IDENTITY.md to include workspace focus, got %q", identityText)
+	}
+	if !strings.Contains(identityText, "Be concise and proactive.") {
+		t.Fatalf("expected IDENTITY.md to include assistant style, got %q", identityText)
+	}
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/config"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/anyclaw/anyclaw/pkg/state"
 )
 
 func newAgentManagementTestServer(t *testing.T) (*Server, string) {
@@ -37,21 +38,21 @@ func newAgentManagementTestServer(t *testing.T) (*Server, string) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	store, err := NewStore(tempDir)
+	store, err := state.NewStore(tempDir)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 
 	server := &Server{
-		app: &appRuntime.App{
+		mainRuntime: &appRuntime.App{
 			ConfigPath: configPath,
 			Config:     cfg,
 			WorkDir:    cfg.Agent.WorkDir,
 			WorkingDir: cfg.Agent.WorkingDir,
 		},
 		store:    store,
-		sessions: NewSessionManager(store, nil),
-		bus:      NewBus(),
+		sessions: state.NewSessionManager(store, nil),
+		bus:      state.NewEventBus(),
 	}
 	if err := server.ensureDefaultWorkspace(); err != nil {
 		t.Fatalf("ensureDefaultWorkspace: %v", err)
@@ -106,20 +107,115 @@ func TestHandleSessionsAcceptsAgentField(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/sessions?workspace="+workspaceID, strings.NewReader(`{"title":"Agent Session","agent":"Go Expert"}`))
 	rec := httptest.NewRecorder()
 
-	server.handleSessions(rec, req)
+	server.sessionAPI().HandleCollection(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "main agent") {
+		t.Fatalf("expected main-agent-only error, got %s", rec.Body.String())
+	}
+}
+
+func TestHandleSessionsAcceptsMainAliasField(t *testing.T) {
+	server, workspaceID := newAgentManagementTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/sessions?workspace="+workspaceID, strings.NewReader(`{"title":"Main Session","agent":"main"}`))
+	rec := httptest.NewRecorder()
+
+	server.sessionAPI().HandleCollection(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	var session Session
+	var session state.Session
 	if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if session.Agent != "Go Expert" {
-		t.Fatalf("expected session agent Go Expert, got %q", session.Agent)
+	if session.Agent != server.mainRuntime.Config.ResolveMainAgentName() {
+		t.Fatalf("expected session agent %q, got %q", server.mainRuntime.Config.ResolveMainAgentName(), session.Agent)
 	}
-	if session.Title != "Agent Session" {
-		t.Fatalf("expected session title Agent Session, got %q", session.Title)
+	if session.Title != "Main Session" {
+		t.Fatalf("expected session title Main Session, got %q", session.Title)
+	}
+}
+
+func TestHandleChatRejectsSpecialistField(t *testing.T) {
+	server, _ := newAgentManagementTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/chat", strings.NewReader(`{"message":"hello","agent":"Go Expert"}`))
+	rec := httptest.NewRecorder()
+
+	server.handleChat(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "main agent") {
+		t.Fatalf("expected main-agent-only error, got %s", rec.Body.String())
+	}
+}
+
+func TestHandleV2TaskCreateRejectsSpecialistSelection(t *testing.T) {
+	server, _ := newAgentManagementTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/v2/tasks", strings.NewReader(`{"input":"ship it","selected_agent":"Go Expert"}`))
+	rec := httptest.NewRecorder()
+
+	server.handleV2TaskCreate(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "main agent") {
+		t.Fatalf("expected main-agent-only error, got %s", rec.Body.String())
+	}
+}
+
+func TestV2VisibleAgentsMarksSpecialistsAsInternalOnly(t *testing.T) {
+	server, _ := newAgentManagementTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/agents", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleV2Agents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	records := map[string]map[string]any{}
+	for _, item := range payload {
+		name, _ := item["name"].(string)
+		records[name] = item
+	}
+
+	mainName := server.mainRuntime.Config.ResolveMainAgentName()
+	mainRecord, ok := records[mainName]
+	if !ok {
+		t.Fatalf("expected main agent %q in payload %#v", mainName, payload)
+	}
+	if publicEntry, _ := mainRecord["public_entry"].(bool); !publicEntry {
+		t.Fatalf("expected main agent to be public entry, got %#v", mainRecord)
+	}
+	if entry, _ := mainRecord["entry"].(string); entry != "main" {
+		t.Fatalf("expected main entry marker, got %#v", mainRecord)
+	}
+
+	specialistRecord, ok := records["Go Expert"]
+	if !ok {
+		t.Fatalf("expected specialist in payload %#v", payload)
+	}
+	if publicEntry, _ := specialistRecord["public_entry"].(bool); publicEntry {
+		t.Fatalf("expected specialist to be internal-only, got %#v", specialistRecord)
+	}
+	if entry, _ := specialistRecord["entry"].(string); entry != "specialist" {
+		t.Fatalf("expected specialist entry marker, got %#v", specialistRecord)
 	}
 }

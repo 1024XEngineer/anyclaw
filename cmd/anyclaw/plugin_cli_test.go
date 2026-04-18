@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/plugin"
+	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
 )
 
 func TestScaffoldPluginSupportsNodeKind(t *testing.T) {

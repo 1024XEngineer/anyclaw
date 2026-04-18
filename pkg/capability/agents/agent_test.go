@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anyclaw/anyclaw/pkg/capability/agents/prompt"
+	"github.com/anyclaw/anyclaw/pkg/capability/models"
+	"github.com/anyclaw/anyclaw/pkg/capability/skills"
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
 	"github.com/anyclaw/anyclaw/pkg/clawbridge"
-	"github.com/anyclaw/anyclaw/pkg/llm"
-	"github.com/anyclaw/anyclaw/pkg/memory"
-	"github.com/anyclaw/anyclaw/pkg/prompt"
-	"github.com/anyclaw/anyclaw/pkg/skills"
-	"github.com/anyclaw/anyclaw/pkg/tools"
+	"github.com/anyclaw/anyclaw/pkg/state/memory"
 	"github.com/anyclaw/anyclaw/pkg/workspace"
 )
 

@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/agent"
+	"github.com/anyclaw/anyclaw/pkg/capability/agents"
+	taskrunner "github.com/anyclaw/anyclaw/pkg/runtime/taskrunner"
 )
 
 func TestRequiresToolApprovalIncludesDesktopTools(t *testing.T) {
@@ -39,14 +40,14 @@ func TestRequiresToolApprovalIncludesDesktopTools(t *testing.T) {
 		"desktop_plan",
 	}
 	for _, name := range names {
-		if !requiresToolApproval(agent.ToolCall{Name: name}) {
+		if !taskrunner.RequiresToolApproval(agent.ToolCall{Name: name}) {
 			t.Fatalf("%s should require approval", name)
 		}
 	}
 }
 
 func TestDefaultPlanIncludesVerificationStep(t *testing.T) {
-	summary, steps := defaultPlan("ship the release")
+	summary, steps := taskrunner.DefaultPlan("ship the release")
 	if !strings.Contains(summary, "verify the observable outcome") {
 		t.Fatalf("expected summary to mention verification, got %q", summary)
 	}

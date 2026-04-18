@@ -338,6 +338,86 @@ func TestSaveAndReload(t *testing.T) {
 	}
 }
 
+func TestSaveRelativizesPathsInsideConfigDirectory(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	path := filepath.Join(configDir, "anyclaw.json")
+
+	cfg := DefaultConfig()
+	cfg.Agent.WorkDir = filepath.Join(configDir, ".anyclaw")
+	cfg.Agent.WorkingDir = filepath.Join(configDir, "workflows", "default")
+	cfg.Agent.Profiles = []AgentProfile{
+		{
+			Name:            "Go Expert",
+			Description:     "Go specialist",
+			WorkingDir:      filepath.Join(configDir, "workflows", "go"),
+			PermissionLevel: "limited",
+		},
+	}
+	cfg.Skills.Dir = filepath.Join(configDir, "skills")
+	cfg.Memory.Dir = filepath.Join(configDir, "memory")
+	cfg.Plugins.Dir = filepath.Join(configDir, "plugins")
+	cfg.Sandbox.BaseDir = filepath.Join(configDir, ".anyclaw", "sandboxes")
+	cfg.Security.AuditLog = filepath.Join(configDir, ".anyclaw", "audit", "audit.jsonl")
+	cfg.Daemon.PIDFile = filepath.Join(configDir, ".anyclaw", "gateway.pid")
+	cfg.Daemon.LogFile = filepath.Join(configDir, ".anyclaw", "gateway.log")
+	cfg.Gateway.ControlUI.Root = filepath.Join(configDir, "ui", "dist")
+	cfg.Orchestrator.SubAgents = []SubAgentConfig{
+		{
+			Name:            "worker",
+			Description:     "background worker",
+			PermissionLevel: "limited",
+			WorkingDir:      filepath.Join(configDir, "workflows", "worker"),
+		},
+	}
+
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save should succeed: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("reload should succeed: %v", err)
+	}
+
+	if loaded.Agent.WorkDir != ".anyclaw" {
+		t.Fatalf("expected relative work dir, got %q", loaded.Agent.WorkDir)
+	}
+	if loaded.Agent.WorkingDir != "workflows/default" {
+		t.Fatalf("expected relative working dir, got %q", loaded.Agent.WorkingDir)
+	}
+	if loaded.Agent.Profiles[0].WorkingDir != "workflows/go" {
+		t.Fatalf("expected relative profile working dir, got %q", loaded.Agent.Profiles[0].WorkingDir)
+	}
+	if loaded.Skills.Dir != "skills" {
+		t.Fatalf("expected relative skills dir, got %q", loaded.Skills.Dir)
+	}
+	if loaded.Memory.Dir != "memory" {
+		t.Fatalf("expected relative memory dir, got %q", loaded.Memory.Dir)
+	}
+	if loaded.Plugins.Dir != "plugins" {
+		t.Fatalf("expected relative plugins dir, got %q", loaded.Plugins.Dir)
+	}
+	if loaded.Sandbox.BaseDir != ".anyclaw/sandboxes" {
+		t.Fatalf("expected relative sandbox dir, got %q", loaded.Sandbox.BaseDir)
+	}
+	if loaded.Security.AuditLog != ".anyclaw/audit/audit.jsonl" {
+		t.Fatalf("expected relative audit log, got %q", loaded.Security.AuditLog)
+	}
+	if loaded.Daemon.PIDFile != ".anyclaw/gateway.pid" {
+		t.Fatalf("expected relative pid file, got %q", loaded.Daemon.PIDFile)
+	}
+	if loaded.Daemon.LogFile != ".anyclaw/gateway.log" {
+		t.Fatalf("expected relative log file, got %q", loaded.Daemon.LogFile)
+	}
+	if loaded.Gateway.ControlUI.Root != "ui/dist" {
+		t.Fatalf("expected relative control UI root, got %q", loaded.Gateway.ControlUI.Root)
+	}
+	if loaded.Orchestrator.SubAgents[0].WorkingDir != "workflows/worker" {
+		t.Fatalf("expected relative sub-agent working dir, got %q", loaded.Orchestrator.SubAgents[0].WorkingDir)
+	}
+}
+
 func TestValidateDefaultProviderRef(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Providers = []ProviderProfile{

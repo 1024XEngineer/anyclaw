@@ -6,59 +6,52 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/config"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/anyclaw/anyclaw/pkg/state"
 )
 
 func TestRuntimePoolGetOrCreateUsesFullHierarchyKey(t *testing.T) {
-	store, err := NewStore(t.TempDir())
+	store, err := state.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	if err := store.UpsertOrg(&Org{ID: "org-1", Name: "Org"}); err != nil {
+	if err := store.UpsertOrg(&state.Org{ID: "org-1", Name: "Org"}); err != nil {
 		t.Fatalf("UpsertOrg: %v", err)
 	}
-	if err := store.UpsertProject(&Project{ID: "project-1", OrgID: "org-1", Name: "Project"}); err != nil {
+	if err := store.UpsertProject(&state.Project{ID: "project-1", OrgID: "org-1", Name: "Project"}); err != nil {
 		t.Fatalf("UpsertProject: %v", err)
 	}
-	if err := store.UpsertWorkspace(&Workspace{ID: "workspace-1", ProjectID: "project-1", Name: "Workspace", Path: t.TempDir()}); err != nil {
+	if err := store.UpsertWorkspace(&state.Workspace{ID: "workspace-1", ProjectID: "project-1", Name: "Workspace", Path: t.TempDir()}); err != nil {
 		t.Fatalf("UpsertWorkspace: %v", err)
 	}
 
-	app := &appRuntime.App{
+	mainRuntime := &appRuntime.App{
 		Config:     &config.Config{Agent: config.AgentConfig{Name: "assistant"}},
 		WorkingDir: "D:/workspace",
 		WorkDir:    "D:/workdir",
 	}
-	pool := NewRuntimePool("ignored", store, 4, time.Hour)
-	pool.runtimes[runtimeKey("assistant", "org-1", "project-1", "workspace-1")] = &runtimeEntry{
-		app:        app,
-		createdAt:  time.Now().UTC(),
-		lastUsedAt: time.Now().UTC(),
-	}
+	pool := appRuntime.NewRuntimePool("ignored", store, 4, time.Hour)
+	pool.Remember("assistant", "org-1", "project-1", "workspace-1", mainRuntime)
 
 	got, err := pool.GetOrCreate("assistant", "org-1", "project-1", "workspace-1")
 	if err != nil {
 		t.Fatalf("GetOrCreate: %v", err)
 	}
-	if got != app {
+	if got != mainRuntime {
 		t.Fatal("expected cached runtime entry to be reused")
 	}
 }
 
 func TestRuntimePoolListShowsWorkspaceIDAndPath(t *testing.T) {
-	store, err := NewStore(t.TempDir())
+	store, err := state.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	pool := NewRuntimePool("ignored", store, 4, time.Hour)
-	pool.runtimes[runtimeKey("assistant", "org-1", "project-1", "workspace-1")] = &runtimeEntry{
-		app: &appRuntime.App{
-			Config:     &config.Config{Agent: config.AgentConfig{Name: "assistant"}},
-			WorkingDir: "D:/workspace",
-			WorkDir:    "D:/workdir",
-		},
-		createdAt:  time.Now().UTC(),
-		lastUsedAt: time.Now().UTC(),
-	}
+	pool := appRuntime.NewRuntimePool("ignored", store, 4, time.Hour)
+	pool.Remember("assistant", "org-1", "project-1", "workspace-1", &appRuntime.App{
+		Config:     &config.Config{Agent: config.AgentConfig{Name: "assistant"}},
+		WorkingDir: "D:/workspace",
+		WorkDir:    "D:/workdir",
+	})
 
 	items := pool.List()
 	if len(items) != 1 {

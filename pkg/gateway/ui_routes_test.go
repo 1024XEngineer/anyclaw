@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
+	controlui "github.com/anyclaw/anyclaw/pkg/gateway/transport/controlui"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
 )
 
@@ -24,11 +25,14 @@ func TestRegisterUIRoutesServesControlAndStaticPages(t *testing.T) {
 	cfg.Gateway.ControlUI.Root = root
 
 	server := &Server{
-		app: &appRuntime.App{Config: cfg},
+		mainRuntime: &appRuntime.App{Config: cfg},
 	}
 
 	mux := http.NewServeMux()
-	server.registerUIRoutes(mux)
+	controlui.RegisterRoutes(mux, controlui.Options{
+		BasePath: server.mainRuntime.Config.Gateway.ControlUI.BasePath,
+		Root:     server.mainRuntime.Config.Gateway.ControlUI.Root,
+	})
 	mux.HandleFunc("/", server.handleRootAPI)
 
 	cases := []struct {
@@ -59,11 +63,14 @@ func TestRegisterUIRoutesServesControlAndStaticPages(t *testing.T) {
 func TestRegisterUIRoutesDoesNotShadowMarketAPI(t *testing.T) {
 	cfg := config.DefaultConfig()
 	server := &Server{
-		app: &appRuntime.App{Config: cfg},
+		mainRuntime: &appRuntime.App{Config: cfg},
 	}
 
 	mux := http.NewServeMux()
-	server.registerUIRoutes(mux)
+	controlui.RegisterRoutes(mux, controlui.Options{
+		BasePath: server.mainRuntime.Config.Gateway.ControlUI.BasePath,
+		Root:     server.mainRuntime.Config.Gateway.ControlUI.Root,
+	})
 	mux.HandleFunc("/market/search", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("api-ok"))
 	})
@@ -78,6 +85,27 @@ func TestRegisterUIRoutesDoesNotShadowMarketAPI(t *testing.T) {
 	}
 	if body := w.Body.String(); body != "api-ok" {
 		t.Fatalf("expected market API handler to win, got %q", body)
+	}
+}
+
+func TestRegisterUIRoutesRequiresBuiltControlUI(t *testing.T) {
+	root := t.TempDir()
+
+	mux := http.NewServeMux()
+	controlui.RegisterRoutes(mux, controlui.Options{
+		BasePath: "/dashboard",
+		Root:     root,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 when control UI build is missing, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "control UI not found") {
+		t.Fatalf("expected missing control UI message, got %q", w.Body.String())
 	}
 }
 

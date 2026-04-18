@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/consoleio"
+	"github.com/anyclaw/anyclaw/pkg/input/cli/consoleio"
 )
 
 func TestNormalizeRootCommandSupportsOpenClawAliases(t *testing.T) {
@@ -19,8 +19,6 @@ func TestNormalizeRootCommandSupportsOpenClawAliases(t *testing.T) {
 		"agents":   "agent",
 		"clihub":   "clihub",
 		"claw":     "claw",
-		"app":      "app",
-		"apps":     "app",
 		"channel":  "channels",
 		"session":  "sessions",
 		"approval": "approvals",

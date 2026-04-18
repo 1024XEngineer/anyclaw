@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/channel"
+	inputlayer "github.com/anyclaw/anyclaw/pkg/input"
 )
 
 func TestRunChannelsStatusUsesGatewayToken(t *testing.T) {
@@ -40,9 +40,9 @@ func TestRunChannelsStatusUsesGatewayToken(t *testing.T) {
 	})
 
 	var payload struct {
-		GatewayReachable bool             `json:"gateway_reachable"`
-		Count            int              `json:"count"`
-		Channels         []channel.Status `json:"channels"`
+		GatewayReachable bool                `json:"gateway_reachable"`
+		Count            int                 `json:"count"`
+		Channels         []inputlayer.Status `json:"channels"`
 	}
 	if err := json.Unmarshal([]byte(output), &payload); err != nil {
 		t.Fatalf("Unmarshal output: %v\noutput=%s", err, output)

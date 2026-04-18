@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
+	"github.com/anyclaw/anyclaw/pkg/state"
 )
 
 func TestResolveRolePermissionsUsesBuiltinTemplates(t *testing.T) {
@@ -45,7 +46,7 @@ func TestResolveRolePermissionsPrefersCustomRoleOverrides(t *testing.T) {
 }
 
 func TestHandleResourcesWriteRequiresWritePermission(t *testing.T) {
-	store, err := NewStore(t.TempDir())
+	store, err := state.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestHandleResourcesWriteRequiresWritePermission(t *testing.T) {
 	}))
 	rec := httptest.NewRecorder()
 
-	server.handleResources(rec, req)
+	server.resourcesAPI().HandleCollection(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", rec.Code)
@@ -73,7 +74,7 @@ func TestHandleResourcesWriteRequiresWritePermission(t *testing.T) {
 }
 
 func TestHandleResourcesWriteAllowsOrgCreation(t *testing.T) {
-	store, err := NewStore(t.TempDir())
+	store, err := state.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestHandleResourcesWriteAllowsOrgCreation(t *testing.T) {
 	}))
 	rec := httptest.NewRecorder()
 
-	server.handleResources(rec, req)
+	server.resourcesAPI().HandleCollection(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())

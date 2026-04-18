@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/llm"
-	"github.com/anyclaw/anyclaw/pkg/memory"
-	"github.com/anyclaw/anyclaw/pkg/orchestrator"
-	"github.com/anyclaw/anyclaw/pkg/skills"
-	"github.com/anyclaw/anyclaw/pkg/tools"
+	"github.com/anyclaw/anyclaw/pkg/capability/models"
+	"github.com/anyclaw/anyclaw/pkg/capability/skills"
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
+	"github.com/anyclaw/anyclaw/pkg/runtime/orchestrator"
+	"github.com/anyclaw/anyclaw/pkg/state/memory"
 )
 
 func TestRegisterDelegationToolRegistersMainAgentOnlyTool(t *testing.T) {

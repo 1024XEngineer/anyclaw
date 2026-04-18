@@ -130,9 +130,9 @@ func TestRunApprovalsApprovePostsResolution(t *testing.T) {
 			t.Fatalf("expected comment to round-trip, got %#v", body)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id":          "ap-1",
-			"tool_name":   "run_command",
-			"status":      "approved",
+			"id":           "ap-1",
+			"tool_name":    "run_command",
+			"status":       "approved",
 			"requested_at": time.Now().UTC().Format(time.RFC3339),
 		})
 	}))

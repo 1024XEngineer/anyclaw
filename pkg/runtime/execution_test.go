@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/anyclaw/anyclaw/pkg/agent"
-	"github.com/anyclaw/anyclaw/pkg/memory"
-	"github.com/anyclaw/anyclaw/pkg/prompt"
-	"github.com/anyclaw/anyclaw/pkg/skills"
-	"github.com/anyclaw/anyclaw/pkg/tools"
+	"github.com/anyclaw/anyclaw/pkg/capability/agents"
+	"github.com/anyclaw/anyclaw/pkg/capability/skills"
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
+	"github.com/anyclaw/anyclaw/pkg/state"
+	"github.com/anyclaw/anyclaw/pkg/state/memory"
 )
 
 func TestAppExecuteReplacesHistoryThroughRuntimeBoundary(t *testing.T) {
@@ -30,7 +30,7 @@ func TestAppExecuteReplacesHistoryThroughRuntimeBoundary(t *testing.T) {
 
 	result, err := app.Execute(context.Background(), ExecutionRequest{
 		Input:          "hello",
-		History:        []prompt.Message{{Role: "user", Content: "previous"}},
+		History:        []state.HistoryMessage{{Role: "user", Content: "previous"}},
 		ReplaceHistory: true,
 	})
 	if err != nil {

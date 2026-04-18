@@ -3,11 +3,12 @@ package runtime
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/memory"
+	"github.com/anyclaw/anyclaw/pkg/state/memory"
 )
 
 func TestNewTargetAppAppliesAgentProfileProviderAndPreservesWorkspaceOverride(t *testing.T) {
@@ -187,6 +188,62 @@ func TestNewTargetAppResolvesImplicitMainAgentProfile(t *testing.T) {
 	}
 	if app.WorkingDir != absProfileWorkingDir {
 		t.Fatalf("expected working dir %q, got %q", absProfileWorkingDir, app.WorkingDir)
+	}
+}
+
+func TestNewTargetAppAutoCompletesBootstrapWhenAgentProfileAlreadyConfigured(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agent.Name = "binbin"
+	cfg.Agent.Description = "Execution helper"
+	cfg.Agent.WorkDir = filepath.Join(tempDir, ".anyclaw")
+	cfg.Agent.WorkingDir = filepath.Join(tempDir, "workflows", "default")
+	cfg.Agent.Lang = "zh-CN"
+	cfg.Agent.WorkFocus = "本地编码与项目维护"
+	cfg.Agent.BehaviorStyle = "简洁、主动、中文优先"
+	cfg.Skills.Dir = filepath.Join(tempDir, "skills")
+	cfg.Plugins.Dir = filepath.Join(tempDir, "plugins")
+	cfg.Security.AuditLog = filepath.Join(tempDir, ".anyclaw", "audit", "audit.jsonl")
+
+	configPath := filepath.Join(tempDir, "anyclaw.json")
+	if err := cfg.Save(configPath); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	for _, dir := range []string{cfg.Skills.Dir, cfg.Plugins.Dir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+
+	app, err := NewTargetApp(configPath, "", "")
+	if err != nil {
+		t.Fatalf("NewTargetApp: %v", err)
+	}
+	t.Cleanup(func() { app.Memory.Close() })
+
+	if _, err := os.Stat(filepath.Join(app.WorkingDir, "BOOTSTRAP.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected BOOTSTRAP.md to be removed for configured workspace, stat err=%v", err)
+	}
+
+	userData, err := os.ReadFile(filepath.Join(app.WorkingDir, "USER.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(USER.md): %v", err)
+	}
+	if !strings.Contains(string(userData), "Default language: zh-CN") {
+		t.Fatalf("expected USER.md to include configured language, got %q", string(userData))
+	}
+
+	identityData, err := os.ReadFile(filepath.Join(app.WorkingDir, "IDENTITY.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(IDENTITY.md): %v", err)
+	}
+	identityText := string(identityData)
+	if !strings.Contains(identityText, "本地编码与项目维护") {
+		t.Fatalf("expected IDENTITY.md to include configured work focus, got %q", identityText)
+	}
+	if !strings.Contains(identityText, "简洁、主动、中文优先") {
+		t.Fatalf("expected IDENTITY.md to include configured behavior style, got %q", identityText)
 	}
 }
 

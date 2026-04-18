@@ -1,4 +1,4 @@
-package gateway
+package sdk
 
 import (
 	"context"

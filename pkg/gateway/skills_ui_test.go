@@ -12,6 +12,7 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/config"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/anyclaw/anyclaw/pkg/state"
 )
 
 func TestHandleSkillsPersistsTogglesForMainAgent(t *testing.T) {
@@ -35,19 +36,19 @@ func TestHandleSkillsPersistsTogglesForMainAgent(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	app := &appRuntime.App{
+	mainRuntime := &appRuntime.App{
 		ConfigPath: configPath,
 		Config:     cfg,
 		WorkDir:    cfg.Agent.WorkDir,
 		WorkingDir: cfg.Agent.WorkingDir,
 	}
-	store, err := NewStore(tempDir)
+	store, err := state.NewStore(tempDir)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	server := &Server{
-		app:   app,
-		store: store,
+		mainRuntime: mainRuntime,
+		store:       store,
 	}
 
 	postReq := httptest.NewRequest(http.MethodPost, "/skills", strings.NewReader(`{"name":"toggle-beta","enabled":false}`))

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/plugin"
+	"github.com/anyclaw/anyclaw/pkg/extensions/plugin"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
 )
 
@@ -18,7 +18,7 @@ func TestInitChannelsRegistersAllBuiltinChannelAdapters(t *testing.T) {
 	}
 
 	server := &Server{
-		app: &appRuntime.App{
+		mainRuntime: &appRuntime.App{
 			Config:  cfg,
 			Plugins: plugins,
 		},

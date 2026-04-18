@@ -9,16 +9,17 @@ import (
 
 	"github.com/anyclaw/anyclaw/pkg/config"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
+	"github.com/anyclaw/anyclaw/pkg/state"
 )
 
 func TestSessionManagerCreateWithOptionsStripsGroupMetadata(t *testing.T) {
-	store, err := NewStore(t.TempDir())
+	store, err := state.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	manager := NewSessionManager(store, nil)
+	manager := state.NewSessionManager(store, nil)
 
-	session, err := manager.CreateWithOptions(SessionCreateOptions{
+	session, err := manager.CreateWithOptions(state.SessionCreateOptions{
 		Title:        "legacy group",
 		AgentName:    "AgentOne",
 		Participants: []string{"AgentOne", "AgentTwo"},
@@ -50,22 +51,22 @@ func TestSessionManagerCreateWithOptionsStripsGroupMetadata(t *testing.T) {
 }
 
 func TestHandleSessionsRejectsGroupCreation(t *testing.T) {
-	store, err := NewStore(t.TempDir())
+	store, err := state.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	if err := store.UpsertOrg(&Org{ID: "org-1", Name: "Org"}); err != nil {
+	if err := store.UpsertOrg(&state.Org{ID: "org-1", Name: "Org"}); err != nil {
 		t.Fatalf("UpsertOrg: %v", err)
 	}
-	if err := store.UpsertProject(&Project{ID: "project-1", OrgID: "org-1", Name: "Project"}); err != nil {
+	if err := store.UpsertProject(&state.Project{ID: "project-1", OrgID: "org-1", Name: "Project"}); err != nil {
 		t.Fatalf("UpsertProject: %v", err)
 	}
-	if err := store.UpsertWorkspace(&Workspace{ID: "workspace-1", ProjectID: "project-1", Name: "Workspace", Path: t.TempDir()}); err != nil {
+	if err := store.UpsertWorkspace(&state.Workspace{ID: "workspace-1", ProjectID: "project-1", Name: "Workspace", Path: t.TempDir()}); err != nil {
 		t.Fatalf("UpsertWorkspace: %v", err)
 	}
 
 	server := &Server{
-		app: &appRuntime.App{
+		mainRuntime: &appRuntime.App{
 			Config: &config.Config{
 				Agent: config.AgentConfig{
 					Name: "AgentOne",
@@ -77,13 +78,13 @@ func TestHandleSessionsRejectsGroupCreation(t *testing.T) {
 			},
 		},
 		store:    store,
-		sessions: NewSessionManager(store, nil),
+		sessions: state.NewSessionManager(store, nil),
 	}
 
 	body, err := json.Marshal(map[string]any{
 		"title":        "group",
 		"assistant":    "AgentOne",
-		"participants": []string{"AgentOne", "AgentTwo"},
+		"participants": []string{"AgentOne"},
 		"is_group":     true,
 		"session_mode": "channel-group",
 	})
@@ -93,12 +94,45 @@ func TestHandleSessionsRejectsGroupCreation(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/sessions?workspace=workspace-1", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
-	server.handleSessions(rec, req)
+	server.sessionAPI().HandleCollection(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d with body %s", rec.Code, rec.Body.String())
 	}
 	if got := rec.Body.String(); !bytes.Contains([]byte(got), []byte("multi-agent")) {
 		t.Fatalf("expected multi-agent rejection message, got %s", got)
+	}
+}
+
+func TestHandleSessionByIDDeletesSession(t *testing.T) {
+	store, err := state.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	manager := state.NewSessionManager(store, nil)
+
+	session, err := manager.CreateWithOptions(state.SessionCreateOptions{
+		Title:       "delete me",
+		AgentName:   "AgentOne",
+		Org:         "org-1",
+		Project:     "project-1",
+		Workspace:   "workspace-1",
+		SessionMode: "main",
+	})
+	if err != nil {
+		t.Fatalf("CreateWithOptions: %v", err)
+	}
+
+	api := (&Server{store: store, sessions: manager}).sessionAPI()
+	req := httptest.NewRequest(http.MethodDelete, "/sessions/"+session.ID, nil)
+	rec := httptest.NewRecorder()
+
+	api.HandleByID(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d with body %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := manager.Get(session.ID); ok {
+		t.Fatalf("expected session %s to be deleted", session.ID)
 	}
 }

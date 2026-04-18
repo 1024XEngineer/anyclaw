@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/tools"
 )
 
 func TestNewRegistryPrefersOpenClawManifest(t *testing.T) {
@@ -169,32 +169,30 @@ func TestRegistryPolicyBlocksPluginNetOutWithoutAllowedDomains(t *testing.T) {
 
 func TestRegistryTrustAcceptsBareSHA256Signature(t *testing.T) {
 	baseDir := t.TempDir()
-	pluginDir := filepath.Join(baseDir, "trusted-app")
+	pluginDir := filepath.Join(baseDir, "trusted-surface")
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	entrypointPath := filepath.Join(pluginDir, "app.py")
+	entrypointPath := filepath.Join(pluginDir, "surface.py")
 	if err := os.WriteFile(entrypointPath, []byte("print('ok')\n"), 0o644); err != nil {
 		t.Fatalf("write entrypoint: %v", err)
 	}
 
 	manifest := Manifest{
-		Name:        "trusted-app",
+		Name:        "trusted-surface",
 		Version:     "1.0.0",
-		Description: "Trusted app",
-		Kinds:       []string{"app"},
+		Description: "Trusted surface",
+		Kinds:       []string{"surface"},
 		Enabled:     true,
-		Entrypoint:  "app.py",
+		Entrypoint:  "surface.py",
 		Permissions: []string{"tool:exec"},
 		Signer:      "dev-local",
 		Signature:   "ad64355106bb158b020ecf9702be48f7730fc091dd4bb6a2f092b40393495b3d",
-		App: &AppSpec{
-			Name:        "Trusted App",
-			Description: "Trusted app",
-			Actions: []AppActionSpec{
-				{Name: "ping", Kind: "execute"},
-			},
+		Surface: &SurfaceSpec{
+			Name:        "Trusted Surface",
+			Description: "Trusted surface",
+			Path:        "/__openclaw__/surfaces/trusted-surface",
 		},
 	}
 	if err := writeManifestFile(filepath.Join(pluginDir, "plugin.json"), manifest); err != nil {
@@ -206,15 +204,23 @@ func TestRegistryTrustAcceptsBareSHA256Signature(t *testing.T) {
 		AllowExec:      true,
 		RequireTrust:   true,
 		TrustedSigners: []string{"dev-local"},
-		Enabled:        []string{"trusted-app"},
+		Enabled:        []string{"trusted-surface"},
 	})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 
-	runners := registry.AppRunners(baseDir)
-	if len(runners) != 1 {
-		t.Fatalf("expected 1 trusted app runner, got %d", len(runners))
+	foundTrustedSurface := false
+	for _, item := range registry.List() {
+		if item.Name == "trusted-surface" {
+			foundTrustedSurface = true
+			if !item.Verified {
+				t.Fatalf("expected trusted-surface manifest to be verified, got %#v", item)
+			}
+		}
+	}
+	if !foundTrustedSurface {
+		t.Fatalf("expected trusted-surface manifest to be loaded, got %#v", registry.List())
 	}
 }
 

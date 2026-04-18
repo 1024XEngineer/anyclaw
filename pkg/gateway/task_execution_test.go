@@ -3,31 +3,71 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
+	"errors"
 	"testing"
 	"time"
 
-	"github.com/anyclaw/anyclaw/pkg/agent"
-	appstate "github.com/anyclaw/anyclaw/pkg/apps"
+	"github.com/anyclaw/anyclaw/pkg/capability/agents"
+	"github.com/anyclaw/anyclaw/pkg/capability/models"
+	"github.com/anyclaw/anyclaw/pkg/capability/skills"
+	"github.com/anyclaw/anyclaw/pkg/capability/tools"
 	"github.com/anyclaw/anyclaw/pkg/config"
-	"github.com/anyclaw/anyclaw/pkg/llm"
-	"github.com/anyclaw/anyclaw/pkg/memory"
-	"github.com/anyclaw/anyclaw/pkg/plugin"
 	appRuntime "github.com/anyclaw/anyclaw/pkg/runtime"
-	"github.com/anyclaw/anyclaw/pkg/skills"
-	"github.com/anyclaw/anyclaw/pkg/tools"
+	appstate "github.com/anyclaw/anyclaw/pkg/runtime/execution/desktop"
+	taskrunner "github.com/anyclaw/anyclaw/pkg/runtime/taskrunner"
+	"github.com/anyclaw/anyclaw/pkg/state"
+	"github.com/anyclaw/anyclaw/pkg/state/memory"
 )
+
+type (
+	Org               = state.Org
+	Project           = state.Project
+	Workspace         = state.Workspace
+	Approval          = state.Approval
+	Task              = state.Task
+	TaskStep          = state.TaskStep
+	taskAppInfo       = taskrunner.MainRuntimeInfo
+	TaskCreateOptions = taskrunner.CreateOptions
+)
+
+var ErrTaskWaitingApproval = taskrunner.ErrTaskWaitingApproval
+
+func NewStore(baseDir string) (*state.Store, error) {
+	return state.NewStore(baseDir)
+}
+
+func NewSessionManager(store *state.Store, agent state.SessionAgent) *state.SessionManager {
+	return state.NewSessionManager(store, agent)
+}
+
+func NewRuntimePool(configPath string, store *state.Store, maxInstances int, idleTTL time.Duration) *appRuntime.RuntimePool {
+	return appRuntime.NewRuntimePool(configPath, store, maxInstances, idleTTL)
+}
+
+func newApprovalManager(store *state.Store) *state.ApprovalManager {
+	return state.NewApprovalManager(store)
+}
+
+func NewTaskManager(store *state.Store, sessions *state.SessionManager, pool *appRuntime.RuntimePool, app taskAppInfo, planner taskrunner.Planner, approvals *state.ApprovalManager, _ any, _ any) *taskrunner.Manager {
+	return taskrunner.NewManager(store, sessions, pool, app, planner, approvals)
+}
+
+func desktopPlanHasExplicitVerification(state *appstate.DesktopPlanExecutionState) bool {
+	return taskrunner.DesktopPlanHasExplicitVerification(state)
+}
 
 type stubTaskLLM struct {
 	responses []*llm.Response
 	index     int
 	messages  [][]llm.Message
+	chatFunc  func(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error)
 }
 
 func (s *stubTaskLLM) Chat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error) {
 	s.messages = append(s.messages, append([]llm.Message(nil), messages...))
+	if s.chatFunc != nil {
+		return s.chatFunc(ctx, messages, toolDefs)
+	}
 	if s.index >= len(s.responses) {
 		return &llm.Response{Content: "done"}, nil
 	}
@@ -97,7 +137,7 @@ func TestTaskExecuteWaitsForToolApprovalWithoutFailingTask(t *testing.T) {
 		Tools:   registry,
 		WorkDir: t.TempDir(),
 	})
-	app := &appRuntime.App{
+	mainRuntime := &appRuntime.App{
 		Config: &config.Config{
 			Agent: config.AgentConfig{
 				Name:                            "assistant",
@@ -110,11 +150,7 @@ func TestTaskExecuteWaitsForToolApprovalWithoutFailingTask(t *testing.T) {
 	}
 	sessions := NewSessionManager(store, ag)
 	pool := NewRuntimePool("ignored", store, 4, time.Hour)
-	pool.runtimes[runtimeKey("assistant", "org-1", "project-1", "workspace-1")] = &runtimeEntry{
-		app:        app,
-		createdAt:  time.Now().UTC(),
-		lastUsedAt: time.Now().UTC(),
-	}
+	pool.Remember("assistant", "org-1", "project-1", "workspace-1", mainRuntime)
 	approvals := newApprovalManager(store)
 	manager := NewTaskManager(store, sessions, pool, taskAppInfo{Name: "assistant", WorkingDir: workspacePath}, nil, approvals, nil, nil)
 
@@ -143,7 +179,7 @@ func TestTaskExecuteWaitsForToolApprovalWithoutFailingTask(t *testing.T) {
 	}
 
 	result, err := manager.Execute(context.Background(), task.ID)
-	if err == nil || err != ErrTaskWaitingApproval {
+	if !errors.Is(err, ErrTaskWaitingApproval) {
 		t.Fatalf("expected ErrTaskWaitingApproval, got %v", err)
 	}
 	if result == nil || result.Task == nil || result.Session == nil {
@@ -234,13 +270,13 @@ func TestTaskMarkRejectedUsesApprovalStepIndex(t *testing.T) {
 	if len(steps) < 3 {
 		t.Fatalf("expected planned steps, got %+v", steps)
 	}
-	if err := manager.setStepStatus(task.ID, 1, "completed", "review this", "accepted", ""); err != nil {
+	if err := manager.SetStepStatus(task.ID, 1, "completed", "review this", "accepted", ""); err != nil {
 		t.Fatalf("setStepStatus step1: %v", err)
 	}
-	if err := manager.setStepStatus(task.ID, 2, "completed", "", "executed", ""); err != nil {
+	if err := manager.SetStepStatus(task.ID, 2, "completed", "", "executed", ""); err != nil {
 		t.Fatalf("setStepStatus step2: %v", err)
 	}
-	if err := manager.setStepStatus(task.ID, 3, "waiting_approval", "", "pending tool approval", ""); err != nil {
+	if err := manager.SetStepStatus(task.ID, 3, "waiting_approval", "", "pending tool approval", ""); err != nil {
 		t.Fatalf("setStepStatus step3: %v", err)
 	}
 	initialStatuses := stepStatusesByIndex(manager.Steps(task.ID))
@@ -271,101 +307,6 @@ func TestTaskMarkRejectedUsesApprovalStepIndex(t *testing.T) {
 	}
 	if !containsEvidenceKind(updatedTask, "approval_rejected") {
 		t.Fatalf("expected approval_rejected evidence, got %#v", evidenceKinds(updatedTask))
-	}
-}
-
-func TestTaskExecuteInjectsWorkflowSuggestionsIntoAgentHistory(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	if err := store.UpsertOrg(&Org{ID: "org-1", Name: "Org"}); err != nil {
-		t.Fatalf("UpsertOrg: %v", err)
-	}
-	if err := store.UpsertProject(&Project{ID: "project-1", OrgID: "org-1", Name: "Project"}); err != nil {
-		t.Fatalf("UpsertProject: %v", err)
-	}
-	workspacePath := t.TempDir()
-	if err := store.UpsertWorkspace(&Workspace{ID: "workspace-1", ProjectID: "project-1", Name: "Workspace", Path: workspacePath}); err != nil {
-		t.Fatalf("UpsertWorkspace: %v", err)
-	}
-
-	mem := memory.NewFileMemory(t.TempDir())
-	if err := mem.Init(); err != nil {
-		t.Fatalf("memory init: %v", err)
-	}
-	registry := tools.NewRegistry()
-	agentLLM := &stubTaskLLM{responses: []*llm.Response{{Content: "done"}}}
-	ag := agent.New(agent.Config{
-		Name:        "assistant",
-		Description: "test assistant",
-		LLM:         agentLLM,
-		Memory:      mem,
-		Skills:      skills.NewSkillsManager(""),
-		Tools:       registry,
-		WorkDir:     t.TempDir(),
-	})
-	app := &appRuntime.App{
-		Config: &config.Config{
-			Agent: config.AgentConfig{
-				Name: "assistant",
-			},
-		},
-		Agent:      ag,
-		WorkingDir: workspacePath,
-		WorkDir:    t.TempDir(),
-	}
-	app.Plugins = newWorkflowRegistryForTest(t)
-
-	sessions := NewSessionManager(store, ag)
-	pool := NewRuntimePool("ignored", store, 4, time.Hour)
-	pool.runtimes[runtimeKey("assistant", "org-1", "project-1", "workspace-1")] = &runtimeEntry{
-		app:        app,
-		createdAt:  time.Now().UTC(),
-		lastUsedAt: time.Now().UTC(),
-	}
-	manager := NewTaskManager(store, sessions, pool, taskAppInfo{Name: "assistant", WorkingDir: workspacePath}, nil, nil, nil, nil)
-
-	task, err := manager.Create(TaskCreateOptions{
-		Input:     "remove the background from this image and export png",
-		Assistant: "assistant",
-		Org:       "org-1",
-		Project:   "project-1",
-		Workspace: "workspace-1",
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	result, err := manager.Execute(context.Background(), task.ID)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if result == nil || result.Task == nil {
-		t.Fatal("expected execution result")
-	}
-	if len(agentLLM.messages) == 0 {
-		t.Fatal("expected LLM messages to be captured")
-	}
-	foundSuggestion := false
-	for _, msg := range agentLLM.messages[0] {
-		if msg.Role == "system" && strings.Contains(msg.Content, "Suggested app workflows") && strings.Contains(msg.Content, "app_image_app_workflow_remove_background") {
-			foundSuggestion = true
-			break
-		}
-	}
-	if !foundSuggestion {
-		t.Fatalf("expected workflow guidance in LLM messages, got %#v", agentLLM.messages[0])
-	}
-	updatedTask, ok := store.GetTask(task.ID)
-	if !ok {
-		t.Fatal("expected task to exist")
-	}
-	if !strings.Contains(updatedTask.PlanSummary, "Suggested workflows: app_image_app_workflow_remove_background") {
-		t.Fatalf("expected plan summary to include suggested workflow, got %q", updatedTask.PlanSummary)
-	}
-	if !containsEvidenceKind(updatedTask, "workflow_suggestions") {
-		t.Fatalf("expected workflow suggestion evidence, got %#v", evidenceKinds(updatedTask))
 	}
 }
 
@@ -417,7 +358,7 @@ func TestTaskExecutePersistsEvidenceArtifactsAndCompletionRecoveryPoint(t *testi
 		Tools:       registry,
 		WorkDir:     t.TempDir(),
 	})
-	app := &appRuntime.App{
+	mainRuntime := &appRuntime.App{
 		Config: &config.Config{
 			Agent: config.AgentConfig{
 				Name: "assistant",
@@ -429,11 +370,7 @@ func TestTaskExecutePersistsEvidenceArtifactsAndCompletionRecoveryPoint(t *testi
 	}
 	sessions := NewSessionManager(store, ag)
 	pool := NewRuntimePool("ignored", store, 4, time.Hour)
-	pool.runtimes[runtimeKey("assistant", "org-1", "project-1", "workspace-1")] = &runtimeEntry{
-		app:        app,
-		createdAt:  time.Now().UTC(),
-		lastUsedAt: time.Now().UTC(),
-	}
+	pool.Remember("assistant", "org-1", "project-1", "workspace-1", mainRuntime)
 	manager := NewTaskManager(store, sessions, pool, taskAppInfo{Name: "assistant", WorkingDir: workspacePath}, nil, nil, nil, nil)
 
 	task, err := manager.Create(TaskCreateOptions{
@@ -493,7 +430,7 @@ func TestDesktopPlanStateHookPersistsTaskExecutionState(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	hook := manager.desktopPlanStateHook(task)
+	hook := manager.DesktopPlanStateHook(task)
 	if hook == nil {
 		t.Fatal("expected desktop plan state hook")
 	}
@@ -529,255 +466,6 @@ func TestDesktopPlanStateHookPersistsTaskExecutionState(t *testing.T) {
 	if !containsEvidenceKind(updatedTask, "desktop_checkpoint") {
 		t.Fatalf("expected desktop_checkpoint evidence, got %#v", evidenceKinds(updatedTask))
 	}
-}
-
-func TestTaskExecuteSolidifiesWorkflowDesktopPlanVerifySummaryPath(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-	if err := store.UpsertOrg(&Org{ID: "org-1", Name: "Org"}); err != nil {
-		t.Fatalf("UpsertOrg: %v", err)
-	}
-	if err := store.UpsertProject(&Project{ID: "project-1", OrgID: "org-1", Name: "Project"}); err != nil {
-		t.Fatalf("UpsertProject: %v", err)
-	}
-	workspacePath := t.TempDir()
-	if err := store.UpsertWorkspace(&Workspace{ID: "workspace-1", ProjectID: "project-1", Name: "Workspace", Path: workspacePath}); err != nil {
-		t.Fatalf("UpsertWorkspace: %v", err)
-	}
-
-	mem := memory.NewFileMemory(t.TempDir())
-	if err := mem.Init(); err != nil {
-		t.Fatalf("memory init: %v", err)
-	}
-	toolRegistry := tools.NewRegistry()
-	toolRegistry.RegisterTool("desktop_open", "open desktop app", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
-		return "opened", nil
-	})
-	toolRegistry.RegisterTool("desktop_verify_text", "verify text", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
-		return `{"matched":true}`, nil
-	})
-
-	pluginRegistry, pluginDir := newWorkflowRegistryWithDesktopPlanForTest(t)
-	pluginRegistry.RegisterAppPlugins(toolRegistry, pluginDir, filepath.Join(pluginDir, "anyclaw.json"))
-
-	workflowToolName := plugin.AppWorkflowToolName("image-app", "remove-background")
-	agentLLM := &stubTaskLLM{responses: []*llm.Response{
-		{
-			ToolCalls: []llm.ToolCall{
-				{
-					ID:   "tool-1",
-					Type: "function",
-					Function: llm.FunctionCall{
-						Name:      workflowToolName,
-						Arguments: `{"task":"remove background and export png"}`,
-					},
-				},
-			},
-		},
-		{Content: "background removed and exported"},
-	}}
-	ag := agent.New(agent.Config{
-		Name:        "assistant",
-		Description: "test assistant",
-		LLM:         agentLLM,
-		Memory:      mem,
-		Skills:      skills.NewSkillsManager(""),
-		Tools:       toolRegistry,
-		WorkDir:     t.TempDir(),
-		WorkingDir:  workspacePath,
-	})
-	app := &appRuntime.App{
-		Config: &config.Config{
-			Agent: config.AgentConfig{
-				Name: "assistant",
-			},
-		},
-		Agent:      ag,
-		WorkingDir: workspacePath,
-		WorkDir:    t.TempDir(),
-		Plugins:    pluginRegistry,
-		Tools:      toolRegistry,
-	}
-
-	sessions := NewSessionManager(store, ag)
-	pool := NewRuntimePool("ignored", store, 4, time.Hour)
-	pool.runtimes[runtimeKey("assistant", "org-1", "project-1", "workspace-1")] = &runtimeEntry{
-		app:        app,
-		createdAt:  time.Now().UTC(),
-		lastUsedAt: time.Now().UTC(),
-	}
-	manager := NewTaskManager(store, sessions, pool, taskAppInfo{Name: "assistant", WorkingDir: workspacePath}, nil, nil, nil, pluginRegistry)
-
-	task, err := manager.Create(TaskCreateOptions{
-		Input:     "remove the background from this image and export png",
-		Assistant: "assistant",
-		Org:       "org-1",
-		Project:   "project-1",
-		Workspace: "workspace-1",
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	result, err := manager.Execute(context.Background(), task.ID)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if result == nil || result.Task == nil {
-		t.Fatal("expected execution result")
-	}
-
-	steps := manager.Steps(task.ID)
-	if len(steps) != 5 {
-		t.Fatalf("expected 5 main-path steps, got %d details=%v", len(steps), stepDetails(steps))
-	}
-	if steps[1].Kind != "workflow" || steps[1].Status != "completed" || steps[1].ToolName != workflowToolName {
-		t.Fatalf("expected workflow step to complete, got %#v", steps[1])
-	}
-	if steps[2].Kind != "desktop_plan" || steps[2].Status != "completed" {
-		t.Fatalf("expected desktop plan step to complete, got %#v", steps[2])
-	}
-	if steps[3].Kind != "verify" || steps[3].Status != "completed" {
-		t.Fatalf("expected verify step to complete, got %#v", steps[3])
-	}
-	if steps[4].Kind != "summarize" || steps[4].Status != "completed" {
-		t.Fatalf("expected summarize step to complete, got %#v", steps[4])
-	}
-
-	updatedTask, ok := store.GetTask(task.ID)
-	if !ok {
-		t.Fatal("expected task to exist")
-	}
-	if updatedTask.ExecutionState == nil || updatedTask.ExecutionState.DesktopPlan == nil {
-		t.Fatalf("expected desktop plan execution state, got %#v", updatedTask.ExecutionState)
-	}
-	if !desktopPlanHasExplicitVerification(updatedTask.ExecutionState.DesktopPlan) {
-		t.Fatalf("expected desktop plan verification to be recorded, got %#v", updatedTask.ExecutionState.DesktopPlan)
-	}
-	if !containsEvidenceKind(updatedTask, "workflow_selected") {
-		t.Fatalf("expected workflow_selected evidence, got %#v", evidenceKinds(updatedTask))
-	}
-	if !containsEvidenceKind(updatedTask, "verification_completed") {
-		t.Fatalf("expected verification_completed evidence, got %#v", evidenceKinds(updatedTask))
-	}
-}
-
-func newWorkflowRegistryForTest(t *testing.T) *plugin.Registry {
-	t.Helper()
-	baseDir := t.TempDir()
-	pluginDir := filepath.Join(baseDir, "image-app")
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	manifest := plugin.Manifest{
-		Name:        "image-app",
-		Version:     "1.0.0",
-		Enabled:     true,
-		Entrypoint:  "app.py",
-		Permissions: []string{"tool:exec"},
-		App: &plugin.AppSpec{
-			Name: "Image App",
-			Actions: []plugin.AppActionSpec{
-				{Name: "run"},
-			},
-			Workflows: []plugin.AppWorkflowSpec{
-				{
-					Name:        "remove-background",
-					Description: "Remove the background and export png",
-					Action:      "run",
-					Tags:        []string{"background", "png", "image"},
-				},
-			},
-		},
-	}
-	data, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		t.Fatalf("MarshalIndent: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0o644); err != nil {
-		t.Fatalf("WriteFile manifest: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(pluginDir, "app.py"), []byte("print('ok')\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile entrypoint: %v", err)
-	}
-	registry, err := plugin.NewRegistry(config.PluginsConfig{
-		Dir:          baseDir,
-		AllowExec:    true,
-		RequireTrust: false,
-	})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	return registry
-}
-
-func newWorkflowRegistryWithDesktopPlanForTest(t *testing.T) (*plugin.Registry, string) {
-	t.Helper()
-	baseDir := t.TempDir()
-	pluginDir := filepath.Join(baseDir, "image-app")
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	manifest := plugin.Manifest{
-		Name:        "image-app",
-		Version:     "1.0.0",
-		Enabled:     true,
-		Entrypoint:  "app.ps1",
-		Permissions: []string{"tool:exec"},
-		App: &plugin.AppSpec{
-			Name: "Image App",
-			Actions: []plugin.AppActionSpec{
-				{Name: "run"},
-			},
-			Workflows: []plugin.AppWorkflowSpec{
-				{
-					Name:        "remove-background",
-					Description: "Remove the background and export png",
-					Action:      "run",
-					Tags:        []string{"background", "png", "image"},
-				},
-			},
-		},
-	}
-	data, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		t.Fatalf("MarshalIndent: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(pluginDir, "plugin.json"), data, 0o644); err != nil {
-		t.Fatalf("WriteFile manifest: %v", err)
-	}
-	script := `$payload = @{
-  protocol = "anyclaw.app.desktop.v1"
-  summary = "background removed"
-  steps = @(
-    @{
-      tool = "desktop_open"
-      label = "Launch image app"
-      input = @{ target = "image-app.exe" }
-      verify = @{
-        tool = "desktop_verify_text"
-        input = @{ expected = "ready" }
-        retry = 1
-      }
-    }
-  )
-} | ConvertTo-Json -Depth 8 -Compress
-Write-Output $payload
-`
-	if err := os.WriteFile(filepath.Join(pluginDir, "app.ps1"), []byte(script), 0o644); err != nil {
-		t.Fatalf("WriteFile entrypoint: %v", err)
-	}
-	registry, err := plugin.NewRegistry(config.PluginsConfig{
-		Dir:          baseDir,
-		AllowExec:    true,
-		RequireTrust: false,
-	})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	return registry, baseDir
 }
 
 func stepStatusesByIndex(steps []*TaskStep) map[int]string {

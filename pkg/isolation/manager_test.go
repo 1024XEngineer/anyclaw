@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	ctxpkg "github.com/anyclaw/anyclaw/pkg/context"
+	ctxpkg "github.com/anyclaw/anyclaw/pkg/runtime/context/store"
 )
 
 func TestNewContextIsolationManager(t *testing.T) {
