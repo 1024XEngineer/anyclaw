@@ -323,6 +323,31 @@ func (a *DiscordAdapter) findAudioAttachment(attachments []struct {
 	return "", ""
 }
 
+type discordMessageReference struct {
+	MessageID string `json:"message_id"`
+	ChannelID string `json:"channel_id"`
+}
+
+type discordPolledMessage struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
+	GuildID string `json:"guild_id"`
+	Author  struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+		Bot      bool   `json:"bot"`
+	} `json:"author"`
+	MessageReference discordMessageReference `json:"message_reference"`
+	Attachments      []struct {
+		ID          string `json:"id"`
+		URL         string `json:"url"`
+		ProxyURL    string `json:"proxy_url"`
+		Filename    string `json:"filename"`
+		ContentType string `json:"content_type"`
+		Size        int    `json:"size"`
+	} `json:"attachments"`
+}
+
 func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) error {
 	url := fmt.Sprintf("%s/channels/%s/messages?limit=20", a.apiBaseURL, a.config.DefaultChannel)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -339,25 +364,7 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 		return fmt.Errorf("discord fetch failed: %s", resp.Status)
 	}
 
-	var messages []struct {
-		ID       string `json:"id"`
-		Content  string `json:"content"`
-		GuildID  string `json:"guild_id"`
-		ParentID string `json:"message_reference.message_id"`
-		Author   struct {
-			ID       string `json:"id"`
-			Username string `json:"username"`
-			Bot      bool   `json:"bot"`
-		} `json:"author"`
-		Attachments []struct {
-			ID          string `json:"id"`
-			URL         string `json:"url"`
-			ProxyURL    string `json:"proxy_url"`
-			Filename    string `json:"filename"`
-			ContentType string `json:"content_type"`
-			Size        int    `json:"size"`
-		} `json:"attachments"`
-	}
+	var messages []discordPolledMessage
 	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
 		return err
 	}
@@ -389,7 +396,7 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 				meta["caption"] = strings.TrimSpace(msg.Content)
 			}
 
-			threadID := strings.TrimSpace(msg.ParentID)
+			threadID := strings.TrimSpace(msg.MessageReference.MessageID)
 			replyTarget := a.config.DefaultChannel
 			if threadID != "" {
 				replyTarget = threadID
@@ -418,7 +425,7 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 			continue
 		}
 
-		threadID := strings.TrimSpace(msg.ParentID)
+		threadID := strings.TrimSpace(msg.MessageReference.MessageID)
 		replyTarget := a.config.DefaultChannel
 		if threadID != "" {
 			replyTarget = threadID
@@ -754,17 +761,7 @@ func (a *DiscordAdapter) pollOnceStream(ctx context.Context, handle StreamChunkH
 		return fmt.Errorf("discord fetch failed: %s", resp.Status)
 	}
 
-	var messages []struct {
-		ID       string `json:"id"`
-		Content  string `json:"content"`
-		GuildID  string `json:"guild_id"`
-		ParentID string `json:"message_reference.message_id"`
-		Author   struct {
-			ID       string `json:"id"`
-			Username string `json:"username"`
-			Bot      bool   `json:"bot"`
-		} `json:"author"`
-	}
+	var messages []discordPolledMessage
 	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
 		return err
 	}
@@ -791,7 +788,7 @@ func (a *DiscordAdapter) pollOnceStream(ctx context.Context, handle StreamChunkH
 			"sender":       msg.Author.Username,
 		}
 
-		threadID := strings.TrimSpace(msg.ParentID)
+		threadID := strings.TrimSpace(msg.MessageReference.MessageID)
 		replyTarget := a.config.DefaultChannel
 		if threadID != "" {
 			replyTarget = threadID

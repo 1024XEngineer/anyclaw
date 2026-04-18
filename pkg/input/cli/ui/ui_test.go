@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -40,4 +41,15 @@ func maxLineWidth(text string) int {
 		}
 	}
 	return maxWidth
+}
+
+func TestRunSpinnerReturnsFunctionError(t *testing.T) {
+	expectedErr := errors.New("boom")
+
+	err := RunSpinner("testing", func() error {
+		return expectedErr
+	})
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected %v, got %v", expectedErr, err)
+	}
 }

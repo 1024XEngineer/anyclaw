@@ -189,6 +189,7 @@ func (m *SpinnerModel) View() string {
 func RunSpinner(msg string, fn func() error) error {
 	s := NewSpinner(msg)
 	p := tea.NewProgram(s, tea.WithOutput(os.Stderr))
+	errCh := make(chan error, 1)
 	go func() {
 		err := fn()
 		s.quitting = true
@@ -196,9 +197,14 @@ func RunSpinner(msg string, fn func() error) error {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\n%s %v\n", Error.Sprint("Error:"), err)
 		}
+		errCh <- err
 	}()
-	_, _ = p.Run()
-	return nil
+	_, runErr := p.Run()
+	fnErr := <-errCh
+	if runErr != nil {
+		return runErr
+	}
+	return fnErr
 }
 
 func Prompt(label string) string {

@@ -129,11 +129,13 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle InboundHandler) err
 			"sender":       item.Envelope.SourceName,
 		}
 
-		audioURL, audioMIME := a.findAudioAttachment(item.Envelope.DataMessage.Attachments)
-		if audioURL != "" {
+		audioURL, audioMIME, hasAudio := a.findAudioAttachment(item.Envelope.DataMessage.Attachments)
+		if hasAudio {
 			meta["message_type"] = "voice_note"
-			meta["audio_url"] = audioURL
 			meta["audio_mime"] = audioMIME
+			if audioURL != "" {
+				meta["audio_url"] = audioURL
+			}
 			if msg != "" {
 				meta["caption"] = msg
 			}
@@ -238,12 +240,12 @@ func (a *SignalAdapter) seen(id string) bool {
 func (a *SignalAdapter) findAudioAttachment(attachments []struct {
 	ContentType string `json:"contentType"`
 	Filename    string `json:"filename"`
-}) (string, string) {
+}) (string, string, bool) {
 	for _, att := range attachments {
 		mime := strings.ToLower(att.ContentType)
 		fn := strings.ToLower(att.Filename)
 		if strings.HasPrefix(mime, "audio/") {
-			return "", att.ContentType
+			return strings.TrimSpace(att.Filename), att.ContentType, true
 		}
 		if strings.HasSuffix(fn, ".ogg") || strings.HasSuffix(fn, ".mp3") || strings.HasSuffix(fn, ".wav") || strings.HasSuffix(fn, ".flac") || strings.HasSuffix(fn, ".m4a") || strings.HasSuffix(fn, ".webm") {
 			mimeType := "audio/unknown"
@@ -261,8 +263,8 @@ func (a *SignalAdapter) findAudioAttachment(attachments []struct {
 			case strings.HasSuffix(fn, ".webm"):
 				mimeType = "audio/webm"
 			}
-			return "", mimeType
+			return strings.TrimSpace(att.Filename), mimeType, true
 		}
 	}
-	return "", ""
+	return "", "", false
 }

@@ -82,7 +82,8 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 	defer resp.Body.Close()
 
 	var payload struct {
-		OK       bool `json:"ok"`
+		OK       bool   `json:"ok"`
+		Error    string `json:"error"`
 		Messages []struct {
 			Text     string `json:"text"`
 			Ts       string `json:"ts"`
@@ -98,6 +99,12 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return err
+	}
+	if !payload.OK {
+		if strings.TrimSpace(payload.Error) == "" {
+			return fmt.Errorf("slack history failed: api returned ok=false")
+		}
+		return fmt.Errorf("slack history failed: %s", payload.Error)
 	}
 
 	for i := len(payload.Messages) - 1; i >= 0; i-- {
