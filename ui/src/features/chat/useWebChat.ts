@@ -598,6 +598,7 @@ function mergeRemoteSessions(
   isSending: boolean,
 ): ChatState {
   const remoteSessionIDs = new Set(remoteSessions.map((session) => session.id));
+  const keepMissingRemoteSessions = remoteSessions.length === 0;
   const localSessionsByRemoteId = new Map(
     state.sessions
       .filter((session) => session.remoteSessionId)
@@ -619,6 +620,14 @@ function mergeRemoteSessions(
     if (!session.remoteSessionId || remoteSessionIDs.has(session.remoteSessionId)) {
       return false;
     }
+
+    // The gateway list can briefly come back empty while the current session is
+    // still being created or resumed. Keep browser history until a concrete
+    // delete/not-found signal arrives.
+    if (keepMissingRemoteSessions) {
+      return true;
+    }
+
     return session.key === state.selectedSessionKey || session.remoteSessionId === state.sessionId;
   });
 

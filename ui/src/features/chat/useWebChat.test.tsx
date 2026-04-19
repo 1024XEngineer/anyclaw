@@ -822,7 +822,9 @@ describe("useWebChat persistence", () => {
       expect(screen.getByTestId("message-preview")).toHaveTextContent("second session");
     });
 
-    resolveChatRequest?.(
+    expect(resolveChatRequest).not.toBeNull();
+
+    resolveChatRequest!(
       {
         ok: true,
         status: 200,
