@@ -16,10 +16,11 @@ type RuleWarning struct {
 // AnalyzeRouting returns warnings for duplicate, shadowed, or too-broad rules.
 func AnalyzeRouting(cfg config.RoutingConfig) []RuleWarning {
 	var warnings []RuleWarning
+	mode := defaultString(cfg.Mode, "per-chat")
 	for i, rule := range cfg.Rules {
 		for j := 0; j < i; j++ {
 			prev := cfg.Rules[j]
-			if sameRule(prev, rule) {
+			if sameRule(prev, rule, mode) {
 				warnings = append(warnings, RuleWarning{Index: i, Kind: "duplicate", Message: "duplicate of earlier rule"})
 				continue
 			}
@@ -27,35 +28,39 @@ func AnalyzeRouting(cfg config.RoutingConfig) []RuleWarning {
 				warnings = append(warnings, RuleWarning{Index: i, Kind: "shadowed", Message: "earlier broader rule may shadow this rule"})
 			}
 		}
-		if strings.TrimSpace(rule.Match) == "" {
+		if rule.Match == "" {
 			warnings = append(warnings, RuleWarning{Index: i, Kind: "broad", Message: "rule matches all messages for this channel"})
 		}
 	}
 	return warnings
 }
 
-func sameRule(a, b config.ChannelRoutingRule) bool {
+func sameRule(a, b config.ChannelRoutingRule, mode string) bool {
 	aReplyBack := a.ReplyBack != nil && *a.ReplyBack
 	bReplyBack := b.ReplyBack != nil && *b.ReplyBack
 
-	return a.Channel == b.Channel &&
+	return sameChannel(a.Channel, b.Channel) &&
 		a.Match == b.Match &&
-		a.SessionMode == b.SessionMode &&
-		a.SessionID == b.SessionID &&
-		a.QueueMode == b.QueueMode &&
-		a.TitlePrefix == b.TitlePrefix &&
+		defaultString(a.SessionMode, mode) == defaultString(b.SessionMode, mode) &&
+		strings.TrimSpace(a.SessionID) == strings.TrimSpace(b.SessionID) &&
+		strings.TrimSpace(a.QueueMode) == strings.TrimSpace(b.QueueMode) &&
+		strings.TrimSpace(a.TitlePrefix) == strings.TrimSpace(b.TitlePrefix) &&
 		aReplyBack == bReplyBack
 }
 
 func shadows(a, b config.ChannelRoutingRule) bool {
-	if a.Channel != b.Channel {
+	if !sameChannel(a.Channel, b.Channel) {
 		return false
 	}
-	if strings.TrimSpace(a.Match) == "" && strings.TrimSpace(b.Match) != "" {
+	if a.Match == "" && b.Match != "" {
 		return true
 	}
-	if strings.TrimSpace(a.Match) != "" && strings.Contains(strings.TrimSpace(b.Match), strings.TrimSpace(a.Match)) {
+	if a.Match != "" && strings.Contains(b.Match, a.Match) {
 		return true
 	}
 	return false
+}
+
+func sameChannel(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 }

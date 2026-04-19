@@ -62,3 +62,46 @@ func TestAnalyzeRoutingFlagsDuplicateRules(t *testing.T) {
 		t.Fatalf("expected duplicate warning, got %#v", warnings[0])
 	}
 }
+
+func TestAnalyzeRoutingUsesRouterChannelAndDefaultModeSemantics(t *testing.T) {
+	warnings := AnalyzeRouting(config.RoutingConfig{
+		Mode: "shared",
+		Rules: []config.ChannelRoutingRule{
+			{
+				Channel: "Telegram ",
+				Match:   "deploy",
+			},
+			{
+				Channel:     "telegram",
+				Match:       "deploy",
+				SessionMode: "shared",
+			},
+		},
+	})
+
+	if len(warnings) != 1 {
+		t.Fatalf("expected one warning, got %#v", warnings)
+	}
+	if warnings[0].Kind != "duplicate" {
+		t.Fatalf("expected duplicate warning, got %#v", warnings[0])
+	}
+}
+
+func TestAnalyzeRoutingKeepsRawMatchSemantics(t *testing.T) {
+	warnings := AnalyzeRouting(config.RoutingConfig{
+		Rules: []config.ChannelRoutingRule{
+			{
+				Channel: "telegram",
+				Match:   " deploy",
+			},
+			{
+				Channel: "telegram",
+				Match:   "deploy now",
+			},
+		},
+	})
+
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings, got %#v", warnings)
+	}
+}
