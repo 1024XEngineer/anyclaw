@@ -1,6 +1,7 @@
 package channels
 
 import (
+	"errors"
 	"strings"
 
 	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
@@ -26,7 +27,9 @@ func streamWithMessageFallback(streamFn func(onChunk func(chunk string)) error, 
 	final := accumulated.String()
 	if err != nil {
 		if strings.TrimSpace(final) != "" {
-			_ = sendFinal(final + "\n\n[Error: " + err.Error() + "]")
+			if sendErr := sendFinal(final + "\n\n[Error: " + err.Error() + "]"); sendErr != nil {
+				return errors.Join(err, sendErr)
+			}
 		}
 		return err
 	}

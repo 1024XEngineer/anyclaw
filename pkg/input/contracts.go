@@ -2,6 +2,7 @@ package input
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 )
@@ -91,7 +92,9 @@ func (m *Manager) Run(ctx context.Context, handle InboundHandler) {
 			continue
 		}
 		go func(adapter Adapter) {
-			_ = adapter.Run(ctx, handle)
+			if err := adapter.Run(ctx, handle); err != nil {
+				log.Printf("input adapter %q exited with error: %v", adapter.Name(), err)
+			}
 		}(adapter)
 	}
 }
