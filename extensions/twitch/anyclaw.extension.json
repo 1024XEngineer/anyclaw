@@ -1,0 +1,34 @@
+{
+  "id": "twitch",
+  "name": "Twitch Channel",
+  "version": "1.0.0",
+  "description": "Twitch chat messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["twitch"],
+  "entrypoint": "twitch_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "channel": {
+        "type": "string",
+        "description": "Twitch channel name to monitor"
+      },
+      "oauth_token": {
+        "type": "string",
+        "description": "Twitch IRC OAuth token",
+        "sensitive": true
+      },
+      "client_id": {
+        "type": "string",
+        "description": "Twitch API client ID"
+      },
+      "client_secret": {
+        "type": "string",
+        "description": "Twitch API client secret",
+        "sensitive": true
+      }
+    },
+    "required": ["channel", "oauth_token"]
+  }
+}

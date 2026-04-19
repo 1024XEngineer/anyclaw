@@ -1,0 +1,25 @@
+{
+  "id": "signal",
+  "name": "Signal Channel",
+  "version": "1.0.0",
+  "description": "Signal messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["signal"],
+  "entrypoint": "signal_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "signal_url": {
+        "type": "string",
+        "description": "Signal REST API URL (signal-cli)",
+        "default": "http://localhost:8080"
+      },
+      "number": {
+        "type": "string",
+        "description": "Signal phone number with country code"
+      }
+    },
+    "required": ["number"]
+  }
+}

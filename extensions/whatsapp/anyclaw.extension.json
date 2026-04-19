@@ -1,0 +1,35 @@
+{
+  "id": "whatsapp",
+  "name": "WhatsApp Channel",
+  "version": "1.0.0",
+  "description": "WhatsApp messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["whatsapp"],
+  "entrypoint": "whatsapp_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "access_token": {
+        "type": "string",
+        "description": "WhatsApp Cloud API access token",
+        "sensitive": true
+      },
+      "phone_number_id": {
+        "type": "string",
+        "description": "WhatsApp phone number ID"
+      },
+      "verify_token": {
+        "type": "string",
+        "description": "Webhook verification token",
+        "sensitive": true
+      },
+      "app_secret": {
+        "type": "string",
+        "description": "Facebook app secret for webhook validation",
+        "sensitive": true
+      }
+    },
+    "required": ["access_token", "phone_number_id"]
+  }
+}
