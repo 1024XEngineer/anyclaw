@@ -72,6 +72,47 @@ func TestEnsureBootstrapDoesNotOverwriteExistingFiles(t *testing.T) {
 	}
 }
 
+func TestEnsureBootstrapRespectsLowercaseMemoryFallback(t *testing.T) {
+	dir := t.TempDir()
+	custom := "# memory\n\nKeep this value."
+	if err := os.WriteFile(filepath.Join(dir, "memory.md"), []byte(custom), 0o644); err != nil {
+		t.Fatalf("WriteFile(memory.md): %v", err)
+	}
+
+	if err := EnsureBootstrap(dir, BootstrapOptions{
+		AgentName:        "assistant",
+		AgentDescription: "Execution helper",
+	}); err != nil {
+		t.Fatalf("EnsureBootstrap: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "BOOTSTRAP.md")); err == nil {
+		t.Fatal("did not expect BOOTSTRAP.md when lowercase memory.md already exists")
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	memoryFiles := 0
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Name(), "memory.md") {
+			memoryFiles++
+		}
+	}
+	if memoryFiles != 1 {
+		t.Fatalf("expected exactly one memory file, got %d", memoryFiles)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "memory.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(memory.md): %v", err)
+	}
+	if string(data) != custom {
+		t.Fatalf("expected memory.md to be preserved, got %q", string(data))
+	}
+}
+
 func TestEnsureBootstrapAutoCompletesConfiguredWorkspaceAndPreservesExistingAnswers(t *testing.T) {
 	dir := t.TempDir()
 	opts := BootstrapOptions{

@@ -52,7 +52,7 @@ func EnsureBootstrap(dir string, opts BootstrapOptions) error {
 
 	existingBootstrap := false
 	for _, name := range bootstrapFileOrder {
-		if fileExists(filepath.Join(dir, name)) {
+		if bootstrapFileExists(dir, name) {
 			existingBootstrap = true
 			break
 		}
@@ -64,7 +64,7 @@ func EnsureBootstrap(dir string, opts BootstrapOptions) error {
 			continue
 		}
 		path := filepath.Join(dir, name)
-		if fileExists(path) {
+		if bootstrapFileExists(dir, name) {
 			continue
 		}
 		content, ok := templates[name]
@@ -151,15 +151,7 @@ func LoadBootstrapFiles(dir string, opts BootstrapOptions) ([]BootstrapFile, err
 
 	files := make([]BootstrapFile, 0, len(bootstrapFileOrder))
 	for _, name := range bootstrapFileOrder {
-		actualName := name
-		path := filepath.Join(dir, name)
-		if name == "MEMORY.md" && !fileExists(path) {
-			fallback := filepath.Join(dir, "memory.md")
-			if fileExists(fallback) {
-				path = fallback
-				actualName = "memory.md"
-			}
-		}
+		path, actualName := resolveBootstrapFilePath(dir, name)
 
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -192,6 +184,22 @@ func LoadBootstrapFiles(dir string, opts BootstrapOptions) ([]BootstrapFile, err
 	}
 
 	return files, nil
+}
+
+func bootstrapFileExists(dir string, name string) bool {
+	path, _ := resolveBootstrapFilePath(dir, name)
+	return fileExists(path)
+}
+
+func resolveBootstrapFilePath(dir string, name string) (string, string) {
+	path := filepath.Join(dir, name)
+	if name == "MEMORY.md" && !fileExists(path) {
+		fallback := filepath.Join(dir, "memory.md")
+		if fileExists(fallback) {
+			return fallback, "memory.md"
+		}
+	}
+	return path, name
 }
 
 func HasInjectedMemoryFile(files []BootstrapFile) bool {
