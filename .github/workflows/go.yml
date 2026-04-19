@@ -6,7 +6,6 @@ on:
       - "!dependabot/**"
       - "!xgopilot/**"
   pull_request:
-    branches: [ "**" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
