@@ -127,6 +127,8 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle InboundHandler) err
 			"thread_id":    threadID,
 			"message_id":   messageID,
 			"sender":       item.Envelope.SourceName,
+			"channel_type": signalChannelType(threadID),
+			"is_group":     boolString(threadID != ""),
 		}
 
 		audioURL, audioMIME, hasAudio := a.findAudioAttachment(item.Envelope.DataMessage.Attachments)
@@ -183,6 +185,13 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle InboundHandler) err
 		})
 	}
 	return nil
+}
+
+func signalChannelType(threadID string) string {
+	if strings.TrimSpace(threadID) != "" {
+		return "group"
+	}
+	return "private"
 }
 
 func (a *SignalAdapter) sendMessage(ctx context.Context, recipient string, text string) error {

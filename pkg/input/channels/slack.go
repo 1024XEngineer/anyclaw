@@ -113,6 +113,7 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 			continue
 		}
 		a.latestTS = msg.Ts
+		channelType, isGroup := slackConversationMetadata(a.config.DefaultChannel)
 
 		meta := map[string]string{
 			"channel":      "slack",
@@ -122,6 +123,8 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) erro
 			"message_id":   msg.Ts,
 			"sender":       msg.User,
 			"thread_id":    msg.ThreadTS,
+			"channel_type": channelType,
+			"is_group":     boolString(isGroup),
 		}
 
 		audioURL, audioMIME := a.findAudioFile(msg.Files)
@@ -192,6 +195,20 @@ func (a *SlackAdapter) sendMessage(ctx context.Context, text string, threadTS st
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("slack send failed: %s", resp.Status)
 	}
+
+	var result struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if !result.OK {
+		if strings.TrimSpace(result.Error) == "" {
+			return fmt.Errorf("slack send failed: api returned ok=false")
+		}
+		return fmt.Errorf("slack send failed: %s", result.Error)
+	}
 	return nil
 }
 
@@ -215,8 +232,12 @@ func (a *SlackAdapter) findAudioFile(files []struct {
 	return "", ""
 }
 
-func (a *SlackAdapter) sendMessageWithResult(ctx context.Context, text string) (string, error) {
-	body, _ := json.Marshal(map[string]any{"channel": a.config.DefaultChannel, "text": text})
+func (a *SlackAdapter) sendMessageWithResult(ctx context.Context, text string, threadTS string) (string, error) {
+	bodyMap := map[string]any{"channel": a.config.DefaultChannel, "text": text}
+	if strings.TrimSpace(threadTS) != "" {
+		bodyMap["thread_ts"] = threadTS
+	}
+	body, _ := json.Marshal(bodyMap)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/chat.postMessage", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -233,14 +254,18 @@ func (a *SlackAdapter) sendMessageWithResult(ctx context.Context, text string) (
 	}
 
 	var result struct {
-		OK bool   `json:"ok"`
-		Ts string `json:"ts"`
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+		Ts    string `json:"ts"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", err
 	}
-	if !result.OK || result.Ts == "" {
-		return "", nil
+	if !result.OK {
+		if strings.TrimSpace(result.Error) == "" {
+			return "", fmt.Errorf("slack send failed: api returned ok=false")
+		}
+		return "", fmt.Errorf("slack send failed: %s", result.Error)
 	}
 	return result.Ts, nil
 }
@@ -261,21 +286,36 @@ func (a *SlackAdapter) editMessage(ctx context.Context, ts string, text string) 
 		return nil
 	}
 	defer resp.Body.Close()
+	var result struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if !result.OK {
+		if strings.TrimSpace(result.Error) == "" {
+			return fmt.Errorf("slack update failed: api returned ok=false")
+		}
+		return fmt.Errorf("slack update failed: %s", result.Error)
+	}
 	return nil
 }
 
-func (a *SlackAdapter) sendStreamingMessage(ctx context.Context, streamFn func(onChunk func(chunk string)) error) error {
+func (a *SlackAdapter) sendStreamingMessage(ctx context.Context, threadTS string, streamFn func(onChunk func(chunk string)) error) error {
 	streamInterval := time.Duration(a.config.StreamInterval) * time.Millisecond
 	if streamInterval <= 0 {
 		streamInterval = 500 * time.Millisecond
 	}
 
-	initialTs, err := a.sendMessageWithResult(ctx, "\u200B")
+	initialTs, err := a.sendMessageWithResult(ctx, "\u200B", threadTS)
 	if err != nil {
 		return err
 	}
 	if initialTs == "" {
-		return streamFn(func(chunk string) {})
+		return streamWithMessageFallback(streamFn, func(final string) error {
+			return a.sendMessage(ctx, final, threadTS)
+		})
 	}
 
 	var accumulated strings.Builder
@@ -352,7 +392,8 @@ func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHan
 	defer resp.Body.Close()
 
 	var payload struct {
-		OK       bool `json:"ok"`
+		OK       bool   `json:"ok"`
+		Error    string `json:"error"`
 		Messages []struct {
 			Text     string `json:"text"`
 			Ts       string `json:"ts"`
@@ -363,6 +404,12 @@ func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHan
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return err
+	}
+	if !payload.OK {
+		if strings.TrimSpace(payload.Error) == "" {
+			return fmt.Errorf("slack history failed: api returned ok=false")
+		}
+		return fmt.Errorf("slack history failed: %s", payload.Error)
 	}
 
 	for i := len(payload.Messages) - 1; i >= 0; i-- {
@@ -375,6 +422,7 @@ func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHan
 		if strings.TrimSpace(msg.Text) == "" {
 			continue
 		}
+		channelType, isGroup := slackConversationMetadata(a.config.DefaultChannel)
 
 		meta := map[string]string{
 			"channel":      "slack",
@@ -384,10 +432,12 @@ func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHan
 			"message_id":   msg.Ts,
 			"sender":       msg.User,
 			"thread_id":    msg.ThreadTS,
+			"channel_type": channelType,
+			"is_group":     boolString(isGroup),
 		}
 
 		sessionID := ""
-		err := a.sendStreamingMessage(ctx, func(onChunk func(chunk string)) error {
+		err := a.sendStreamingMessage(ctx, msg.ThreadTS, func(onChunk func(chunk string)) error {
 			var err error
 			sessionID, err = handle(ctx, sessionID, msg.Text, meta, func(chunk string) error {
 				onChunk(chunk)
@@ -407,4 +457,23 @@ func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHan
 		})
 	}
 	return nil
+}
+
+func slackConversationMetadata(channelID string) (string, bool) {
+	channelID = strings.ToUpper(strings.TrimSpace(channelID))
+	switch {
+	case strings.HasPrefix(channelID, "D"):
+		return "dm", false
+	case channelID != "":
+		return "group", true
+	default:
+		return "", false
+	}
+}
+
+func boolString(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }

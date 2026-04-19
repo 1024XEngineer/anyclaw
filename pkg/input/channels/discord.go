@@ -27,6 +27,13 @@ type DiscordAdapter struct {
 	processed   map[string]time.Time
 }
 
+type discordGatewayPacket struct {
+	Op int             `json:"op"`
+	T  string          `json:"t"`
+	S  *int            `json:"s"`
+	D  json.RawMessage `json:"d"`
+}
+
 func (a *DiscordAdapter) VerifyInteraction(r *http.Request, body []byte) bool {
 	publicKeyHex := strings.TrimSpace(a.config.PublicKey)
 	if publicKeyHex == "" {
@@ -80,7 +87,17 @@ func (a *DiscordAdapter) HandleInteraction(ctx context.Context, body []byte, han
 			message = fmt.Sprintf("%v", opt.Value)
 		}
 	}
-	respSession, response, err := handle(ctx, "", message, map[string]string{"channel": "discord", "channel_id": payload.ChannelID, "guild_id": payload.GuildID, "user_id": payload.Member.User.ID, "username": payload.Member.User.Username, "reply_target": payload.ChannelID, "message_id": fmt.Sprintf("interaction:%d", time.Now().UnixNano())})
+	respSession, response, err := handle(ctx, "", message, map[string]string{
+		"channel":      "discord",
+		"channel_id":   payload.ChannelID,
+		"guild_id":     payload.GuildID,
+		"user_id":      payload.Member.User.ID,
+		"username":     payload.Member.User.Username,
+		"reply_target": payload.ChannelID,
+		"message_id":   fmt.Sprintf("interaction:%d", time.Now().UnixNano()),
+		"channel_type": discordChannelType(payload.GuildID),
+		"is_group":     boolString(strings.TrimSpace(payload.GuildID) != ""),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +172,15 @@ func (a *DiscordAdapter) Run(ctx context.Context, handle InboundHandler) error {
 }
 
 func (a *DiscordAdapter) runGatewayWS(ctx context.Context, handle InboundHandler) error {
+	return a.runGateway(ctx, func(ctx context.Context, packet discordGatewayPacket) error {
+		if packet.T == "MESSAGE_CREATE" || packet.T == "THREAD_CREATE" || packet.T == "TYPING_START" || packet.T == "PRESENCE_UPDATE" || packet.T == "INTERACTION_CREATE" {
+			return a.handleGatewayEvent(ctx, packet.T, packet.D, handle)
+		}
+		return nil
+	})
+}
+
+func (a *DiscordAdapter) runGateway(ctx context.Context, handlePacket func(context.Context, discordGatewayPacket) error) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://discord.com/api/gateway/bot", nil)
 	if err != nil {
 		return err
@@ -179,27 +205,114 @@ func (a *DiscordAdapter) runGatewayWS(ctx context.Context, handle InboundHandler
 		return err
 	}
 	defer conn.Close()
-	_ = conn.WriteJSON(map[string]any{"op": 2, "d": map[string]any{"token": a.config.BotToken, "intents": 4609, "properties": map[string]string{"$os": "windows", "$browser": "anyclaw", "$device": "anyclaw"}}})
-	for {
-		select {
-		case <-ctx.Done():
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
+
+	var writeMu sync.Mutex
+	send := func(payload map[string]any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.WriteJSON(payload)
+	}
+
+	var (
+		identified    bool
+		heartbeatStop chan struct{}
+		seqMu         sync.RWMutex
+		lastSeq       int
+		hasSeq        bool
+	)
+	defer func() {
+		if heartbeatStop != nil {
+			close(heartbeatStop)
+		}
+	}()
+
+	currentSeq := func() any {
+		seqMu.RLock()
+		defer seqMu.RUnlock()
+		if !hasSeq {
 			return nil
-		default:
 		}
-		var packet struct {
-			Op int             `json:"op"`
-			T  string          `json:"t"`
-			D  json.RawMessage `json:"d"`
-		}
+		return lastSeq
+	}
+
+	for {
+		var packet discordGatewayPacket
 		if err := conn.ReadJSON(&packet); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
+		if packet.S != nil {
+			seqMu.Lock()
+			lastSeq = *packet.S
+			hasSeq = true
+			seqMu.Unlock()
+		}
 		if packet.Op == 10 {
-			_ = conn.WriteJSON(map[string]any{"op": 1, "d": nil})
+			var hello struct {
+				HeartbeatInterval int `json:"heartbeat_interval"`
+			}
+			if err := json.Unmarshal(packet.D, &hello); err != nil {
+				return err
+			}
+			if hello.HeartbeatInterval <= 0 {
+				return fmt.Errorf("discord heartbeat interval missing")
+			}
+			if heartbeatStop != nil {
+				close(heartbeatStop)
+			}
+			heartbeatStop = make(chan struct{})
+			go func(interval time.Duration, stop <-chan struct{}) {
+				ticker := time.NewTicker(interval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-stop:
+						return
+					case <-ticker.C:
+						_ = send(map[string]any{"op": 1, "d": currentSeq()})
+					}
+				}
+			}(time.Duration(hello.HeartbeatInterval)*time.Millisecond, heartbeatStop)
+			if err := send(map[string]any{"op": 1, "d": currentSeq()}); err != nil {
+				return err
+			}
+			if !identified {
+				if err := send(map[string]any{
+					"op": 2,
+					"d": map[string]any{
+						"token":   a.config.BotToken,
+						"intents": 4609,
+						"properties": map[string]string{
+							"$os":      "windows",
+							"$browser": "anyclaw",
+							"$device":  "anyclaw",
+						},
+					},
+				}); err != nil {
+					return err
+				}
+				identified = true
+			}
 			continue
 		}
-		if packet.T == "MESSAGE_CREATE" || packet.T == "THREAD_CREATE" || packet.T == "TYPING_START" || packet.T == "PRESENCE_UPDATE" || packet.T == "INTERACTION_CREATE" {
-			_ = a.handleGatewayEvent(ctx, packet.T, packet.D, handle)
+		if packet.Op == 11 {
+			continue
+		}
+		if packet.Op == 7 {
+			return fmt.Errorf("discord requested reconnect")
+		}
+		if handlePacket != nil {
+			if err := handlePacket(ctx, packet); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -246,6 +359,8 @@ func (a *DiscordAdapter) handleGatewayEvent(ctx context.Context, eventType strin
 			"reply_target": msg.ChannelID,
 			"message_id":   msg.ID,
 			"sender":       msg.Author.Username,
+			"channel_type": discordChannelType(msg.GuildID),
+			"is_group":     boolString(strings.TrimSpace(msg.GuildID) != ""),
 		}
 
 		audioURL, audioMIME := a.findAudioAttachment(msg.Attachments)
@@ -262,7 +377,7 @@ func (a *DiscordAdapter) handleGatewayEvent(ctx context.Context, eventType strin
 				return err
 			}
 			_ = respSession
-			return a.sendMessage(ctx, msg.ChannelID, "", response)
+			return a.sendMessage(ctx, msg.ChannelID, strings.TrimSpace(msg.MessageReference.MessageID), response)
 		}
 
 		if strings.TrimSpace(msg.Content) == "" {
@@ -274,7 +389,7 @@ func (a *DiscordAdapter) handleGatewayEvent(ctx context.Context, eventType strin
 			return err
 		}
 		_ = respSession
-		return a.sendMessage(ctx, msg.ChannelID, "", response)
+		return a.sendMessage(ctx, msg.ChannelID, strings.TrimSpace(msg.MessageReference.MessageID), response)
 	}
 	return nil
 }
@@ -329,10 +444,11 @@ type discordMessageReference struct {
 }
 
 type discordPolledMessage struct {
-	ID      string `json:"id"`
-	Content string `json:"content"`
-	GuildID string `json:"guild_id"`
-	Author  struct {
+	ID        string `json:"id"`
+	ChannelID string `json:"channel_id"`
+	Content   string `json:"content"`
+	GuildID   string `json:"guild_id"`
+	Author    struct {
 		ID       string `json:"id"`
 		Username string `json:"username"`
 		Bot      bool   `json:"bot"`
@@ -375,16 +491,23 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 			continue
 		}
 		a.latestID = msg.ID
+		targetChannel := strings.TrimSpace(msg.ChannelID)
+		if targetChannel == "" {
+			targetChannel = strings.TrimSpace(a.config.DefaultChannel)
+		}
+		replyMessageID := strings.TrimSpace(msg.MessageReference.MessageID)
 
 		meta := map[string]string{
 			"channel":      "discord",
-			"channel_id":   a.config.DefaultChannel,
+			"channel_id":   targetChannel,
 			"guild_id":     msg.GuildID,
 			"user_id":      msg.Author.ID,
 			"username":     msg.Author.Username,
-			"reply_target": a.config.DefaultChannel,
+			"reply_target": targetChannel,
 			"message_id":   msg.ID,
 			"sender":       msg.Author.Username,
+			"channel_type": discordChannelType(msg.GuildID),
+			"is_group":     boolString(strings.TrimSpace(msg.GuildID) != ""),
 		}
 
 		audioURL, audioMIME := a.findAudioAttachment(msg.Attachments)
@@ -396,17 +519,11 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 				meta["caption"] = strings.TrimSpace(msg.Content)
 			}
 
-			threadID := strings.TrimSpace(msg.MessageReference.MessageID)
-			replyTarget := a.config.DefaultChannel
-			if threadID != "" {
-				replyTarget = threadID
-			}
-
 			sessionID, response, err := handle(ctx, "", audioURL, meta)
 			if err != nil {
 				return err
 			}
-			if err := a.sendMessage(ctx, replyTarget, threadID, response); err != nil {
+			if err := a.sendMessage(ctx, targetChannel, replyMessageID, response); err != nil {
 				return err
 			}
 			a.base.MarkActivity()
@@ -425,16 +542,11 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 			continue
 		}
 
-		threadID := strings.TrimSpace(msg.MessageReference.MessageID)
-		replyTarget := a.config.DefaultChannel
-		if threadID != "" {
-			replyTarget = threadID
-		}
 		sessionID, response, err := handle(ctx, "", msg.Content, meta)
 		if err != nil {
 			return err
 		}
-		if err := a.sendMessage(ctx, replyTarget, threadID, response); err != nil {
+		if err := a.sendMessage(ctx, targetChannel, replyMessageID, response); err != nil {
 			return err
 		}
 		a.base.MarkActivity()
@@ -448,14 +560,14 @@ func (a *DiscordAdapter) pollOnce(ctx context.Context, handle InboundHandler) er
 	return nil
 }
 
-func (a *DiscordAdapter) sendMessage(ctx context.Context, target string, threadID string, text string) error {
+func (a *DiscordAdapter) sendMessage(ctx context.Context, target string, replyMessageID string, text string) error {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		target = strings.TrimSpace(a.config.DefaultChannel)
 	}
 	bodyMap := map[string]any{"content": text}
-	if strings.TrimSpace(threadID) != "" && threadID != target {
-		bodyMap["message_reference"] = map[string]any{"message_id": threadID}
+	if strings.TrimSpace(replyMessageID) != "" {
+		bodyMap["message_reference"] = map[string]any{"message_id": replyMessageID}
 	}
 	body, _ := json.Marshal(bodyMap)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/channels/%s/messages", a.apiBaseURL, target), bytes.NewReader(body))
@@ -494,18 +606,20 @@ func (a *DiscordAdapter) seen(id string) bool {
 	return false
 }
 
-func (a *DiscordAdapter) sendStreamingMessage(ctx context.Context, target string, threadID string, streamFn func(onChunk func(chunk string)) error) error {
+func (a *DiscordAdapter) sendStreamingMessage(ctx context.Context, target string, replyMessageID string, streamFn func(onChunk func(chunk string)) error) error {
 	streamInterval := time.Duration(a.config.StreamInterval) * time.Millisecond
 	if streamInterval <= 0 {
 		streamInterval = 500 * time.Millisecond
 	}
 
-	initialMsgID, err := a.sendMessageWithResult(ctx, target, threadID, "\u200B")
+	initialMsgID, err := a.sendMessageWithResult(ctx, target, replyMessageID, "\u200B")
 	if err != nil {
 		return err
 	}
 	if initialMsgID == "" {
-		return streamFn(func(chunk string) {})
+		return streamWithMessageFallback(streamFn, func(final string) error {
+			return a.sendMessage(ctx, target, replyMessageID, final)
+		})
 	}
 
 	var accumulated strings.Builder
@@ -544,14 +658,14 @@ func (a *DiscordAdapter) sendStreamingMessage(ctx context.Context, target string
 	return nil
 }
 
-func (a *DiscordAdapter) sendMessageWithResult(ctx context.Context, target string, threadID string, text string) (string, error) {
+func (a *DiscordAdapter) sendMessageWithResult(ctx context.Context, target string, replyMessageID string, text string) (string, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		target = strings.TrimSpace(a.config.DefaultChannel)
 	}
 	bodyMap := map[string]any{"content": text}
-	if strings.TrimSpace(threadID) != "" && threadID != target {
-		bodyMap["message_reference"] = map[string]any{"message_id": threadID}
+	if strings.TrimSpace(replyMessageID) != "" {
+		bodyMap["message_reference"] = map[string]any{"message_id": replyMessageID}
 	}
 	body, _ := json.Marshal(bodyMap)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/channels/%s/messages", a.apiBaseURL, target), bytes.NewReader(body))
@@ -640,53 +754,12 @@ func (a *DiscordAdapter) RunStream(ctx context.Context, handle StreamChunkHandle
 }
 
 func (a *DiscordAdapter) runGatewayWSStream(ctx context.Context, handle StreamChunkHandler) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://discord.com/api/gateway/bot", nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bot "+a.config.BotToken)
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	var gateway struct {
-		URL string `json:"url"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&gateway); err != nil {
-		return err
-	}
-	if strings.TrimSpace(gateway.URL) == "" {
-		return fmt.Errorf("discord gateway URL missing")
-	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, gateway.URL+"?v=10&encoding=json", nil)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	_ = conn.WriteJSON(map[string]any{"op": 2, "d": map[string]any{"token": a.config.BotToken, "intents": 4609, "properties": map[string]string{"$os": "windows", "$browser": "anyclaw", "$device": "anyclaw"}}})
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
-		var packet struct {
-			Op int             `json:"op"`
-			T  string          `json:"t"`
-			D  json.RawMessage `json:"d"`
-		}
-		if err := conn.ReadJSON(&packet); err != nil {
-			return err
-		}
-		if packet.Op == 10 {
-			_ = conn.WriteJSON(map[string]any{"op": 1, "d": nil})
-			continue
-		}
+	return a.runGateway(ctx, func(ctx context.Context, packet discordGatewayPacket) error {
 		if packet.T == "MESSAGE_CREATE" || packet.T == "THREAD_CREATE" {
-			_ = a.handleGatewayEventStream(ctx, packet.T, packet.D, handle)
+			return a.handleGatewayEventStream(ctx, packet.T, packet.D, handle)
 		}
-	}
+		return nil
+	})
 }
 
 func (a *DiscordAdapter) handleGatewayEventStream(ctx context.Context, eventType string, raw json.RawMessage, handle StreamChunkHandler) error {
@@ -725,10 +798,13 @@ func (a *DiscordAdapter) handleGatewayEventStream(ctx context.Context, eventType
 			"reply_target": msg.ChannelID,
 			"message_id":   msg.ID,
 			"sender":       msg.Author.Username,
+			"channel_type": discordChannelType(msg.GuildID),
+			"is_group":     boolString(strings.TrimSpace(msg.GuildID) != ""),
 		}
+		replyMessageID := strings.TrimSpace(msg.MessageReference.MessageID)
 
 		sessionID := ""
-		err := a.sendStreamingMessage(ctx, msg.ChannelID, "", func(onChunk func(chunk string)) error {
+		err := a.sendStreamingMessage(ctx, msg.ChannelID, replyMessageID, func(onChunk func(chunk string)) error {
 			var err error
 			sessionID, err = handle(ctx, sessionID, msg.Content, meta, func(chunk string) error {
 				onChunk(chunk)
@@ -772,6 +848,11 @@ func (a *DiscordAdapter) pollOnceStream(ctx context.Context, handle StreamChunkH
 			continue
 		}
 		a.latestID = msg.ID
+		targetChannel := strings.TrimSpace(msg.ChannelID)
+		if targetChannel == "" {
+			targetChannel = strings.TrimSpace(a.config.DefaultChannel)
+		}
+		replyMessageID := strings.TrimSpace(msg.MessageReference.MessageID)
 
 		if strings.TrimSpace(msg.Content) == "" {
 			continue
@@ -779,23 +860,20 @@ func (a *DiscordAdapter) pollOnceStream(ctx context.Context, handle StreamChunkH
 
 		meta := map[string]string{
 			"channel":      "discord",
-			"channel_id":   a.config.DefaultChannel,
+			"channel_id":   targetChannel,
 			"guild_id":     msg.GuildID,
 			"user_id":      msg.Author.ID,
 			"username":     msg.Author.Username,
-			"reply_target": a.config.DefaultChannel,
+			"reply_target": targetChannel,
 			"message_id":   msg.ID,
 			"sender":       msg.Author.Username,
+			"channel_type": discordChannelType(msg.GuildID),
+			"is_group":     boolString(strings.TrimSpace(msg.GuildID) != ""),
 		}
 
-		threadID := strings.TrimSpace(msg.MessageReference.MessageID)
-		replyTarget := a.config.DefaultChannel
-		if threadID != "" {
-			replyTarget = threadID
-		}
 		sessionID := ""
 
-		err := a.sendStreamingMessage(ctx, replyTarget, threadID, func(onChunk func(chunk string)) error {
+		err := a.sendStreamingMessage(ctx, targetChannel, replyMessageID, func(onChunk func(chunk string)) error {
 			var err error
 			sessionID, err = handle(ctx, sessionID, msg.Content, meta, func(chunk string) error {
 				onChunk(chunk)
@@ -816,4 +894,11 @@ func (a *DiscordAdapter) pollOnceStream(ctx context.Context, handle StreamChunkH
 		})
 	}
 	return nil
+}
+
+func discordChannelType(guildID string) string {
+	if strings.TrimSpace(guildID) != "" {
+		return "guild"
+	}
+	return "private"
 }

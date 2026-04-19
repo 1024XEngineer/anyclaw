@@ -287,23 +287,17 @@ func (p *ChannelPolicy) DefaultDenyDM() bool {
 func (p *ChannelPolicy) Wrap(handler InboundHandler) InboundHandler {
 	return func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
 		userID := meta["user_id"]
-		channelType := meta["channel_type"]
-		isGroup := meta["is_group"] == "true"
-		isGuild := meta["guild_id"] != ""
-		mentioned := isMentioned(message, []string{meta["bot_user_id"]})
+		channelType, isGroup, groupID := inferChannelPolicyContext(meta)
+		mentioned := isMentioned(message, mentionIDsForPolicy(meta))
 
-		if isGroup || isGuild {
-			if !p.AllowGroup(userID, meta["guild_id"], mentioned) {
+		if isGroup {
+			if !p.AllowGroup(userID, groupID, mentioned) {
 				return sessionID, "", fmt.Errorf("user %s blocked by group policy", userID)
 			}
-		} else if channelType == "dm" || channelType == "private" {
+		} else if isDirectChannelPolicyType(channelType) {
 			if !p.AllowDM(userID) {
 				return sessionID, "", fmt.Errorf("user %s blocked by DM policy", userID)
 			}
-		}
-
-		if len(p.allowFrom) > 0 && !p.IsUserAllowed(userID) {
-			return sessionID, "", fmt.Errorf("user %s not in allow_from list", userID)
 		}
 
 		return handler(ctx, sessionID, message, meta)
@@ -313,27 +307,130 @@ func (p *ChannelPolicy) Wrap(handler InboundHandler) InboundHandler {
 func (p *ChannelPolicy) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
 	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
 		userID := meta["user_id"]
-		channelType := meta["channel_type"]
-		isGroup := meta["is_group"] == "true"
-		isGuild := meta["guild_id"] != ""
-		mentioned := isMentioned(message, []string{meta["bot_user_id"]})
+		channelType, isGroup, groupID := inferChannelPolicyContext(meta)
+		mentioned := isMentioned(message, mentionIDsForPolicy(meta))
 
-		if isGroup || isGuild {
-			if !p.AllowGroup(userID, meta["guild_id"], mentioned) {
+		if isGroup {
+			if !p.AllowGroup(userID, groupID, mentioned) {
 				return sessionID, fmt.Errorf("user %s blocked by group policy", userID)
 			}
-		} else if channelType == "dm" || channelType == "private" {
+		} else if isDirectChannelPolicyType(channelType) {
 			if !p.AllowDM(userID) {
 				return sessionID, fmt.Errorf("user %s blocked by DM policy", userID)
 			}
 		}
 
-		if len(p.allowFrom) > 0 && !p.IsUserAllowed(userID) {
-			return sessionID, fmt.Errorf("user %s not in allow_from list", userID)
-		}
-
 		return handler(ctx, sessionID, message, meta, onChunk)
 	}
+}
+
+func inferChannelPolicyContext(meta map[string]string) (string, bool, string) {
+	channelType := strings.ToLower(strings.TrimSpace(meta["channel_type"]))
+	isGroup := strings.EqualFold(strings.TrimSpace(meta["is_group"]), "true")
+	groupID := strings.TrimSpace(meta["guild_id"])
+	if groupID == "" {
+		groupID = strings.TrimSpace(meta["thread_id"])
+	}
+
+	switch strings.ToLower(strings.TrimSpace(meta["channel"])) {
+	case "discord":
+		if channelType == "" {
+			if strings.TrimSpace(meta["guild_id"]) != "" {
+				channelType = "guild"
+				isGroup = true
+			} else {
+				channelType = "private"
+			}
+		}
+	case "slack":
+		if channelType == "" {
+			channelID := strings.ToUpper(strings.TrimSpace(meta["channel_id"]))
+			if strings.HasPrefix(channelID, "D") {
+				channelType = "dm"
+			} else if channelID != "" {
+				channelType = "group"
+				isGroup = true
+				if groupID == "" {
+					groupID = channelID
+				}
+			}
+		}
+	case "telegram":
+		chatID := strings.TrimSpace(meta["chat_id"])
+		if channelType == "" {
+			chatType := strings.ToLower(strings.TrimSpace(meta["chat_type"]))
+			switch chatType {
+			case "private":
+				channelType = "private"
+			case "group", "supergroup", "channel":
+				channelType = chatType
+				isGroup = true
+			default:
+				switch {
+				case strings.HasPrefix(chatID, "-"):
+					channelType = "group"
+					isGroup = true
+				case chatID != "" && chatID == strings.TrimSpace(meta["user_id"]):
+					channelType = "private"
+				}
+			}
+		}
+		if groupID == "" && isGroup {
+			groupID = chatID
+		}
+	case "signal":
+		if channelType == "" {
+			if strings.TrimSpace(meta["thread_id"]) != "" {
+				channelType = "group"
+				isGroup = true
+			} else {
+				channelType = "private"
+			}
+		}
+	}
+
+	if !isGroup {
+		switch channelType {
+		case "group", "supergroup", "guild", "channel":
+			isGroup = true
+		}
+	}
+
+	if groupID == "" && isGroup {
+		if id := strings.TrimSpace(meta["chat_id"]); id != "" {
+			groupID = id
+		} else if id := strings.TrimSpace(meta["channel_id"]); id != "" {
+			groupID = id
+		}
+	}
+
+	if channelType == "" && !isGroup {
+		channelType = "private"
+	}
+
+	return channelType, isGroup, groupID
+}
+
+func isDirectChannelPolicyType(channelType string) bool {
+	switch channelType {
+	case "dm", "private", "direct", "im":
+		return true
+	default:
+		return false
+	}
+}
+
+func mentionIDsForPolicy(meta map[string]string) []string {
+	result := make([]string, 0, 4)
+	if id := strings.TrimSpace(meta["bot_user_id"]); id != "" {
+		result = append(result, id)
+	}
+	for _, rawID := range strings.Split(strings.TrimSpace(meta["bot_mention_ids"]), ",") {
+		if id := strings.TrimSpace(rawID); id != "" {
+			result = append(result, id)
+		}
+	}
+	return result
 }
 
 type SecurityAuditResult struct {

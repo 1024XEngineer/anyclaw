@@ -38,7 +38,7 @@ func (a *TelegramAdapter) Name() string {
 }
 
 func (a *TelegramAdapter) Enabled() bool {
-	return a.config.Enabled && a.config.BotToken != "" && (strings.TrimSpace(a.config.ChatID) != "" || true)
+	return a.config.Enabled && strings.TrimSpace(a.config.BotToken) != ""
 }
 
 func (a *TelegramAdapter) Status() Status {
@@ -86,14 +86,16 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage InboundHandle
 	defer resp.Body.Close()
 
 	var payload struct {
-		OK     bool `json:"ok"`
-		Result []struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      []struct {
 			UpdateID int64 `json:"update_id"`
 			Message  struct {
 				Text    string `json:"text"`
 				Caption string `json:"caption"`
 				Chat    struct {
-					ID int64 `json:"id"`
+					ID   int64  `json:"id"`
+					Type string `json:"type"`
 				} `json:"chat"`
 				From struct {
 					Username string `json:"username"`
@@ -124,6 +126,12 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage InboundHandle
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return err
 	}
+	if !payload.OK {
+		if strings.TrimSpace(payload.Description) == "" {
+			return fmt.Errorf("telegram getUpdates failed: api returned ok=false")
+		}
+		return fmt.Errorf("telegram getUpdates failed: %s", payload.Description)
+	}
 
 	for _, update := range payload.Result {
 		a.offset = update.UpdateID + 1
@@ -135,11 +143,17 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage InboundHandle
 		text := strings.TrimSpace(update.Message.Text)
 		caption := strings.TrimSpace(update.Message.Caption)
 		username := update.Message.From.Username
+		userID := strconv.FormatInt(update.Message.From.ID, 10)
 		messageID := strconv.FormatInt(update.UpdateID, 10)
+		channelType, isGroup := telegramConversationMetadata(update.Message.Chat.Type, update.Message.Chat.ID, update.Message.From.ID)
 
 		meta := map[string]string{
 			"channel":      "telegram",
 			"chat_id":      chatID,
+			"chat_type":    update.Message.Chat.Type,
+			"channel_type": channelType,
+			"is_group":     boolString(isGroup),
+			"user_id":      userID,
 			"username":     username,
 			"reply_target": chatID,
 			"message_id":   messageID,
@@ -240,8 +254,9 @@ func (a *TelegramAdapter) getFileURL(ctx context.Context, fileID string) (string
 	defer resp.Body.Close()
 
 	var result struct {
-		OK     bool `json:"ok"`
-		Result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
 			FileID   string `json:"file_id"`
 			FileSize int    `json:"file_size"`
 			FilePath string `json:"file_path"`
@@ -251,6 +266,9 @@ func (a *TelegramAdapter) getFileURL(ctx context.Context, fileID string) (string
 		return "", err
 	}
 	if !result.OK || result.Result.FilePath == "" {
+		if strings.TrimSpace(result.Description) != "" {
+			return "", fmt.Errorf("telegram: %s", result.Description)
+		}
 		return "", fmt.Errorf("telegram: failed to get file URL for %s", fileID)
 	}
 
@@ -280,6 +298,20 @@ func (a *TelegramAdapter) sendMessage(ctx context.Context, chatID string, text s
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram send failed: %s", resp.Status)
 	}
+
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if !result.OK {
+		if strings.TrimSpace(result.Description) == "" {
+			return fmt.Errorf("telegram send failed: api returned ok=false")
+		}
+		return fmt.Errorf("telegram send failed: %s", result.Description)
+	}
 	return nil
 }
 
@@ -294,7 +326,9 @@ func (a *TelegramAdapter) sendStreamingMessage(ctx context.Context, chatID strin
 		return err
 	}
 	if initialMsgID == "" {
-		return streamFn(func(chunk string) {})
+		return streamWithMessageFallback(streamFn, func(final string) error {
+			return a.sendMessage(ctx, chatID, final)
+		})
 	}
 
 	var accumulated strings.Builder
@@ -352,8 +386,9 @@ func (a *TelegramAdapter) sendMessageWithResult(ctx context.Context, chatID stri
 	}
 
 	var result struct {
-		OK     bool `json:"ok"`
-		Result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
 			MessageID int `json:"message_id"`
 		} `json:"result"`
 	}
@@ -361,7 +396,10 @@ func (a *TelegramAdapter) sendMessageWithResult(ctx context.Context, chatID stri
 		return "", err
 	}
 	if !result.OK {
-		return "", nil
+		if strings.TrimSpace(result.Description) == "" {
+			return "", fmt.Errorf("telegram send failed: api returned ok=false")
+		}
+		return "", fmt.Errorf("telegram send failed: %s", result.Description)
 	}
 	return strconv.Itoa(result.Result.MessageID), nil
 }
@@ -388,6 +426,19 @@ func (a *TelegramAdapter) editMessage(ctx context.Context, chatID string, messag
 		return nil
 	}
 	defer resp.Body.Close()
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if !result.OK {
+		if strings.TrimSpace(result.Description) == "" {
+			return fmt.Errorf("telegram edit failed: api returned ok=false")
+		}
+		return fmt.Errorf("telegram edit failed: %s", result.Description)
+	}
 	return nil
 }
 
@@ -430,13 +481,15 @@ func (a *TelegramAdapter) pollOnceStream(ctx context.Context, handle StreamChunk
 	defer resp.Body.Close()
 
 	var payload struct {
-		OK     bool `json:"ok"`
-		Result []struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      []struct {
 			UpdateID int64 `json:"update_id"`
 			Message  struct {
 				Text string `json:"text"`
 				Chat struct {
-					ID int64 `json:"id"`
+					ID   int64  `json:"id"`
+					Type string `json:"type"`
 				} `json:"chat"`
 				From struct {
 					Username string `json:"username"`
@@ -447,6 +500,12 @@ func (a *TelegramAdapter) pollOnceStream(ctx context.Context, handle StreamChunk
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return err
+	}
+	if !payload.OK {
+		if strings.TrimSpace(payload.Description) == "" {
+			return fmt.Errorf("telegram getUpdates failed: api returned ok=false")
+		}
+		return fmt.Errorf("telegram getUpdates failed: %s", payload.Description)
 	}
 
 	for _, update := range payload.Result {
@@ -462,11 +521,17 @@ func (a *TelegramAdapter) pollOnceStream(ctx context.Context, handle StreamChunk
 		}
 
 		username := update.Message.From.Username
+		userID := strconv.FormatInt(update.Message.From.ID, 10)
 		messageID := strconv.FormatInt(update.UpdateID, 10)
+		channelType, isGroup := telegramConversationMetadata(update.Message.Chat.Type, update.Message.Chat.ID, update.Message.From.ID)
 
 		meta := map[string]string{
 			"channel":      "telegram",
 			"chat_id":      chatID,
+			"chat_type":    update.Message.Chat.Type,
+			"channel_type": channelType,
+			"is_group":     boolString(isGroup),
+			"user_id":      userID,
 			"username":     username,
 			"reply_target": chatID,
 			"message_id":   messageID,
@@ -496,4 +561,21 @@ func (a *TelegramAdapter) pollOnceStream(ctx context.Context, handle StreamChunk
 		})
 	}
 	return nil
+}
+
+func telegramConversationMetadata(chatType string, chatID int64, userID int64) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(chatType))
+	switch normalized {
+	case "private":
+		return "private", false
+	case "group", "supergroup", "channel":
+		return normalized, true
+	}
+	if chatID < 0 {
+		return "group", true
+	}
+	if userID != 0 && chatID == userID {
+		return "private", false
+	}
+	return "", false
 }

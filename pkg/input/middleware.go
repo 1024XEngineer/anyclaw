@@ -133,9 +133,17 @@ func (cc *ChannelCommands) Wrap(handler InboundHandler) InboundHandler {
 
 func (cc *ChannelCommands) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
 	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
-		_, handled, err := cc.Handle(ctx, message, meta)
+		result, handled, err := cc.Handle(ctx, message, meta)
 		if handled {
-			return sessionID, err
+			if err != nil {
+				return sessionID, err
+			}
+			if strings.TrimSpace(result) != "" {
+				if chunkErr := onChunk(result); chunkErr != nil {
+					return sessionID, chunkErr
+				}
+			}
+			return sessionID, nil
 		}
 		return handler(ctx, sessionID, message, meta, onChunk)
 	}
@@ -234,6 +242,7 @@ func (mg *MentionGate) Wrap(handler InboundHandler) InboundHandler {
 			cleanMessage = message
 		}
 		meta["bot_user_id"] = botUserID
+		meta["bot_mention_ids"] = strings.Join(mentionIDs, ",")
 		return handler(ctx, sessionID, cleanMessage, meta)
 	}
 }
@@ -267,6 +276,7 @@ func (mg *MentionGate) WrapStream(handler StreamChunkHandler) StreamChunkHandler
 			cleanMessage = message
 		}
 		meta["bot_user_id"] = botUserID
+		meta["bot_mention_ids"] = strings.Join(mentionIDs, ",")
 		return handler(ctx, sessionID, cleanMessage, meta, onChunk)
 	}
 }
