@@ -96,9 +96,8 @@ func (d *DualMemory) Delete(id string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	sqliteErr := d.sqlite.Delete(id)
-	if sqliteErr != nil {
-		return sqliteErr
+	if err := d.sqlite.Delete(id); err != nil {
+		return err
 	}
 
 	if d.syncOnWrite {

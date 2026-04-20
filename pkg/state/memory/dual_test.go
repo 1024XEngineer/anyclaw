@@ -169,6 +169,15 @@ func TestDualMemoryDelete(t *testing.T) {
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries after delete, got %d", len(entries))
 	}
+
+	fileEntries, err := dm.file.List()
+	if err != nil {
+		t.Fatalf("failed to list file backend entries: %v", err)
+	}
+
+	if len(fileEntries) != 0 {
+		t.Errorf("expected 0 file backend entries after delete, got %d", len(fileEntries))
+	}
 }
 
 func TestDualMemoryAddKeepsFileAndSQLiteEntriesAligned(t *testing.T) {
