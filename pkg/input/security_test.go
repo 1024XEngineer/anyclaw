@@ -2,8 +2,11 @@ package input
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
 func TestChannelPolicyWrapAllowsGroupMessagesWhenOnlyDMAllowListIsConfigured(t *testing.T) {
@@ -52,5 +55,21 @@ func TestChannelPolicyWrapAppliesDMPolicyToTelegramPrivateChatFallback(t *testin
 	}
 	if !strings.Contains(err.Error(), "blocked by DM policy") {
 		t.Fatalf("expected DM policy error, got %v", err)
+	}
+}
+
+func TestChannelPolicyFromConfigAllowsExplicitFalseOverrides(t *testing.T) {
+	var cfg config.ChannelSecurityConfig
+	if err := json.Unmarshal([]byte(`{"mention_gate":false,"default_deny_dm":false}`), &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+
+	policy := ChannelPolicyFromConfig(cfg)
+
+	if policy.MentionGateEnabled() {
+		t.Fatal("expected mention gate to respect explicit false override")
+	}
+	if policy.DefaultDenyDM() {
+		t.Fatal("expected default_deny_dm to respect explicit false override")
 	}
 }

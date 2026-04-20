@@ -178,19 +178,16 @@ func (mg *MentionGate) ShouldProcess(text string, meta map[string]string) bool {
 		return true
 	}
 
-	channelType := meta["channel_type"]
-	isGroup := meta["is_group"] == "true"
-	isGuild := meta["guild_id"] != ""
-
-	if channelType == "dm" || channelType == "private" {
+	channelType, isGroup, _ := inferChannelPolicyContext(meta)
+	if isDirectChannelPolicyType(channelType) {
 		return true
 	}
 
-	if !isGroup && !isGuild {
-		return true
+	if isGroup {
+		return false
 	}
 
-	return false
+	return true
 }
 
 func (mg *MentionGate) StripMention(text string) string {
@@ -225,11 +222,8 @@ func (mg *MentionGate) Wrap(handler InboundHandler) InboundHandler {
 			return handler(ctx, sessionID, message, meta)
 		}
 
-		channelType := meta["channel_type"]
-		isGroup := meta["is_group"] == "true"
-		isGuild := meta["guild_id"] != ""
-
-		if channelType == "dm" || channelType == "private" || (!isGroup && !isGuild) {
+		channelType, isGroup, _ := inferChannelPolicyContext(meta)
+		if isDirectChannelPolicyType(channelType) || !isGroup {
 			return handler(ctx, sessionID, message, meta)
 		}
 
@@ -259,11 +253,8 @@ func (mg *MentionGate) WrapStream(handler StreamChunkHandler) StreamChunkHandler
 			return handler(ctx, sessionID, message, meta, onChunk)
 		}
 
-		channelType := meta["channel_type"]
-		isGroup := meta["is_group"] == "true"
-		isGuild := meta["guild_id"] != ""
-
-		if channelType == "dm" || channelType == "private" || (!isGroup && !isGuild) {
+		channelType, isGroup, _ := inferChannelPolicyContext(meta)
+		if isDirectChannelPolicyType(channelType) || !isGroup {
 			return handler(ctx, sessionID, message, meta, onChunk)
 		}
 

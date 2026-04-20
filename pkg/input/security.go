@@ -89,12 +89,12 @@ func ChannelPolicyFromConfig(cfg config.ChannelSecurityConfig) *ChannelPolicy {
 	if cfg.PairingTTLHours > 0 {
 		policy.pairingTTL = time.Duration(cfg.PairingTTLHours) * time.Hour
 	}
-	if cfg.MentionGate {
-		policy.mentionGate = true
+	if cfg.MentionGateSet() {
+		policy.mentionGate = cfg.MentionGate
 	}
 	policy.riskAcknowledged = cfg.RiskAcknowledged
-	if cfg.DefaultDenyDM {
-		policy.defaultDenyDM = true
+	if cfg.DefaultDenyDMSet() {
+		policy.defaultDenyDM = cfg.DefaultDenyDM
 	}
 
 	return policy

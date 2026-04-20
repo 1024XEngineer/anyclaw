@@ -107,3 +107,28 @@ func persistConfigPath(configPath string, value string) string {
 
 	return filepath.ToSlash(rel)
 }
+
+func (c *ChannelSecurityConfig) UnmarshalJSON(data []byte) error {
+	type channelSecurityConfigAlias ChannelSecurityConfig
+	type channelSecurityConfigPresence struct {
+		PairingEnabled *bool `json:"pairing_enabled"`
+		MentionGate    *bool `json:"mention_gate"`
+		DefaultDenyDM  *bool `json:"default_deny_dm"`
+	}
+
+	var decoded channelSecurityConfigAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	var presence channelSecurityConfigPresence
+	if err := json.Unmarshal(data, &presence); err != nil {
+		return err
+	}
+
+	*c = ChannelSecurityConfig(decoded)
+	c.pairingEnabledSet = presence.PairingEnabled != nil
+	c.mentionGateSet = presence.MentionGate != nil
+	c.defaultDenyDMSet = presence.DefaultDenyDM != nil
+	return nil
+}

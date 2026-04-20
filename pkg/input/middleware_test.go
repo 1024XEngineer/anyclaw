@@ -31,3 +31,26 @@ func TestChannelCommandsWrapStreamEmitsCommandOutput(t *testing.T) {
 		t.Fatalf("expected streamed help output, got %q", chunks[0])
 	}
 }
+
+func TestMentionGateBlocksSlackChannelMessagesWithoutMentionFallback(t *testing.T) {
+	gate := NewMentionGate(true, "BOT123", nil)
+
+	if gate.ShouldProcess("hello team", map[string]string{
+		"channel":    "slack",
+		"channel_id": "C123456",
+	}) {
+		t.Fatal("expected slack channel message without mention to be blocked")
+	}
+}
+
+func TestMentionGateBlocksTelegramGroupMessagesWithoutMentionFallback(t *testing.T) {
+	gate := NewMentionGate(true, "bot", nil)
+
+	if gate.ShouldProcess("hello group", map[string]string{
+		"channel":   "telegram",
+		"chat_id":   "-100123",
+		"chat_type": "supergroup",
+	}) {
+		t.Fatal("expected telegram group message without mention to be blocked")
+	}
+}
