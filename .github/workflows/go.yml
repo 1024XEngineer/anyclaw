@@ -32,8 +32,10 @@ jobs:
       - name: Test Go code
         run: go test -v -race -covermode atomic -coverprofile coverage.out ./...
       - name: Upload code coverage
+        if: ${{ hashFiles('coverage.out') != '' }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{secrets.CODECOV_TOKEN}}
           disable_search: true
           files: coverage.out
+          fail_ci_if_error: false
