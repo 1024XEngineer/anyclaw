@@ -45,6 +45,7 @@ jobs:
           if-no-files-found: ignore
       - name: Upload code coverage
         if: ${{ hashFiles('coverage.out') != '' }}
+        continue-on-error: true
         uses: codecov/codecov-action@v5
         with:
           token: ${{secrets.CODECOV_TOKEN}}
