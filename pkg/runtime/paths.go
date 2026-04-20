@@ -1,9 +1,9 @@
 package runtime
 
 import (
-	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
@@ -32,7 +32,7 @@ func sanitizeTargetName(input string) string {
 	return clean
 }
 
-func GatewayAddress(cfg *config.Config) string {
+func GatewayURL(cfg *config.Config) string {
 	host := strings.TrimSpace(cfg.Gateway.Host)
 	if host == "" {
 		host = "127.0.0.1"
@@ -41,9 +41,5 @@ func GatewayAddress(cfg *config.Config) string {
 	if port <= 0 {
 		port = 18789
 	}
-	return net.JoinHostPort(host, fmt.Sprintf("%d", port))
-}
-
-func GatewayURL(cfg *config.Config) string {
-	return "ws://" + GatewayAddress(cfg) + "/ws"
+	return "ws://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/ws"
 }
