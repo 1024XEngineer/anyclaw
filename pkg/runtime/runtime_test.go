@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
+	runtimebootstrap "github.com/1024XEngineer/anyclaw/pkg/runtime/bootstrap"
 )
 
 func TestConfiguredAgentSkillNamesFallsBackToMainAgentSkills(t *testing.T) {
@@ -28,7 +29,7 @@ func TestConfiguredAgentSkillNamesFallsBackToMainAgentSkills(t *testing.T) {
 		},
 	}
 
-	got := configuredAgentSkillNames(cfg)
+	got := runtimebootstrap.ConfiguredAgentSkillNames(cfg)
 	if len(got) != 1 || got[0] != "vision-agent" {
 		t.Fatalf("expected only main-agent skill vision-agent, got %#v", got)
 	}
@@ -45,7 +46,7 @@ func TestResolveMainAgentPersonalityDoesNotFallbackToFirstEnabledProfile(t *test
 		},
 	}
 
-	got := resolveMainAgentPersonality(cfg)
+	got := runtimebootstrap.ResolveMainAgentPersonality(cfg)
 	if !reflect.DeepEqual(got, config.PersonalitySpec{}) {
 		t.Fatalf("expected zero personality when no profile matches main agent, got %#v", got)
 	}
