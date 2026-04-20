@@ -1897,6 +1897,83 @@ func TestCheckScheduledRotations(t *testing.T) {
 	}
 }
 
+func TestCheckScheduledRotationsPersistsAcrossStoreReload(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "current-key",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+	if err := store.SetSecret(cloneEntry(snap.GetAll()["api_key"])); err != nil {
+		t.Fatalf("SetSecret failed: %v", err)
+	}
+
+	past := time.Now().Add(-time.Hour)
+	policy := &RotationPolicy{
+		Key:          "api_key",
+		Strategy:     RotationScheduled,
+		Interval:     24 * time.Hour,
+		NextRotation: &past,
+		AutoActivate: true,
+	}
+	if err := manager.SetRotationPolicy(policy); err != nil {
+		t.Fatalf("SetRotationPolicy failed: %v", err)
+	}
+
+	results, err := manager.CheckScheduledRotations("system")
+	if err != nil {
+		t.Fatalf("CheckScheduledRotations failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 rotation result, got %d", len(results))
+	}
+	if !results[0].Activated {
+		t.Fatal("expected scheduled rotation to be activated")
+	}
+
+	active := manager.GetActiveSnapshot()
+	entry, ok := active.Get("api_key")
+	if !ok {
+		t.Fatal("expected api_key in active snapshot")
+	}
+
+	reloadedCfg := *store.Config()
+	reloaded, err := NewStore(&reloadedCfg)
+	if err != nil {
+		t.Fatalf("failed to reload store: %v", err)
+	}
+
+	persisted, ok := reloaded.GetSecret("api_key", ScopeGlobal, "")
+	if !ok {
+		t.Fatal("expected rotated secret after reload")
+	}
+	if persisted.Value != entry.Value {
+		t.Fatalf("expected persisted value %q after reload, got %q", entry.Value, persisted.Value)
+	}
+
+	activeVer, ok := reloaded.GetActiveVersion("api_key")
+	if !ok {
+		t.Fatal("expected active version after reload")
+	}
+	if activeVer.Value != entry.Value {
+		t.Fatalf("expected active version value %q after reload, got %q", entry.Value, activeVer.Value)
+	}
+
+	snaps := reloaded.ListSnapshots()
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 snapshot after reload, got %d", len(snaps))
+	}
+	if got := snaps[0].Secrets["api_key"].Value; got != entry.Value {
+		t.Fatalf("expected snapshot value %q after reload, got %q", entry.Value, got)
+	}
+}
+
 func TestCheckScheduledRotationsNotDue(t *testing.T) {
 	store, cleanup := setupTestStore(t, nil)
 	defer cleanup()
