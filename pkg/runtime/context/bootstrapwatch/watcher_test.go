@@ -339,6 +339,31 @@ func TestWatcherGetAll(t *testing.T) {
 	}
 }
 
+func TestWatcherGetReturnsSnapshot(t *testing.T) {
+	dir := setupTestDir(t)
+	writeFile(t, dir, "AGENTS.md", "agents")
+
+	w := NewWatcher(WatcherConfig{
+		BaseDir:  dir,
+		AutoLoad: true,
+		Files:    []FileType{FileAgents},
+	})
+
+	entry, ok := w.Get(FileAgents)
+	if !ok {
+		t.Fatal("expected AGENTS.md entry")
+	}
+	entry.Content = "mutated outside watcher"
+
+	fresh, ok := w.Get(FileAgents)
+	if !ok {
+		t.Fatal("expected AGENTS.md entry on second get")
+	}
+	if fresh.Content != "agents" {
+		t.Fatalf("expected internal snapshot to remain unchanged, got %q", fresh.Content)
+	}
+}
+
 func TestWatcherStartStop(t *testing.T) {
 	dir := setupTestDir(t)
 
@@ -528,8 +553,11 @@ func TestFileLoader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load cached: %v", err)
 	}
-	if entry != entry2 {
-		t.Error("expected same cached entry")
+	if entry == entry2 {
+		t.Error("expected loader to return a snapshot copy")
+	}
+	if entry2.Content != entry.Content {
+		t.Error("expected cached load to preserve content")
 	}
 }
 
@@ -576,6 +604,15 @@ func TestFileLoaderGet(t *testing.T) {
 	}
 	if entry.Content != "agents" {
 		t.Errorf("expected 'agents', got %s", entry.Content)
+	}
+
+	entry.Content = "mutated outside loader"
+	fresh, ok := loader.Get(FileAgents)
+	if !ok {
+		t.Fatal("expected entry on second get")
+	}
+	if fresh.Content != "agents" {
+		t.Fatalf("expected loader snapshot to remain unchanged, got %q", fresh.Content)
 	}
 
 	_, ok = loader.Get(FileSoul)
