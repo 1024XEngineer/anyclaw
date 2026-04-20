@@ -15,6 +15,8 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/config"
 	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
 	"github.com/1024XEngineer/anyclaw/pkg/qmd"
+	runtimebootstrap "github.com/1024XEngineer/anyclaw/pkg/runtime/bootstrap"
+	runtimecontext "github.com/1024XEngineer/anyclaw/pkg/runtime/context"
 	"github.com/1024XEngineer/anyclaw/pkg/runtime/orchestrator"
 	"github.com/1024XEngineer/anyclaw/pkg/state/audit"
 	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
@@ -178,7 +180,7 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 	if app.SecretsManager != nil {
 		secretsSnap = app.SecretsManager.GetActiveSnapshot()
 	}
-	if embedder := resolveEmbedder(app.Config, secretsSnap); embedder != nil {
+	if embedder := runtimecontext.ResolveEmbedder(app.Config, secretsSnap); embedder != nil {
 		memCfg.Embedder = embedder
 	}
 	mem, err := memory.NewMemoryBackend(memCfg)
@@ -257,10 +259,10 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 		progress(BootEvent{Phase: PhaseSkills, Status: "fail", Message: "skills load failed", Err: err, Dur: time.Since(t)})
 		return nil, fmt.Errorf("skills: %w", err)
 	}
-	configuredSkillNames := configuredAgentSkillNames(app.Config)
+	configuredSkillNames := runtimebootstrap.ConfiguredAgentSkillNames(app.Config)
 	missingSkillNames := []string{}
 	if len(configuredSkillNames) > 0 {
-		sk, missingSkillNames = filterConfiguredSkills(sk, configuredSkillNames)
+		sk, missingSkillNames = runtimebootstrap.FilterConfiguredSkills(sk, configuredSkillNames)
 	}
 	app.Skills = sk
 	skillCount := len(sk.List())
@@ -359,14 +361,14 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 	ag := agent.New(agent.Config{
 		Name:             app.Config.Agent.Name,
 		Description:      app.Config.Agent.Description,
-		Personality:      agent.BuildPersonalityPrompt(resolveMainAgentPersonality(app.Config)),
+		Personality:      agent.BuildPersonalityPrompt(runtimebootstrap.ResolveMainAgentPersonality(app.Config)),
 		LLM:              llmWrapper,
 		Memory:           mem,
 		Skills:           sk,
 		Tools:            registry,
 		WorkDir:          workDir,
 		WorkingDir:       workingDir,
-		MaxContextTokens: deriveAgentContextTokenBudget(app.Config.LLM.MaxTokens),
+		MaxContextTokens: runtimecontext.DeriveAgentContextTokenBudget(app.Config.LLM.MaxTokens),
 	})
 	app.Agent = ag
 	progress(BootEvent{Phase: PhaseAgent, Status: "ok", Message: fmt.Sprintf("permission=%s", app.Config.Agent.PermissionLevel), Dur: time.Since(t)})
