@@ -2,6 +2,8 @@ package qmd
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -227,7 +229,7 @@ func TestSupervisorForceRestart(t *testing.T) {
 }
 
 func TestSupervisorRestartCallbacks(t *testing.T) {
-	var healthyCalled bool
+	var healthyCalled atomic.Bool
 
 	sup := NewSupervisor(func() (*Server, error) {
 		return NewServer(ServerConfig{HTTPAddr: ":19892"}), nil
@@ -237,7 +239,7 @@ func TestSupervisorRestartCallbacks(t *testing.T) {
 		OnRestart: func(attempt int, delay time.Duration) {
 		},
 		OnHealthy: func() {
-			healthyCalled = true
+			healthyCalled.Store(true)
 		},
 	})
 
@@ -247,14 +249,15 @@ func TestSupervisorRestartCallbacks(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	if !healthyCalled {
+	if !healthyCalled.Load() {
 		t.Error("expected OnHealthy callback")
 	}
 }
 
 func TestSupervisorUnhealthyCallback(t *testing.T) {
-	var unhealthyCalled bool
+	var unhealthyCalled atomic.Bool
 	var report HealthReport
+	var reportMu sync.Mutex
 
 	sup := NewSupervisor(func() (*Server, error) {
 		s := NewServer(ServerConfig{HTTPAddr: ":19893"})
@@ -265,8 +268,10 @@ func TestSupervisorUnhealthyCallback(t *testing.T) {
 		HealthCheckInterval: 200 * time.Millisecond,
 		UnhealthyThreshold:  1,
 		OnUnhealthy: func(r HealthReport) {
-			unhealthyCalled = true
+			unhealthyCalled.Store(true)
+			reportMu.Lock()
 			report = r
+			reportMu.Unlock()
 		},
 	})
 
@@ -280,11 +285,14 @@ func TestSupervisorUnhealthyCallback(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	if !unhealthyCalled {
+	if !unhealthyCalled.Load() {
 		t.Error("expected OnUnhealthy callback")
 	}
-	if report.Status != HealthUnhealthy {
-		t.Errorf("expected unhealthy report, got %s", report.Status)
+	reportMu.Lock()
+	gotReport := report
+	reportMu.Unlock()
+	if gotReport.Status != HealthUnhealthy {
+		t.Errorf("expected unhealthy report, got %s", gotReport.Status)
 	}
 }
 

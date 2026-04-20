@@ -237,16 +237,22 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 	progress(BootEvent{Phase: PhaseQMD, Status: "start", Message: "initializing QMD"})
 	t = time.Now()
 
-	qmdServer := qmd.NewServer(qmd.ServerConfig{})
+	qmdServer := qmd.NewServer(qmd.ServerConfig{HTTPAddr: "127.0.0.1:0"})
 	if err := qmdServer.Start(); err != nil {
 		progress(BootEvent{Phase: PhaseQMD, Status: "warn", Message: fmt.Sprintf("QMD server failed to start, running without structured data store: %v", err), Dur: time.Since(t)})
 	} else {
-		qmdClient := qmd.NewClient(qmd.DefaultClientConfig())
+		qmdClientCfg := qmd.DefaultClientConfig()
+		qmdClientCfg.Address = qmdServer.HTTPBaseURL()
+		qmdClient := qmd.NewClient(qmdClientCfg)
 		ctx := context.Background()
 		if err := qmdClient.Ping(ctx); err != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = qmdServer.Shutdown(shutdownCtx)
+			cancel()
 			progress(BootEvent{Phase: PhaseQMD, Status: "warn", Message: fmt.Sprintf("QMD server not reachable: %v", err), Dur: time.Since(t)})
 		} else {
 			app.QMD = qmdClient
+			app.qmdServer = qmdServer
 			progress(BootEvent{Phase: PhaseQMD, Status: "ok", Message: "QMD in-memory data store ready", Dur: time.Since(t)})
 		}
 	}

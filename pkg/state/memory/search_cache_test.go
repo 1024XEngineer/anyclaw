@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -176,7 +177,7 @@ func TestWarmupCache(t *testing.T) {
 
 	queries := []string{"programming", "language", "weather"}
 
-	var progressCount int
+	var progressCount atomic.Int32
 	cfg := WarmupConfig{
 		Queries:     queries,
 		Concurrency: 2,
@@ -188,7 +189,7 @@ func TestWarmupCache(t *testing.T) {
 			Limit:         10,
 		},
 		OnProgress: func(p WarmupProgress) {
-			progressCount++
+			progressCount.Add(1)
 		},
 	}
 
@@ -203,7 +204,7 @@ func TestWarmupCache(t *testing.T) {
 	if cache.Len() != 3 {
 		t.Errorf("expected 3 cached queries, got %d", cache.Len())
 	}
-	if progressCount == 0 {
+	if progressCount.Load() == 0 {
 		t.Error("expected progress callbacks")
 	}
 

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -79,6 +80,7 @@ type MainRuntime struct {
 	SecretsStore   *secrets.Store
 	WorkDir        string
 	WorkingDir     string
+	qmdServer      *qmd.Server
 }
 
 // App is kept as a legacy alias while callers migrate to MainRuntime naming.
@@ -228,4 +230,30 @@ func (a *MainRuntime) NewCronExecutor() *runtimeschedule.AgentExecutor {
 		return nil
 	}
 	return runtimeschedule.NewAgentExecutor(a.Agent, a.Orchestrator)
+}
+
+func (a *MainRuntime) Close() error {
+	if a == nil {
+		return nil
+	}
+
+	var errs []error
+
+	if a.qmdServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := a.qmdServer.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("shutdown qmd: %w", err))
+		}
+		cancel()
+		a.qmdServer = nil
+	}
+
+	if a.Memory != nil {
+		if err := a.Memory.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close memory: %w", err))
+		}
+		a.Memory = nil
+	}
+
+	return errors.Join(errs...)
 }

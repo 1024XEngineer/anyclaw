@@ -268,6 +268,8 @@ func (s *Supervisor) Server() *Server {
 }
 
 func (s *Supervisor) Client() *Client {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.client
 }
 
@@ -289,13 +291,8 @@ func (s *Supervisor) startServer(ctx context.Context) error {
 		return fmt.Errorf("qmd: start server: %w", err)
 	}
 
-	s.mu.Lock()
-	s.server = srv
-	s.serverAddr = srv.config.HTTPAddr
-	s.mu.Unlock()
-
-	addr := "http://localhost" + s.serverAddr
-	s.client = NewClient(ClientConfig{
+	addr := srv.HTTPBaseURL()
+	client := NewClient(ClientConfig{
 		Address:    addr,
 		Protocol:   ProtocolHTTP,
 		Timeout:    5 * time.Second,
@@ -303,7 +300,13 @@ func (s *Supervisor) startServer(ctx context.Context) error {
 		RetryDelay: 100 * time.Millisecond,
 	})
 
-	s.healthChecker.Register("ping", PingCheck(ctx, s.client))
+	s.mu.Lock()
+	s.server = srv
+	s.serverAddr = addr
+	s.client = client
+	s.mu.Unlock()
+
+	s.healthChecker.Register("ping", PingCheck(ctx, client))
 	s.healthChecker.Register("store", StoreCheck(srv.Store()))
 	s.healthChecker.Register("wal", WALCheck(srv.Store(), 100000))
 
