@@ -84,12 +84,17 @@ func (d *DualMemory) Delete(id string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	sqliteErr := d.sqlite.Delete(id)
-	if sqliteErr != nil && d.syncOnWrite {
-		d.file.Delete(id)
+	if err := d.sqlite.Delete(id); err != nil {
+		return err
 	}
 
-	return sqliteErr
+	if d.syncOnWrite {
+		if err := d.file.Delete(id); err != nil {
+			return fmt.Errorf("file delete failed: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (d *DualMemory) List() ([]MemoryEntry, error) {
