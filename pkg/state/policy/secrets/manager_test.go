@@ -1532,6 +1532,73 @@ func TestRotateSecret(t *testing.T) {
 	}
 }
 
+func TestRotateSecretPersistsAcrossStoreReload(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	secrets := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "old-key-value",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(secrets, "initial")
+	if err := store.SetSecret(cloneEntry(secrets["api_key"])); err != nil {
+		t.Fatalf("SetSecret failed: %v", err)
+	}
+
+	manager := NewActivationManagerWithFallback(store, snap, DefaultFallbackConfig())
+	if _, err := manager.RotateSecret(&RotationRequest{
+		Key:         "api_key",
+		NewValue:    "new-key-value",
+		RequestedBy: "admin",
+		Reason:      "quarterly rotation",
+		ActivateNow: true,
+	}); err != nil {
+		t.Fatalf("RotateSecret failed: %v", err)
+	}
+
+	reloadedCfg := *store.Config()
+	reloaded, err := NewStore(&reloadedCfg)
+	if err != nil {
+		t.Fatalf("failed to reload store: %v", err)
+	}
+
+	persisted, ok := reloaded.GetSecret("api_key", ScopeGlobal, "")
+	if !ok {
+		t.Fatal("expected rotated secret to be persisted after reload")
+	}
+	if persisted.Value != "new-key-value" {
+		t.Fatalf("expected persisted value 'new-key-value' after reload, got %q", persisted.Value)
+	}
+
+	vh, ok := reloaded.GetVersionHistory("api_key")
+	if !ok {
+		t.Fatal("expected version history after reload")
+	}
+	if vh.Current != 1 {
+		t.Fatalf("expected current version 1 after reload, got %d", vh.Current)
+	}
+
+	activeVer, ok := reloaded.GetActiveVersion("api_key")
+	if !ok {
+		t.Fatal("expected active secret version after reload")
+	}
+	if activeVer.Value != "new-key-value" {
+		t.Fatalf("expected active version value 'new-key-value' after reload, got %q", activeVer.Value)
+	}
+
+	snaps := reloaded.ListSnapshots()
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 snapshot after reload, got %d", len(snaps))
+	}
+	if got := snaps[0].Secrets["api_key"].Value; got != "new-key-value" {
+		t.Fatalf("expected snapshot value 'new-key-value' after reload, got %q", got)
+	}
+}
+
 func TestRotateSecretMultipleTimes(t *testing.T) {
 	store, cleanup := setupTestStore(t, nil)
 	defer cleanup()
