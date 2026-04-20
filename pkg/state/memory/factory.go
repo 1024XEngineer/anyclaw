@@ -7,11 +7,13 @@ import (
 )
 
 func NewMemoryBackend(cfg Config) (MemoryBackend, error) {
+	sqliteCfg := effectiveSQLiteConfig(cfg)
+
 	switch cfg.Backend {
 	case BackendFile:
 		return NewFileMemory(cfg.WorkDir), nil
 	case BackendSQLite:
-		mem, err := NewSQLiteMemory(cfg.WorkDir, cfg.SQLite.DSN, sqliteOptionsFromConfig(cfg.SQLite)...)
+		mem, err := NewSQLiteMemory(cfg.WorkDir, sqliteCfg.DSN, sqliteOptionsFromConfig(sqliteCfg)...)
 		if err != nil {
 			return nil, err
 		}
@@ -89,6 +91,43 @@ func BackupSQLiteToFile(dsn string, workDir string) error {
 func EnsureMemoryDir(workDir string) error {
 	memoryDir := filepath.Join(workDir, "memory")
 	return os.MkdirAll(memoryDir, 0o755)
+}
+
+func effectiveSQLiteConfig(cfg Config) SQLiteConfig {
+	resolved := DefaultSQLiteConfig(cfg.WorkDir)
+	if cfg.SQLite.DSN != "" {
+		resolved.DSN = cfg.SQLite.DSN
+	}
+	if cfg.SQLite.MaxOpen > 0 {
+		resolved.MaxOpen = cfg.SQLite.MaxOpen
+	}
+	if cfg.SQLite.BusyTimeout > 0 {
+		resolved.BusyTimeout = cfg.SQLite.BusyTimeout
+	}
+	if cfg.SQLite.Embedder != nil {
+		resolved.Embedder = cfg.SQLite.Embedder
+	}
+	if cfg.SQLite.Cache.Enabled || cfg.SQLite.Cache.MaxSize > 0 || cfg.SQLite.Cache.TTL > 0 {
+		resolved.Cache = cfg.SQLite.Cache
+	}
+
+	if cfg.DSN != "" {
+		resolved.DSN = cfg.DSN
+	}
+	if cfg.MaxOpen > 0 {
+		resolved.MaxOpen = cfg.MaxOpen
+	}
+	if cfg.BusyTimeout > 0 {
+		resolved.BusyTimeout = cfg.BusyTimeout
+	}
+	if cfg.Embedder != nil {
+		resolved.Embedder = cfg.Embedder
+	}
+	if cfg.Cache.Enabled || cfg.Cache.MaxSize > 0 || cfg.Cache.TTL > 0 {
+		resolved.Cache = cfg.Cache
+	}
+
+	return resolved
 }
 
 func sqliteOptionsFromConfig(cfg SQLiteConfig) []SQLiteMemoryOption {

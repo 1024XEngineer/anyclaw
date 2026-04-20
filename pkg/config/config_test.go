@@ -1,4 +1,4 @@
-﻿package config
+package config
 
 import (
 	"encoding/json"
@@ -195,7 +195,7 @@ func TestLoadUTF8BOMConfig(t *testing.T) {
 	path := filepath.Join(dir, "bom.json")
 
 	cfg := DefaultConfig()
-	cfg.Agent.Name = "personal-assistant"
+	cfg.Agent.Name = "个人助手"
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	data = append([]byte{0xEF, 0xBB, 0xBF}, data...)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
@@ -206,7 +206,7 @@ func TestLoadUTF8BOMConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected BOM config to load: %v", err)
 	}
-	if loaded.Agent.Name != "personal-assistant" {
+	if loaded.Agent.Name != "个人助手" {
 		t.Fatalf("expected agent name to survive BOM load, got %q", loaded.Agent.Name)
 	}
 }

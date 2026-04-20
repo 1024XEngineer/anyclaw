@@ -30,6 +30,11 @@ type MemoryBackend interface {
 	Delete(id string) error
 	List() ([]MemoryEntry, error)
 	Search(query string, limit int) ([]MemoryEntry, error)
+	GetConversationHistory(limit int) ([]MemoryEntry, error)
+	AddReflection(content string, metadata map[string]string) error
+	AddFact(content string, metadata map[string]string) error
+	FormatAsMarkdown() (string, error)
+	GetStats() (map[string]int, error)
 	Close() error
 }
 
@@ -62,7 +67,22 @@ type Config struct {
 	Backend BackendType
 	WorkDir string
 	SQLite  SQLiteConfig
+
+	DSN         string
+	MaxOpen     int
+	BusyTimeout time.Duration
+	Embedder    EmbeddingProvider
+	Cache       BackendCacheConfig
+	Warmup      BackendWarmupConfig
 }
+
+type BackendCacheConfig struct {
+	Enabled bool
+	MaxSize int
+	TTL     time.Duration
+}
+
+type SQLiteCacheConfig = BackendCacheConfig
 
 type SQLiteConfig struct {
 	DSN         string
@@ -72,10 +92,9 @@ type SQLiteConfig struct {
 	Cache       SQLiteCacheConfig
 }
 
-type SQLiteCacheConfig struct {
+type BackendWarmupConfig struct {
 	Enabled bool
-	MaxSize int
-	TTL     time.Duration
+	Queries []string
 }
 
 type BackendType string
@@ -87,10 +106,25 @@ const (
 )
 
 func DefaultConfig(workDir string) Config {
+	sqliteCfg := DefaultSQLiteConfig(workDir)
 	return Config{
-		Backend: BackendSQLite,
-		WorkDir: workDir,
-		SQLite:  DefaultSQLiteConfig(workDir),
+		Backend:     BackendSQLite,
+		WorkDir:     workDir,
+		SQLite:      sqliteCfg,
+		DSN:         sqliteCfg.DSN,
+		MaxOpen:     sqliteCfg.MaxOpen,
+		BusyTimeout: sqliteCfg.BusyTimeout,
+		Cache:       sqliteCfg.Cache,
+		Warmup: BackendWarmupConfig{
+			Enabled: true,
+			Queries: []string{
+				"task",
+				"project",
+				"config",
+				"error",
+				"setup",
+			},
+		},
 	}
 }
 

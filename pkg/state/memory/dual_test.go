@@ -68,13 +68,12 @@ func TestDualMemorySearch(t *testing.T) {
 
 func TestDualMemoryConversationHistory(t *testing.T) {
 	dm := setupDualMemory(t)
-	svc := NewMemoryService(dm)
 
 	dm.Add(MemoryEntry{Type: TypeConversation, Role: "user", Content: "Hello"})
 	dm.Add(MemoryEntry{Type: TypeConversation, Role: "assistant", Content: "Hi there"})
 	dm.Add(MemoryEntry{Type: TypeFact, Content: "Fact not conversation"})
 
-	history, err := svc.GetConversationHistory(10)
+	history, err := dm.GetConversationHistory(10)
 	if err != nil {
 		t.Fatalf("failed to get conversation history: %v", err)
 	}
@@ -86,13 +85,12 @@ func TestDualMemoryConversationHistory(t *testing.T) {
 
 func TestDualMemoryStats(t *testing.T) {
 	dm := setupDualMemory(t)
-	svc := NewMemoryService(dm)
 
 	dm.Add(MemoryEntry{Type: TypeConversation, Content: "conv1"})
 	dm.Add(MemoryEntry{Type: TypeFact, Content: "fact1"})
 	dm.Add(MemoryEntry{Type: TypeReflection, Content: "reflect1"})
 
-	stats, err := svc.GetStats()
+	stats, err := dm.GetStats()
 	if err != nil {
 		t.Fatalf("failed to get stats: %v", err)
 	}
@@ -168,76 +166,6 @@ func TestDualMemoryDelete(t *testing.T) {
 	entries, _ = dm.List()
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries after delete, got %d", len(entries))
-	}
-}
-
-func TestDualMemoryAddKeepsFileAndSQLiteEntriesAligned(t *testing.T) {
-	dm := setupDualMemory(t)
-
-	if err := dm.Add(MemoryEntry{
-		Type:    TypeFact,
-		Content: "shared entry",
-	}); err != nil {
-		t.Fatalf("failed to add entry: %v", err)
-	}
-
-	sqliteEntries, err := dm.sqlite.List()
-	if err != nil {
-		t.Fatalf("failed to list sqlite entries: %v", err)
-	}
-	fileEntries, err := dm.file.List()
-	if err != nil {
-		t.Fatalf("failed to list file entries: %v", err)
-	}
-
-	if len(sqliteEntries) != 1 || len(fileEntries) != 1 {
-		t.Fatalf("expected 1 mirrored entry in each backend, got sqlite=%d file=%d", len(sqliteEntries), len(fileEntries))
-	}
-
-	if sqliteEntries[0].ID != fileEntries[0].ID {
-		t.Fatalf("expected mirrored entry IDs to match, got sqlite=%q file=%q", sqliteEntries[0].ID, fileEntries[0].ID)
-	}
-	if !sqliteEntries[0].Timestamp.Equal(fileEntries[0].Timestamp) {
-		t.Fatalf("expected mirrored timestamps to match, got sqlite=%s file=%s", sqliteEntries[0].Timestamp.Format(time.RFC3339Nano), fileEntries[0].Timestamp.Format(time.RFC3339Nano))
-	}
-}
-
-func TestDualMemoryDeleteRemovesFileMirror(t *testing.T) {
-	dm := setupDualMemory(t)
-
-	if err := dm.Add(MemoryEntry{
-		Type:    TypeFact,
-		Content: "delete me",
-	}); err != nil {
-		t.Fatalf("failed to add entry: %v", err)
-	}
-
-	fileEntries, err := dm.file.List()
-	if err != nil {
-		t.Fatalf("failed to list file entries before delete: %v", err)
-	}
-	if len(fileEntries) != 1 {
-		t.Fatalf("expected 1 file entry before delete, got %d", len(fileEntries))
-	}
-
-	if err := dm.Delete(fileEntries[0].ID); err != nil {
-		t.Fatalf("failed to delete entry: %v", err)
-	}
-
-	fileEntries, err = dm.file.List()
-	if err != nil {
-		t.Fatalf("failed to list file entries after delete: %v", err)
-	}
-	if len(fileEntries) != 0 {
-		t.Fatalf("expected file mirror to be deleted, got %d remaining entries", len(fileEntries))
-	}
-
-	sqliteEntries, err := dm.sqlite.List()
-	if err != nil {
-		t.Fatalf("failed to list sqlite entries after delete: %v", err)
-	}
-	if len(sqliteEntries) != 0 {
-		t.Fatalf("expected sqlite entry to be deleted, got %d remaining entries", len(sqliteEntries))
 	}
 }
 
@@ -341,13 +269,82 @@ func TestSQLiteMemoryDirect(t *testing.T) {
 		t.Errorf("expected 1 search result, got %d", len(results))
 	}
 
-	stats, err := NewMemoryService(mem).GetStats()
+	stats, err := mem.GetStats()
 	if err != nil {
 		t.Fatalf("failed to get stats: %v", err)
 	}
 
 	if stats["total"] != 1 {
 		t.Errorf("expected total 1, got %d", stats["total"])
+	}
+}
+
+func TestDualMemoryAddKeepsFileAndSQLiteEntriesAligned(t *testing.T) {
+	dm := setupDualMemory(t)
+
+	if err := dm.Add(MemoryEntry{
+		Type:    TypeFact,
+		Content: "shared entry",
+	}); err != nil {
+		t.Fatalf("failed to add entry: %v", err)
+	}
+
+	sqliteEntries, err := dm.sqlite.List()
+	if err != nil {
+		t.Fatalf("failed to list sqlite entries: %v", err)
+	}
+	fileEntries, err := dm.file.List()
+	if err != nil {
+		t.Fatalf("failed to list file entries: %v", err)
+	}
+
+	if len(sqliteEntries) != 1 || len(fileEntries) != 1 {
+		t.Fatalf("expected 1 mirrored entry in each backend, got sqlite=%d file=%d", len(sqliteEntries), len(fileEntries))
+	}
+	if sqliteEntries[0].ID != fileEntries[0].ID {
+		t.Fatalf("expected mirrored entry IDs to match, got sqlite=%q file=%q", sqliteEntries[0].ID, fileEntries[0].ID)
+	}
+	if !sqliteEntries[0].Timestamp.Equal(fileEntries[0].Timestamp) {
+		t.Fatalf("expected mirrored timestamps to match, got sqlite=%s file=%s", sqliteEntries[0].Timestamp.Format(time.RFC3339Nano), fileEntries[0].Timestamp.Format(time.RFC3339Nano))
+	}
+}
+
+func TestDualMemoryDeleteRemovesFileMirror(t *testing.T) {
+	dm := setupDualMemory(t)
+
+	if err := dm.Add(MemoryEntry{
+		Type:    TypeFact,
+		Content: "delete me",
+	}); err != nil {
+		t.Fatalf("failed to add entry: %v", err)
+	}
+
+	fileEntries, err := dm.file.List()
+	if err != nil {
+		t.Fatalf("failed to list file entries before delete: %v", err)
+	}
+	if len(fileEntries) != 1 {
+		t.Fatalf("expected 1 file entry before delete, got %d", len(fileEntries))
+	}
+
+	if err := dm.Delete(fileEntries[0].ID); err != nil {
+		t.Fatalf("failed to delete entry: %v", err)
+	}
+
+	fileEntries, err = dm.file.List()
+	if err != nil {
+		t.Fatalf("failed to list file entries after delete: %v", err)
+	}
+	if len(fileEntries) != 0 {
+		t.Fatalf("expected file mirror to be deleted, got %d remaining entries", len(fileEntries))
+	}
+
+	sqliteEntries, err := dm.sqlite.List()
+	if err != nil {
+		t.Fatalf("failed to list sqlite entries after delete: %v", err)
+	}
+	if len(sqliteEntries) != 0 {
+		t.Fatalf("expected sqlite entry to be deleted, got %d remaining entries", len(sqliteEntries))
 	}
 }
 
