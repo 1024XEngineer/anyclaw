@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	"github.com/1024XEngineer/anyclaw/pkg/qmd"
@@ -16,8 +17,10 @@ func (a *qmdAdapter) CreateTable(ctx context.Context, name string, columns []str
 }
 
 func (a *qmdAdapter) Insert(ctx context.Context, table string, record map[string]any) error {
-	id, _ := record["id"].(string)
-	r := &qmd.Record{ID: id, Data: record}
+	r, err := qmdRecordFromMap(record)
+	if err != nil {
+		return err
+	}
 	return a.client.Insert(ctx, table, r)
 }
 
@@ -26,16 +29,14 @@ func (a *qmdAdapter) Get(ctx context.Context, table, id string) (map[string]any,
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]any{"id": r.ID}
-	for k, v := range r.Data {
-		out[k] = v
-	}
-	return out, nil
+	return mapFromQMDRecord(r), nil
 }
 
 func (a *qmdAdapter) Update(ctx context.Context, table string, record map[string]any) error {
-	id, _ := record["id"].(string)
-	r := &qmd.Record{ID: id, Data: record}
+	r, err := qmdRecordFromMap(record)
+	if err != nil {
+		return err
+	}
 	return a.client.Update(ctx, table, r)
 }
 
@@ -50,11 +51,7 @@ func (a *qmdAdapter) List(ctx context.Context, table string, limit int) ([]map[s
 	}
 	out := make([]map[string]any, len(records))
 	for i, r := range records {
-		m := map[string]any{"id": r.ID}
-		for k, v := range r.Data {
-			m[k] = v
-		}
-		out[i] = m
+		out[i] = mapFromQMDRecord(r)
 	}
 	return out, nil
 }
@@ -66,11 +63,7 @@ func (a *qmdAdapter) Query(ctx context.Context, table, field string, value any, 
 	}
 	out := make([]map[string]any, len(records))
 	for i, r := range records {
-		m := map[string]any{"id": r.ID}
-		for k, v := range r.Data {
-			m[k] = v
-		}
-		out[i] = m
+		out[i] = mapFromQMDRecord(r)
 	}
 	return out, nil
 }
@@ -89,4 +82,33 @@ func (a *qmdAdapter) ListTables(ctx context.Context) ([]tools.TableStat, error) 
 
 func (a *qmdAdapter) Count(ctx context.Context, table string) (int, error) {
 	return a.client.Count(ctx, table)
+}
+
+func qmdRecordFromMap(record map[string]any) (*qmd.Record, error) {
+	id, ok := record["id"].(string)
+	if !ok || id == "" {
+		return nil, fmt.Errorf("record id must be a non-empty string")
+	}
+
+	data := make(map[string]any, len(record)-1)
+	for k, v := range record {
+		if k == "id" {
+			continue
+		}
+		data[k] = v
+	}
+
+	return &qmd.Record{ID: id, Data: data}, nil
+}
+
+func mapFromQMDRecord(r *qmd.Record) map[string]any {
+	out := make(map[string]any, len(r.Data)+1)
+	out["id"] = r.ID
+	for k, v := range r.Data {
+		if k == "id" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
