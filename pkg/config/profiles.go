@@ -16,15 +16,15 @@ func (p AgentProfile) IsEnabled() bool {
 	return p.Enabled == nil || *p.Enabled
 }
 
-func BoolPtr(value bool) *bool {
+func boolPtr(value bool) *bool {
 	return &value
 }
 
-func IntPtr(value int) *int {
+func intPtr(value int) *int {
 	return &value
 }
 
-func Float64Ptr(value float64) *float64 {
+func float64Ptr(value float64) *float64 {
 	return &value
 }
 

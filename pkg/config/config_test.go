@@ -1,4 +1,4 @@
-﻿package config
+package config
 
 import (
 	"encoding/json"
@@ -462,7 +462,7 @@ func TestValidateDefaultProviderRef(t *testing.T) {
 			ID:       "qwen",
 			Name:     "Qwen",
 			Provider: "qwen",
-			Enabled:  BoolPtr(true),
+			Enabled:  boolPtr(true),
 		},
 	}
 	cfg.LLM.DefaultProviderRef = "qwen"
@@ -519,8 +519,8 @@ func TestSubAgentLLMValidation(t *testing.T) {
 		{
 			Name:            "worker",
 			PermissionLevel: "full",
-			LLMMaxTokens:    IntPtr(-1),
-			LLMTemperature:  Float64Ptr(3),
+			LLMMaxTokens:    intPtr(-1),
+			LLMTemperature:  float64Ptr(3),
 		},
 	}
 	err := cfg.Validate()
@@ -647,7 +647,7 @@ func TestResolveMainAgentProfileFallsBackToAgentName(t *testing.T) {
 			Name:            "Go Expert",
 			Description:     "Go specialist",
 			PermissionLevel: "limited",
-			Enabled:         BoolPtr(true),
+			Enabled:         boolPtr(true),
 		},
 	}
 
@@ -674,7 +674,7 @@ func TestResolveAgentProfileSupportsMainAgentAlias(t *testing.T) {
 			Name:            "Python Expert",
 			Description:     "Python specialist",
 			PermissionLevel: "limited",
-			Enabled:         BoolPtr(true),
+			Enabled:         boolPtr(true),
 		},
 	}
 
