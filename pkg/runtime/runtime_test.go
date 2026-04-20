@@ -88,7 +88,11 @@ func TestBootstrapLoadsMainAgentSkillsWhenNoProfileMatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	t.Cleanup(func() { app.Memory.Close() })
+	t.Cleanup(func() {
+		if err := app.Close(); err != nil {
+			t.Errorf("app.Close: %v", err)
+		}
+	})
 
 	skills := app.Agent.ListSkills()
 	if len(skills) != 1 {
@@ -125,7 +129,11 @@ func TestBootstrapResolvesRelativePathsFromConfigPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	t.Cleanup(func() { app.Memory.Close() })
+	t.Cleanup(func() {
+		if err := app.Close(); err != nil {
+			t.Errorf("app.Close: %v", err)
+		}
+	})
 
 	wantWorkDir := filepath.Join(configDir, ".anyclaw")
 	if app.WorkDir != wantWorkDir {

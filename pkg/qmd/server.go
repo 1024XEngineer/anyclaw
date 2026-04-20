@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -31,12 +32,13 @@ func DefaultServerConfig() ServerConfig {
 }
 
 type Server struct {
-	store   *Store
-	config  ServerConfig
-	httpSrv *http.Server
-	unixSrv *http.Server
-	mu      sync.Mutex
-	running bool
+	store    *Store
+	config   ServerConfig
+	httpSrv  *http.Server
+	unixSrv  *http.Server
+	mu       sync.Mutex
+	running  bool
+	httpAddr string
 }
 
 func NewServer(cfg ServerConfig) *Server {
@@ -99,50 +101,77 @@ func (s *Server) Start() error {
 		s.mu.Unlock()
 		return fmt.Errorf("qmd: server already running")
 	}
-	s.running = true
-	s.mu.Unlock()
 
 	if s.config.PersistPath != "" {
 		if err := s.loadPersist(); err != nil {
+			s.mu.Unlock()
 			return fmt.Errorf("qmd: load persist: %w", err)
 		}
-		go s.persistLoop()
 	}
 
-	var errs []error
+	var httpListener net.Listener
+	var unixListener net.Listener
+	var err error
 
 	if s.httpSrv != nil {
-		go func() {
-			if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "qmd: http server error: %v\n", err)
-			}
-		}()
+		httpListener, err = net.Listen("tcp", s.config.HTTPAddr)
+		if err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("qmd: listen http: %w", err)
+		}
+		s.httpAddr = httpListener.Addr().String()
 	}
 
 	if s.unixSrv != nil {
 		os.Remove(s.config.UnixSocket)
 		if err := os.MkdirAll(filepath.Dir(s.config.UnixSocket), 0o755); err != nil {
+			if httpListener != nil {
+				_ = httpListener.Close()
+			}
+			s.mu.Unlock()
 			return fmt.Errorf("qmd: create unix socket dir: %w", err)
 		}
 
-		listener, err := net.Listen("unix", s.config.UnixSocket)
+		unixListener, err = net.Listen("unix", s.config.UnixSocket)
 		if err != nil {
+			if httpListener != nil {
+				_ = httpListener.Close()
+			}
+			s.mu.Unlock()
 			return fmt.Errorf("qmd: listen unix: %w", err)
 		}
+	}
 
+	s.running = true
+	s.mu.Unlock()
+
+	if s.config.PersistPath != "" {
+		go s.persistLoop()
+	}
+
+	if httpListener != nil {
 		go func() {
-			if err := s.unixSrv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			if err := s.httpSrv.Serve(httpListener); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "qmd: http server error: %v\n", err)
+			}
+		}()
+	}
+
+	if unixListener != nil {
+		go func() {
+			if err := s.unixSrv.Serve(unixListener); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "qmd: unix server error: %v\n", err)
 			}
 		}()
 	}
 
-	return joinErrs(errs)
+	return nil
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.running = false
+	s.httpAddr = ""
 	s.mu.Unlock()
 
 	if s.config.PersistPath != "" {
@@ -169,6 +198,35 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) Store() *Store {
 	return s.store
+}
+
+func (s *Server) HTTPBaseURL() string {
+	s.mu.Lock()
+	addr := s.httpAddr
+	configured := s.config.HTTPAddr
+	s.mu.Unlock()
+
+	if addr == "" {
+		addr = configured
+	}
+	if addr == "" {
+		return ""
+	}
+	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
+		return addr
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "http://127.0.0.1" + addr
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://" + addr
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func (s *Server) persistLoop() {
