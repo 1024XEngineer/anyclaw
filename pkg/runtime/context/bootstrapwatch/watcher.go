@@ -34,6 +34,14 @@ type FileEntry struct {
 	Size    int64
 }
 
+func cloneFileEntry(entry *FileEntry) *FileEntry {
+	if entry == nil {
+		return nil
+	}
+	cloned := *entry
+	return &cloned
+}
+
 type ChangeAction string
 
 const (
@@ -155,7 +163,7 @@ func (w *Watcher) Get(ft FileType) (*FileEntry, bool) {
 	if !ok {
 		return nil, false
 	}
-	return entry, true
+	return cloneFileEntry(entry), true
 }
 
 func (w *Watcher) GetContent(ft FileType) (string, bool) {
@@ -172,7 +180,7 @@ func (w *Watcher) GetAll() map[FileType]*FileEntry {
 
 	result := make(map[FileType]*FileEntry, len(w.files))
 	for k, v := range w.files {
-		result[k] = v
+		result[k] = cloneFileEntry(v)
 	}
 	return result
 }
@@ -255,9 +263,13 @@ func (w *Watcher) checkChanges() {
 		}
 
 		oldSize := entry.Size
-		entry.Content = newContent
-		entry.LastMod = info.ModTime()
-		entry.Size = info.Size()
+		w.files[ft] = &FileEntry{
+			Type:    entry.Type,
+			Path:    entry.Path,
+			Content: newContent,
+			LastMod: info.ModTime(),
+			Size:    info.Size(),
+		}
 
 		events = append(events, ChangeEvent{
 			Type:    ft,
@@ -393,7 +405,7 @@ func (l *FileLoader) Load(ft FileType) (*FileEntry, error) {
 	defer l.mu.Unlock()
 
 	if entry, ok := l.entries[ft]; ok {
-		return entry, nil
+		return cloneFileEntry(entry), nil
 	}
 
 	path := filepath.Join(l.baseDir, string(ft))
@@ -415,7 +427,7 @@ func (l *FileLoader) Load(ft FileType) (*FileEntry, error) {
 	}
 	l.entries[ft] = entry
 
-	return entry, nil
+	return cloneFileEntry(entry), nil
 }
 
 func (l *FileLoader) LoadAll(types []FileType) (map[FileType]*FileEntry, error) {
@@ -436,7 +448,7 @@ func (l *FileLoader) Get(ft FileType) (*FileEntry, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	entry, ok := l.entries[ft]
-	return entry, ok
+	return cloneFileEntry(entry), ok
 }
 
 func (l *FileLoader) Clear() {
