@@ -869,6 +869,22 @@ func (am *ActivationManager) ResetRecovery() {
 	}
 }
 
+func (am *ActivationManager) persistRotatedSecretLocked(entry *SecretEntry, snapshotSource string) error {
+	if err := am.store.SetSecret(entry); err != nil {
+		return fmt.Errorf("persist secret: %w", err)
+	}
+	if am.config.AutoSnapshot {
+		if _, err := am.store.CreateSnapshot(snapshotSource); err != nil {
+			return fmt.Errorf("create snapshot: %w", err)
+		}
+	}
+	if am.activeSnap != nil {
+		am.fallbackSnap = NewRuntimeSnapshot(am.activeSnap.GetAll(), "rotation_fallback")
+		am.recovery.CurrentSnapID = am.activeSnap.ToSnapshot().ID
+	}
+	return nil
+}
+
 func (am *ActivationManager) RotateSecret(req *RotationRequest) (*RotationResult, error) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
@@ -877,10 +893,16 @@ func (am *ActivationManager) RotateSecret(req *RotationRequest) (*RotationResult
 		return nil, fmt.Errorf("key and new_value are required")
 	}
 
-	entry, ok := am.activeSnap.Get(req.Key)
+	if am.activeSnap == nil {
+		return nil, fmt.Errorf("no active snapshot")
+	}
+
+	secrets := am.activeSnap.GetAll()
+	entry, ok := secrets[req.Key]
 	if !ok {
 		return nil, fmt.Errorf("secret %q not found in active snapshot", req.Key)
 	}
+	entry = cloneEntry(entry)
 
 	oldVersion := uint64(0)
 	if vh, exists := am.store.GetVersionHistory(req.Key); exists {
@@ -901,7 +923,12 @@ func (am *ActivationManager) RotateSecret(req *RotationRequest) (*RotationResult
 	entry.Metadata["last_rotation_reason"] = req.Reason
 	entry.Metadata["version"] = fmt.Sprintf("%d", newVersion)
 
-	am.activeSnap.Update(am.activeSnap.GetAll())
+	secrets[req.Key] = entry
+	am.activeSnap.Update(secrets)
+
+	if err := am.persistRotatedSecretLocked(entry, "rotation:"+req.Key); err != nil {
+		return nil, err
+	}
 
 	if req.ActivateNow {
 		am.activeSnap.Update(am.activeSnap.GetAll())
@@ -1011,8 +1038,8 @@ func (am *ActivationManager) DeleteRotationPolicy(key string) error {
 }
 
 func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationResult, error) {
-	am.mu.RLock()
-	defer am.mu.RUnlock()
+	am.mu.Lock()
+	defer am.mu.Unlock()
 
 	policies := am.store.ListRotationPolicies()
 	var results []*RotationResult
@@ -1026,7 +1053,12 @@ func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationR
 			continue
 		}
 
-		entry, ok := am.activeSnap.Get(policy.Key)
+		if am.activeSnap == nil {
+			continue
+		}
+
+		secrets := am.activeSnap.GetAll()
+		entry, ok := secrets[policy.Key]
 		if !ok {
 			continue
 		}
@@ -1046,6 +1078,25 @@ func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationR
 			map[string]string{"auto": "true", "strategy": "scheduled"})
 		if err != nil {
 			continue
+		}
+
+		if policy.AutoActivate {
+			updatedEntry := cloneEntry(entry)
+			updatedEntry.Value = newValue
+			updatedEntry.UpdatedAt = now
+			if updatedEntry.Metadata == nil {
+				updatedEntry.Metadata = make(map[string]string)
+			}
+			updatedEntry.Metadata["last_rotated_by"] = actor
+			updatedEntry.Metadata["last_rotation_reason"] = "scheduled_rotation"
+			updatedEntry.Metadata["version"] = fmt.Sprintf("%d", newVersion)
+
+			secrets[policy.Key] = updatedEntry
+			am.activeSnap.Update(secrets)
+
+			if err := am.persistRotatedSecretLocked(updatedEntry, "scheduled_rotation:"+policy.Key); err != nil {
+				continue
+			}
 		}
 
 		results = append(results, &RotationResult{

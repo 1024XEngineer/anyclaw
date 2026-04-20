@@ -341,6 +341,17 @@ func TestStoreWithEncryption(t *testing.T) {
 	if got.Value != "secret-value" {
 		t.Errorf("expected 'secret-value', got '%s'", got.Value)
 	}
+
+	raw, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if !strings.Contains(string(raw), encryptedValuePrefix) {
+		t.Fatalf("expected persisted secret to include %q marker, got %s", encryptedValuePrefix, string(raw))
+	}
+	if strings.Contains(string(raw), "\"value\": \"secret-value\"") {
+		t.Fatal("expected persisted secret to be encrypted on disk")
+	}
 }
 
 func TestRuntimeSnapshot(t *testing.T) {
@@ -724,7 +735,8 @@ func TestIsEncryptedValue(t *testing.T) {
 		{"short value", "abc", false},
 		{"plain text", "not-encrypted-value", false},
 		{"base64 but short", "YWJj", false},
-		{"valid encrypted value", "aW5pdGlhbGl6YXRpb25WZWN0b3IxMjM0NTY3ODkwYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=", true},
+		{"base64 shaped secret", "aW5pdGlhbGl6YXRpb25WZWN0b3IxMjM0NTY3ODkwYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=", false},
+		{"marked encrypted value", encryptedValuePrefix + "aW5pdGlhbGl6YXRpb25WZWN0b3IxMjM0NTY3ODkwYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=", true},
 	}
 
 	for _, tt := range tests {
@@ -1460,6 +1472,9 @@ func TestRotateSecret(t *testing.T) {
 	}
 
 	snap := NewRuntimeSnapshot(secrets, "initial")
+	if err := store.SetSecret(cloneEntry(secrets["api_key"])); err != nil {
+		t.Fatalf("SetSecret failed: %v", err)
+	}
 	fbCfg := DefaultFallbackConfig()
 	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
 
@@ -1498,6 +1513,22 @@ func TestRotateSecret(t *testing.T) {
 	}
 	if entry.Metadata["version"] != "1" {
 		t.Errorf("expected version metadata '1', got '%s'", entry.Metadata["version"])
+	}
+
+	persisted, ok := store.GetSecret("api_key", ScopeGlobal, "")
+	if !ok {
+		t.Fatal("expected rotated secret to be persisted")
+	}
+	if persisted.Value != "new-key-value" {
+		t.Errorf("expected persisted value 'new-key-value', got %q", persisted.Value)
+	}
+
+	snaps := store.ListSnapshots()
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 persisted snapshot after rotation, got %d", len(snaps))
+	}
+	if got := snaps[0].Secrets["api_key"].Value; got != "new-key-value" {
+		t.Errorf("expected snapshot value 'new-key-value', got %q", got)
 	}
 }
 
@@ -1742,6 +1773,9 @@ func TestCheckScheduledRotations(t *testing.T) {
 	}, "initial")
 
 	manager := NewActivationManagerWithFallback(store, snap, nil)
+	if err := store.SetSecret(cloneEntry(snap.GetAll()["api_key"])); err != nil {
+		t.Fatalf("SetSecret failed: %v", err)
+	}
 
 	past := time.Now().Add(-time.Hour)
 	policy := &RotationPolicy{
@@ -1768,6 +1802,31 @@ func TestCheckScheduledRotations(t *testing.T) {
 	}
 	if results[0].Activated != true {
 		t.Error("expected activated to be true")
+	}
+
+	active := manager.GetActiveSnapshot()
+	entry, ok := active.Get("api_key")
+	if !ok {
+		t.Fatal("expected api_key in active snapshot")
+	}
+	if entry.Value == "current-key" {
+		t.Fatal("expected scheduled rotation to update active snapshot value")
+	}
+
+	persisted, ok := store.GetSecret("api_key", ScopeGlobal, "")
+	if !ok {
+		t.Fatal("expected rotated secret to be persisted")
+	}
+	if persisted.Value != entry.Value {
+		t.Fatalf("expected persisted value %q, got %q", entry.Value, persisted.Value)
+	}
+
+	snaps := store.ListSnapshots()
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 persisted snapshot after scheduled rotation, got %d", len(snaps))
+	}
+	if got := snaps[0].Secrets["api_key"].Value; got != entry.Value {
+		t.Fatalf("expected snapshot value %q, got %q", entry.Value, got)
 	}
 }
 
