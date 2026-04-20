@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,6 +23,8 @@ type persistedData struct {
 	AuditLog         []*AuditEntry     `json:"audit_log,omitempty"`
 	LastUpdate       time.Time         `json:"last_update"`
 }
+
+const encryptedValuePrefix = "enc:v1:"
 
 type Store struct {
 	mu            sync.RWMutex
@@ -92,7 +95,7 @@ func (s *Store) load() error {
 	if s.encryptionKey != nil {
 		for _, secret := range s.data.Secrets {
 			if secret.Value != "" && isEncryptedValue(secret.Value) {
-				decrypted, err := DecryptValue(secret.Value, s.encryptionKey)
+				decrypted, err := DecryptValue(stripEncryptedValuePrefix(secret.Value), s.encryptionKey)
 				if err != nil {
 					continue
 				}
@@ -102,7 +105,7 @@ func (s *Store) load() error {
 		for _, vh := range s.data.VersionHistories {
 			for _, v := range vh.Versions {
 				if v.Value != "" && isEncryptedValue(v.Value) {
-					decrypted, err := DecryptValue(v.Value, s.encryptionKey)
+					decrypted, err := DecryptValue(stripEncryptedValuePrefix(v.Value), s.encryptionKey)
 					if err != nil {
 						continue
 					}
@@ -133,7 +136,7 @@ func (s *Store) saveLocked() error {
 				if err != nil {
 					return fmt.Errorf("encrypt secret %s: %w", secret.Key, err)
 				}
-				secret.Value = encrypted
+				secret.Value = markEncryptedValue(encrypted)
 			}
 		}
 		for _, vh := range saveData.VersionHistories {
@@ -143,7 +146,7 @@ func (s *Store) saveLocked() error {
 					if err != nil {
 						return fmt.Errorf("encrypt version %s v%d: %w", vh.Key, v.Version, err)
 					}
-					v.Value = encrypted
+					v.Value = markEncryptedValue(encrypted)
 				}
 			}
 		}
@@ -751,14 +754,15 @@ func decodeKey(key string) ([]byte, error) {
 }
 
 func isEncryptedValue(value string) bool {
-	if len(value) < 44 {
-		return false
-	}
-	decoded, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return false
-	}
-	return len(decoded) > 12
+	return strings.HasPrefix(value, encryptedValuePrefix)
+}
+
+func markEncryptedValue(value string) string {
+	return encryptedValuePrefix + value
+}
+
+func stripEncryptedValuePrefix(value string) string {
+	return strings.TrimPrefix(value, encryptedValuePrefix)
 }
 
 func generateID(prefix string) string {
