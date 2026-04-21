@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -127,5 +128,61 @@ func TestChatOpenAICompatibleSupportsContentBlocks(t *testing.T) {
 	}
 	if resp.Content != "hello world" {
 		t.Fatalf("expected merged block text, got %q", resp.Content)
+	}
+}
+
+func TestStreamOpenAICompatibleEmitsChunks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		Provider: "compatible",
+		Model:    "demo-model",
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	var chunks []string
+	err = client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, func(chunk string) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatalf("StreamChat: %v", err)
+	}
+	if strings.Join(chunks, "") != "hello" {
+		t.Fatalf("unexpected stream output: %v", chunks)
+	}
+}
+
+func TestStreamOpenAICompatibleReturnsAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "upstream unavailable", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		Provider: "compatible",
+		Model:    "demo-model",
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	err = client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, func(chunk string) {})
+	if err == nil {
+		t.Fatal("expected stream API error")
+	}
+	if !strings.Contains(err.Error(), "API error: 502 Bad Gateway") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -332,11 +333,19 @@ func (c *client) streamOpenAICompatible(ctx context.Context, messages []Message,
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: %s - %s", resp.Status, string(respBody))
+	}
+
 	decoder := NewDecoder(resp.Body)
 	for {
 		data, err := decoder.Decode()
 		if err != nil {
-			break
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
 		}
 		if data.Type == "chunk" && data.Delta.Content != "" {
 			onChunk(data.Delta.Content)
@@ -424,11 +433,19 @@ func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools 
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error: %s - %s", resp.Status, string(respBody))
+	}
+
 	decoder := NewAnthropicDecoder(resp.Body)
 	for {
 		data, err := decoder.Decode()
 		if err != nil {
-			break
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
 		}
 		if data.Type == "content_block_delta" && data.Delta.Type == "text_delta" && data.Delta.Text != "" {
 			onChunk(data.Delta.Text)
