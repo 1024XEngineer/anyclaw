@@ -28,6 +28,11 @@
         "type": "string",
         "description": "Facebook app secret for webhook validation",
         "sensitive": true
+      },
+      "port": {
+        "type": "integer",
+        "description": "Webhook port for incoming WhatsApp messages",
+        "default": 8080
       }
     },
     "required": ["access_token", "phone_number_id"]
