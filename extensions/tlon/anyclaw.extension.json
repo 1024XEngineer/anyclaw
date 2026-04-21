@@ -1,0 +1,34 @@
+{
+  "id": "tlon",
+  "name": "Tlon/Urbit Channel",
+  "version": "1.0.0",
+  "description": "Tlon/Urbit messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["tlon"],
+  "entrypoint": "tlon_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "ship_url": {
+        "type": "string",
+        "description": "Urbit ship URL (e.g. https://my-ship.urbit.org)"
+      },
+      "ship_code": {
+        "type": "string",
+        "description": "Urbit ship access code",
+        "sensitive": true
+      },
+      "ship_name": {
+        "type": "string",
+        "description": "Urbit ship name (~ship-name)"
+      },
+      "poll_interval": {
+        "type": "integer",
+        "description": "Poll interval in seconds",
+        "default": 10
+      }
+    },
+    "required": ["ship_url", "ship_code", "ship_name"]
+  }
+}
