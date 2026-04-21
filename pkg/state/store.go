@@ -769,7 +769,7 @@ func (s *Store) RebindSessionsForProject(projectID string, orgID string) error {
 	changed := false
 	for _, session := range s.sessions {
 		if session.Project == projectID {
-			session.Org = orgID
+			rebindSessionHierarchy(session, orgID, "", "")
 			changed = true
 		}
 	}
@@ -785,8 +785,7 @@ func (s *Store) RebindSessionsForWorkspace(workspaceID string, projectID string,
 	changed := false
 	for _, session := range s.sessions {
 		if session.Workspace == workspaceID {
-			session.Project = projectID
-			session.Org = orgID
+			rebindSessionHierarchy(session, orgID, projectID, "")
 			changed = true
 		}
 	}
@@ -823,7 +822,7 @@ func (s *Store) RebindWorkspaceID(oldID string, newID string) error {
 	}
 	for _, session := range s.sessions {
 		if session.Workspace == oldID {
-			session.Workspace = newID
+			rebindSessionHierarchy(session, "", "", newID)
 		}
 	}
 	for _, task := range s.tasks {
@@ -837,6 +836,24 @@ func (s *Store) RebindWorkspaceID(oldID string, newID string) error {
 		}
 	}
 	return s.saveLocked()
+}
+
+func rebindSessionHierarchy(session *Session, org string, project string, workspace string) {
+	if session == nil {
+		return
+	}
+	if strings.TrimSpace(org) != "" {
+		session.Org = org
+		session.ExecutionBinding.Org = org
+	}
+	if strings.TrimSpace(project) != "" {
+		session.Project = project
+		session.ExecutionBinding.Project = project
+	}
+	if strings.TrimSpace(workspace) != "" {
+		session.Workspace = workspace
+		session.ExecutionBinding.Workspace = workspace
+	}
 }
 
 func (s *Store) saveLocked() error {

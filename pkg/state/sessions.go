@@ -71,7 +71,7 @@ func (m *SessionManager) CreateWithOptions(opts SessionCreateOptions) (*Session,
 		ID:           m.nextID(),
 		Title:        opts.Title,
 		Agent:        primaryAgent,
-		Participants: nil,
+		Participants: participants,
 		Org:          opts.Org,
 		Project:      opts.Project,
 		Workspace:    opts.Workspace,
@@ -97,8 +97,8 @@ func (m *SessionManager) CreateWithOptions(opts SessionCreateOptions) (*Session,
 		ConversationKey: strings.TrimSpace(opts.ConversationKey),
 		TransportMeta:   cloneStringMap(opts.TransportMeta),
 		ParentSessionID: opts.ParentSessionID,
-		GroupKey:        "",
-		IsGroup:         false,
+		GroupKey:        strings.TrimSpace(opts.GroupKey),
+		IsGroup:         opts.IsGroup,
 		Presence:        "idle",
 		Typing:          false,
 		LastActiveAt:    now,
@@ -434,9 +434,7 @@ func cloneSession(session *Session) *Session {
 	clone := *session
 	normalizeSessionExecutionBinding(&clone)
 	clone.TransportMeta = cloneStringMap(session.TransportMeta)
-	clone.Participants = nil
-	clone.GroupKey = ""
-	clone.IsGroup = false
+	clone.Participants = append([]string(nil), session.Participants...)
 	clone.History = append([]HistoryMessage(nil), session.History...)
 	clone.Messages = cloneSessionMessages(session.Messages)
 	if len(clone.Messages) == 0 && len(clone.History) > 0 {

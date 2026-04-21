@@ -168,3 +168,80 @@ func TestNewStoreRepairsPendingSessionMessageFromApprovalPayload(t *testing.T) {
 		t.Fatalf("expected restored user message from approval payload, got %#v", lastMessage)
 	}
 }
+
+func TestRebindSessionsForWorkspaceUpdatesExecutionBinding(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	session := &Session{
+		ID:        "sess-1",
+		Title:     "Workspace session",
+		Org:       "org-old",
+		Project:   "project-old",
+		Workspace: "workspace-1",
+		ExecutionBinding: SessionExecutionBinding{
+			Org:       "org-old",
+			Project:   "project-old",
+			Workspace: "workspace-1",
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.SaveSession(session); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	if err := store.RebindSessionsForWorkspace("workspace-1", "project-new", "org-new"); err != nil {
+		t.Fatalf("RebindSessionsForWorkspace: %v", err)
+	}
+
+	updated, ok := store.GetSession("sess-1")
+	if !ok || updated == nil {
+		t.Fatal("expected session to exist")
+	}
+	if updated.Org != "org-new" || updated.ExecutionBinding.Org != "org-new" {
+		t.Fatalf("expected org to rebind, got session=%q binding=%q", updated.Org, updated.ExecutionBinding.Org)
+	}
+	if updated.Project != "project-new" || updated.ExecutionBinding.Project != "project-new" {
+		t.Fatalf("expected project to rebind, got session=%q binding=%q", updated.Project, updated.ExecutionBinding.Project)
+	}
+}
+
+func TestRebindWorkspaceIDUpdatesExecutionBinding(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	store.workspaces = append(store.workspaces, &Workspace{
+		ID:        "workspace-old",
+		ProjectID: "project-1",
+		Name:      "Workspace",
+		Path:      "/tmp/workspace-old",
+	})
+	session := &Session{
+		ID:        "sess-1",
+		Title:     "Workspace session",
+		Workspace: "workspace-old",
+		ExecutionBinding: SessionExecutionBinding{
+			Workspace: "workspace-old",
+		},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := store.SaveSession(session); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	if err := store.RebindWorkspaceID("workspace-old", "workspace-new"); err != nil {
+		t.Fatalf("RebindWorkspaceID: %v", err)
+	}
+
+	updated, ok := store.GetSession("sess-1")
+	if !ok || updated == nil {
+		t.Fatal("expected session to exist")
+	}
+	if updated.Workspace != "workspace-new" || updated.ExecutionBinding.Workspace != "workspace-new" {
+		t.Fatalf("expected workspace to rebind, got session=%q binding=%q", updated.Workspace, updated.ExecutionBinding.Workspace)
+	}
+}
