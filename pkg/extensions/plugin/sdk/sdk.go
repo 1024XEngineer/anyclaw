@@ -107,6 +107,12 @@ func (p *PluginAPI) RegisterTool(tool Tool) error {
 	p.ctx.mu.Lock()
 	defer p.ctx.mu.Unlock()
 
+	if tool.Name == "" {
+		return fmt.Errorf("tool name is required")
+	}
+	if tool.Handler == nil {
+		return fmt.Errorf("tool %s handler is required", tool.Name)
+	}
 	if p.ctx.tools == nil {
 		p.ctx.tools = make(map[string]Tool)
 	}
@@ -125,6 +131,9 @@ func (p *PluginAPI) RegisterChannel(ch Channel) error {
 		p.ctx.channels = make(map[string]Channel)
 	}
 	name := ch.Name()
+	if name == "" {
+		return fmt.Errorf("channel name is required")
+	}
 	if _, exists := p.ctx.channels[name]; exists {
 		return fmt.Errorf("channel %s already registered", name)
 	}
@@ -136,6 +145,12 @@ func (p *PluginAPI) RegisterEventHandler(eventType string, handler EventHandler)
 	p.ctx.mu.Lock()
 	defer p.ctx.mu.Unlock()
 
+	if eventType == "" {
+		return fmt.Errorf("event type is required")
+	}
+	if handler == nil {
+		return fmt.Errorf("event handler %s is required", eventType)
+	}
 	if p.ctx.handlers == nil {
 		p.ctx.handlers = make(map[string]EventHandler)
 	}
@@ -147,10 +162,22 @@ func (p *PluginAPI) RegisterHTTPRoute(route HTTPRoute) error {
 	p.ctx.mu.Lock()
 	defer p.ctx.mu.Unlock()
 
+	if route.Method == "" {
+		return fmt.Errorf("http route method is required")
+	}
+	if route.Path == "" {
+		return fmt.Errorf("http route path is required")
+	}
+	if route.Handler == nil {
+		return fmt.Errorf("http route %s %s handler is required", route.Method, route.Path)
+	}
 	if p.ctx.httpRoutes == nil {
 		p.ctx.httpRoutes = make(map[string]HTTPRoute)
 	}
 	key := route.Method + ":" + route.Path
+	if _, exists := p.ctx.httpRoutes[key]; exists {
+		return fmt.Errorf("http route %s %s already registered", route.Method, route.Path)
+	}
 	p.ctx.httpRoutes[key] = route
 	return nil
 }
@@ -163,6 +190,9 @@ func (p *PluginAPI) RegisterNode(node Node) error {
 		p.ctx.nodes = make(map[string]Node)
 	}
 	name := node.Name()
+	if name == "" {
+		return fmt.Errorf("node name is required")
+	}
 	if _, exists := p.ctx.nodes[name]; exists {
 		return fmt.Errorf("node %s already registered", name)
 	}
@@ -182,6 +212,9 @@ func (p *PluginAPI) SetConfig(key string, value any) {
 	p.ctx.mu.Lock()
 	defer p.ctx.mu.Unlock()
 
+	if p.ctx.Config == nil {
+		p.ctx.Config = make(map[string]any)
+	}
 	p.ctx.Config[key] = value
 }
 

@@ -61,6 +61,17 @@ func TestNewPluginContextInitializesCollections(t *testing.T) {
 	if len(api.ListNodes()) != 1 {
 		t.Fatalf("expected 1 node, got %d", len(api.ListNodes()))
 	}
+
+	api.SetConfig("mode", "safe")
+	if got, ok := api.GetConfig("mode"); !ok || got != "safe" {
+		t.Fatalf("unexpected config lookup: %v, %v", got, ok)
+	}
+	if api.GetWorkingDir() != "workdir" {
+		t.Fatalf("unexpected working dir %q", api.GetWorkingDir())
+	}
+	if api.GetGatewayAddr() != "http://127.0.0.1:8080" {
+		t.Fatalf("unexpected gateway addr %q", api.GetGatewayAddr())
+	}
 }
 
 func TestPluginManifestValidate(t *testing.T) {
@@ -79,3 +90,95 @@ func TestPluginManifestValidate(t *testing.T) {
 		t.Fatal("expected invalid manifest to fail validation")
 	}
 }
+
+func TestPluginAPIRejectsInvalidOrDuplicateRegistrations(t *testing.T) {
+	api := NewPluginAPI(nil)
+
+	if err := api.RegisterTool(Tool{}); err == nil {
+		t.Fatal("expected empty tool registration to fail")
+	}
+	if err := api.RegisterTool(Tool{
+		Name: "ping",
+		Handler: func(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}); err != nil {
+		t.Fatalf("RegisterTool first: %v", err)
+	}
+	if err := api.RegisterTool(Tool{
+		Name: "ping",
+		Handler: func(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		},
+	}); err == nil {
+		t.Fatal("expected duplicate tool registration to fail")
+	}
+
+	if err := api.RegisterChannel(emptyNameChannel{}); err == nil {
+		t.Fatal("expected empty channel name to fail")
+	}
+	if err := api.RegisterChannel(stubChannel{}); err != nil {
+		t.Fatalf("RegisterChannel first: %v", err)
+	}
+	if err := api.RegisterChannel(stubChannel{}); err == nil {
+		t.Fatal("expected duplicate channel registration to fail")
+	}
+
+	if err := api.RegisterEventHandler("", func(ctx context.Context, event Event) error { return nil }); err == nil {
+		t.Fatal("expected empty event type to fail")
+	}
+	if err := api.RegisterEventHandler("message", nil); err == nil {
+		t.Fatal("expected nil event handler to fail")
+	}
+	if err := api.RegisterEventHandler("message", func(ctx context.Context, event Event) error { return nil }); err != nil {
+		t.Fatalf("RegisterEventHandler: %v", err)
+	}
+
+	route := HTTPRoute{
+		Path:   "/ping",
+		Method: http.MethodGet,
+		Handler: func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w, r
+		},
+	}
+	if err := api.RegisterHTTPRoute(HTTPRoute{}); err == nil {
+		t.Fatal("expected invalid route registration to fail")
+	}
+	if err := api.RegisterHTTPRoute(route); err != nil {
+		t.Fatalf("RegisterHTTPRoute first: %v", err)
+	}
+	if err := api.RegisterHTTPRoute(route); err == nil {
+		t.Fatal("expected duplicate route registration to fail")
+	}
+
+	if err := api.RegisterNode(emptyNameNode{}); err == nil {
+		t.Fatal("expected empty node name to fail")
+	}
+	if err := api.RegisterNode(stubNode{}); err != nil {
+		t.Fatalf("RegisterNode first: %v", err)
+	}
+	if err := api.RegisterNode(stubNode{}); err == nil {
+		t.Fatal("expected duplicate node registration to fail")
+	}
+}
+
+type emptyNameChannel struct{}
+
+func (emptyNameChannel) Name() string                        { return "" }
+func (emptyNameChannel) Start() error                        { return nil }
+func (emptyNameChannel) Stop() error                         { return nil }
+func (emptyNameChannel) Send(msg Message) error              { return nil }
+func (emptyNameChannel) OnMessage(handler func(msg Message)) {}
+
+type emptyNameNode struct{}
+
+func (emptyNameNode) Name() string { return "" }
+func (emptyNameNode) Platform() string {
+	return "windows"
+}
+func (emptyNameNode) Connect() error    { return nil }
+func (emptyNameNode) Disconnect() error { return nil }
+func (emptyNameNode) Invoke(action string, input json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
+func (emptyNameNode) Capabilities() []string { return nil }
