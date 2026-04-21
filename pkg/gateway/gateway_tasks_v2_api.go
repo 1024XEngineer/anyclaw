@@ -2,11 +2,11 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
+	gatewaycommands "github.com/1024XEngineer/anyclaw/pkg/gateway/commands"
 	taskrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
 	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
@@ -33,32 +33,23 @@ func (s *Server) handleV2Tasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleV2TaskCreate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Title          string   `json:"title"`
-		Input          string   `json:"input"`
-		Mode           string   `json:"mode"`
-		Assistant      string   `json:"assistant"`
-		SessionID      string   `json:"session_id"`
-		SelectedAgent  string   `json:"selected_agent"`
-		SelectedAgents []string `json:"selected_agents"`
-		Sync           bool     `json:"sync"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, commandReq, err := s.surfaceService().DecodeHTTPV2TaskCreate(r)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-
-	if strings.TrimSpace(req.Input) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "input is required"})
+	mode, err := gatewaycommands.ValidateV2TaskCreate(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-
-	mode := strings.TrimSpace(strings.ToLower(req.Mode))
-	if mode == "" {
-		mode = "single"
+	dispatch, err := s.commandIntakeService().Dispatch(commandReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
-	if mode != "single" && mode != "multi" && mode != "main" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be 'single', 'multi', or 'main'"})
+	if dispatch.Kind != "mutate" || dispatch.Target != "tasks" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unexpected command dispatch"})
 		return
 	}
 
@@ -74,7 +65,7 @@ func (s *Server) handleV2TaskCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	orgID, projectID, workspaceID, err := s.v2TaskHierarchy(r, strings.TrimSpace(req.SessionID))
+	orgID, projectID, workspaceID, err := s.v2TaskHierarchy(r, req.SessionID)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, errSessionNotFound) {
@@ -91,7 +82,7 @@ func (s *Server) handleV2TaskCreate(w http.ResponseWriter, r *http.Request) {
 		Org:       orgID,
 		Project:   projectID,
 		Workspace: workspaceID,
-		SessionID: strings.TrimSpace(req.SessionID),
+		SessionID: req.SessionID,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

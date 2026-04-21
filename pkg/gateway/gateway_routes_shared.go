@@ -27,7 +27,7 @@ func (s *Server) registerStatusRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/events", s.wrap("/events", requirePermission("events.read", s.handleEvents)))
 	mux.HandleFunc("/events/stream", s.wrap("/events/stream", requirePermission("events.read", s.handleEventStream)))
 	mux.HandleFunc("/ws", s.wrap("/ws", s.handleOpenClawWS))
-	mux.HandleFunc("/control-plane", s.wrap("/control-plane", requirePermission("status.read", s.runtimeGovernanceAPI().HandleControlPlane)))
+	mux.HandleFunc("/control-plane", s.wrap("/control-plane", requirePermission("status.read", s.controlPlaneRuntimeAPI().HandleControlPlane)))
 }
 
 func (s *Server) registerCatalogRoutes(mux *http.ServeMux) {
@@ -55,10 +55,10 @@ func (s *Server) registerCatalogRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) registerRuntimeGovernanceRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/runtimes", s.wrap("/runtimes", requirePermission("runtimes.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.runtimeGovernanceAPI().HandleList))))
-	mux.HandleFunc("/runtimes/refresh", s.wrap("/runtimes/refresh", requirePermission("runtimes.write", s.runtimeGovernanceAPI().HandleRefresh)))
-	mux.HandleFunc("/runtimes/refresh-batch", s.wrap("/runtimes/refresh-batch", requirePermission("runtimes.write", s.runtimeGovernanceAPI().HandleRefreshBatch)))
-	mux.HandleFunc("/runtimes/metrics", s.wrap("/runtimes/metrics", requirePermission("runtimes.read", s.runtimeGovernanceAPI().HandleMetrics)))
+	mux.HandleFunc("/runtimes", s.wrap("/runtimes", requirePermission("runtimes.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.controlPlaneRuntimeAPI().HandleList))))
+	mux.HandleFunc("/runtimes/refresh", s.wrap("/runtimes/refresh", requirePermission("runtimes.write", s.controlPlaneRuntimeAPI().HandleRefresh)))
+	mux.HandleFunc("/runtimes/refresh-batch", s.wrap("/runtimes/refresh-batch", requirePermission("runtimes.write", s.controlPlaneRuntimeAPI().HandleRefreshBatch)))
+	mux.HandleFunc("/runtimes/metrics", s.wrap("/runtimes/metrics", requirePermission("runtimes.read", s.controlPlaneRuntimeAPI().HandleMetrics)))
 	mux.HandleFunc("/auth/users", s.wrap("/auth/users", s.handleUsers))
 	mux.HandleFunc("/auth/roles", s.wrap("/auth/roles", s.handleRoles))
 	mux.HandleFunc("/auth/roles/impact", s.wrap("/auth/roles/impact", requirePermission("auth.users.read", s.handleRoleImpact)))
@@ -77,15 +77,15 @@ func (s *Server) registerSessionTaskRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/sessions", s.wrap("/sessions", requirePermissionByMethod(map[string]string{
 		http.MethodGet:  "sessions.read",
 		http.MethodPost: "sessions.write",
-	}, "sessions.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.sessionAPI().HandleCollection))))
+	}, "sessions.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.sessionCommandsAPI().HandleCollection))))
 	mux.HandleFunc("/sessions/", s.wrap("/sessions/", requirePermissionByMethod(map[string]string{
 		http.MethodDelete: "sessions.write",
 		http.MethodGet:    "sessions.read",
-	}, "sessions.read", requireHierarchyAccess(s.resolveHierarchyFromSessionPath, s.sessionAPI().HandleByID))))
-	mux.HandleFunc("/sessions/move", s.wrap("/sessions/move", requirePermission("sessions.write", s.sessionMoveAPI().HandleSingle)))
-	mux.HandleFunc("/sessions/move-batch", s.wrap("/sessions/move-batch", requirePermission("sessions.write", s.sessionMoveAPI().HandleBatch)))
-	mux.HandleFunc("/tasks", s.wrap("/tasks", requirePermission("tasks.write", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.taskAPI().HandleCollection))))
-	mux.HandleFunc("/tasks/", s.wrap("/tasks/", s.taskAPI().HandleByID))
+	}, "sessions.read", requireHierarchyAccess(s.resolveHierarchyFromSessionPath, s.sessionCommandsAPI().HandleByID))))
+	mux.HandleFunc("/sessions/move", s.wrap("/sessions/move", requirePermission("sessions.write", s.sessionMoveCommandsAPI().HandleSingle)))
+	mux.HandleFunc("/sessions/move-batch", s.wrap("/sessions/move-batch", requirePermission("sessions.write", s.sessionMoveCommandsAPI().HandleBatch)))
+	mux.HandleFunc("/tasks", s.wrap("/tasks", requirePermission("tasks.write", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.taskCommandsAPI().HandleCollection))))
+	mux.HandleFunc("/tasks/", s.wrap("/tasks/", s.taskCommandsAPI().HandleByID))
 	mux.HandleFunc("/v2/tasks", s.wrap("/v2/tasks", requirePermission("tasks.write", s.handleV2Tasks)))
 	mux.HandleFunc("/v2/tasks/", s.wrap("/v2/tasks/", requirePermission("tasks.read", s.handleV2TaskByID)))
 	mux.HandleFunc("/v2/agents", s.wrap("/v2/agents", requirePermission("tasks.read", s.handleV2Agents)))
@@ -100,7 +100,7 @@ func (s *Server) registerChannelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/channel/mention-gate", s.wrap("/channel/mention-gate", gatewayintake.MentionGateAPI{Gate: s.mentionGate}.Handle))
 	mux.HandleFunc("/channel/group-security", s.wrap("/channel/group-security", gatewayintake.GroupSecurityAPI{Security: s.groupSecurity}.Handle))
 	mux.HandleFunc("/channel/pairing", s.wrap("/channel/pairing", gatewayintake.ChannelPairingAPI{Pairing: s.channelPairing}.Handle))
-	mux.HandleFunc("/channel/presence", s.wrap("/channel/presence", s.handlePresence))
+	mux.HandleFunc("/channel/presence", s.wrap("/channel/presence", s.controlPlanePresenceAPI().Handle))
 	mux.HandleFunc("/channel/contacts", s.wrap("/channel/contacts", gatewayintake.ContactsAPI{Directory: s.contactDir}.Handle))
 	mux.HandleFunc("/device/pairing", s.wrap("/device/pairing", s.handleDevicePairing))
 	mux.HandleFunc("/device/pairing/code", s.wrap("/device/pairing/code", s.handleDevicePairingCode))
@@ -114,18 +114,6 @@ func (s *Server) registerChannelRoutes(mux *http.ServeMux) {
 		Adapter:       s.discord,
 		HandleMessage: s.processChannelMessage,
 	}.Handle))
-	mux.HandleFunc("/ingress/web", s.rateLimit.Wrap(gatewayintake.SignedIngressAPI{
-		Secret:                  s.mainRuntime.Config.Security.WebhookSecret,
-		RunSessionMessage:       s.runSessionMessage,
-		SessionApprovalResponse: s.sessionApprovalResponse,
-		CurrentUser:             UserFromContext,
-		AppendAudit:             s.appendAudit,
-		AppendEvent:             s.appendEvent,
-	}.Handle))
-	mux.HandleFunc("/ingress/plugins/", s.rateLimit.Wrap(gatewayintake.PluginIngressAPI{
-		IngressPlugins: s.ingressPlugins,
-		CurrentUser:    UserFromContext,
-		AppendAudit:    s.appendAudit,
-		AppendEvent:    s.appendEvent,
-	}.Handle))
+	mux.HandleFunc("/ingress/web", s.rateLimit.Wrap(s.signedIngressAPI().Handle))
+	mux.HandleFunc("/ingress/plugins/", s.rateLimit.Wrap(s.pluginIngressAPI().Handle))
 }

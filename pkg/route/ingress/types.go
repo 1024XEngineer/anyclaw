@@ -62,6 +62,7 @@ type RouteHint struct {
 type IngressRoutingEntry struct {
 	MessageID  string
 	Text       string
+	TitleHint  string
 	Actor      MessageActor
 	Scope      MessageScope
 	Delivery   DeliveryHint
@@ -73,6 +74,7 @@ type IngressRoutingEntry struct {
 type MainRouteRequest struct {
 	MessageID    string
 	Text         string
+	TitleHint    string
 	Actor        MessageActor
 	Scope        MessageScope
 	DeliveryHint DeliveryHint

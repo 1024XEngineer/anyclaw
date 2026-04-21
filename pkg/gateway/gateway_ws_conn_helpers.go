@@ -1,8 +1,11 @@
 package gateway
 
 import (
-	"fmt"
+	"context"
 	"strings"
+
+	gatewayauth "github.com/1024XEngineer/anyclaw/pkg/gateway/auth"
+	gatewaygovernance "github.com/1024XEngineer/anyclaw/pkg/gateway/governance"
 )
 
 func (c *openClawWSConn) userSummary() map[string]any {
@@ -17,10 +20,11 @@ func (c *openClawWSConn) userSummary() map[string]any {
 }
 
 func (c *openClawWSConn) requirePermission(permission string) error {
-	if !HasPermission(c.user, permission) {
-		return fmt.Errorf("forbidden: missing %s", permission)
-	}
-	return nil
+	_, err := c.server.governanceService().AuthorizeCommand(c.contextWithUser(), gatewaygovernance.CommandRequest{
+		Method:             permission,
+		RequiredPermission: permission,
+	})
+	return err
 }
 
 func (c *openClawWSConn) writeResponse(id string, ok bool, data any, errMsg string) error {
@@ -77,4 +81,12 @@ func mapInt(values map[string]any, key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func (c *openClawWSConn) contextWithUser() context.Context {
+	ctx := context.Background()
+	if c == nil || c.user == nil {
+		return ctx
+	}
+	return gatewayauth.WithUser(ctx, c.user)
 }

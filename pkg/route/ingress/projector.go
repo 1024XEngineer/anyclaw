@@ -57,6 +57,7 @@ func (p IngressRouteProjector) Project(entry IngressRoutingEntry) (MainRouteRequ
 	return MainRouteRequest{
 		MessageID: strings.TrimSpace(firstNonEmpty(entry.MessageID, scopeMetadata["message_id"])),
 		Text:      entry.Text,
+		TitleHint: strings.TrimSpace(firstNonEmpty(entry.TitleHint, scopeMetadata["title_hint"], scopeMetadata["title"])),
 		Actor: MessageActor{
 			UserID: strings.TrimSpace(firstNonEmpty(entry.Actor.UserID, scopeMetadata["user_id"])),
 			DisplayName: strings.TrimSpace(firstNonEmpty(

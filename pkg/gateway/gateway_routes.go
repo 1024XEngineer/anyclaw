@@ -33,31 +33,6 @@ func typingSessionActive(session *state.Session, now time.Time, maxAge time.Dura
 	return gatewaytransport.TypingSessionActive(session, now, maxAge)
 }
 
-func (s *Server) transportAPI() gatewaytransport.PublicAPI {
-	return gatewaytransport.PublicAPI{
-		Status: s.statusDeps(),
-		OnStatusRead: func(ctx context.Context) {
-			s.appendAudit(UserFromContext(ctx), "status.read", "status", nil)
-		},
-	}
-}
-
-func (s *Server) runtimeGovernanceAPI() gatewaytransport.RuntimeGovernanceAPI {
-	return gatewaytransport.RuntimeGovernanceAPI{
-		Status:      s.statusDeps(),
-		RuntimePool: s.runtimePool,
-		Store:       s.store,
-		AppendAudit: func(ctx context.Context, action string, target string, meta map[string]any) {
-			s.appendAudit(UserFromContext(ctx), action, target, meta)
-		},
-		EnqueueJob: func(job func()) {
-			s.jobQueue <- job
-		},
-		ShouldCancel:   s.shouldCancelJob,
-		JobMaxAttempts: s.jobMaxAttempts,
-	}
-}
-
 func (s *Server) statusDeps() gatewaytransport.StatusDeps {
 	deps := gatewaytransport.StatusDeps{
 		MainRuntime:       s.mainRuntime,
@@ -83,15 +58,15 @@ func (s *Server) GatewayStatus() GatewayStatus {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	s.transportAPI().HandleHealth(w, r)
+	s.controlPlaneStatusAPI().HandleHealth(w, r)
 }
 
 func (s *Server) handleRootAPI(w http.ResponseWriter, r *http.Request) {
-	s.transportAPI().HandleRoot(w, r)
+	s.controlPlaneStatusAPI().HandleRoot(w, r)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s.transportAPI().HandleStatus(w, r)
+	s.controlPlaneStatusAPI().HandleStatus(w, r)
 }
 
 func (s *Server) registerGatewayRoutes(mux *http.ServeMux) {

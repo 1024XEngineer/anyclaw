@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
 	gatewayapprovals "github.com/1024XEngineer/anyclaw/pkg/gateway/approvals"
@@ -71,18 +70,5 @@ func (s *Server) runSessionMessage(ctx context.Context, sessionID string, title 
 }
 
 func (s *Server) runSessionMessageWithOptions(ctx context.Context, sessionID string, title string, message string, opts sessionrunner.RunOptions) (string, *state.Session, error) {
-	runner := s.ensureSessionRunner()
-	if runner == nil {
-		return "", nil, fmt.Errorf("session runner not initialized")
-	}
-	result, err := runner.Run(ctx, sessionrunner.RunRequest{
-		SessionID: sessionID,
-		Title:     title,
-		Message:   message,
-		Options:   opts,
-	})
-	if result == nil {
-		return "", nil, err
-	}
-	return result.Response, result.Session, err
+	return s.sessionBridgeService().RunMessage(ctx, sessionID, title, message, opts)
 }

@@ -110,6 +110,26 @@ func TestProjectorNormalizesIngressRoutingEntry(t *testing.T) {
 	}
 }
 
+func TestProjectorCopiesTitleHint(t *testing.T) {
+	projector := IngressRouteProjector{}
+
+	request, err := projector.Project(IngressRoutingEntry{
+		Text:      "hello",
+		TitleHint: "Webhook ticket",
+		Scope: MessageScope{
+			EntryPoint: "webhook",
+			ChannelID:  "webhook",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+
+	if request.TitleHint != "Webhook ticket" {
+		t.Fatalf("expected title hint Webhook ticket, got %q", request.TitleHint)
+	}
+}
+
 func TestAgentResolverUsesRequestedAndMainAgentFallback(t *testing.T) {
 	resolver := AgentResolver{
 		ResolveMainAgentName: func() string {
@@ -351,6 +371,40 @@ func TestSessionResolverCreatesSessionWhenStoreSupportsCreate(t *testing.T) {
 	}
 	if store.createCalls[0].ConversationKey != "telegram:chat-77" {
 		t.Fatalf("expected create conversation key telegram:chat-77, got %#v", store.createCalls[0])
+	}
+}
+
+func TestSessionResolverPrefersRequestTitleHint(t *testing.T) {
+	store := &stubSessionStore{}
+	resolver := SessionResolver{
+		Sessions: store,
+	}
+
+	_, _, _, err := resolver.Resolve(MainRouteRequest{
+		Text:      "create a new session",
+		TitleHint: "Webhook ticket",
+		Scope: MessageScope{
+			EntryPoint:     "webhook",
+			ChannelID:      "webhook",
+			ConversationID: "ticket-42",
+		},
+	}, RouteDecision{
+		RouteKey:    "webhook:ticket-42",
+		SessionMode: "main",
+		QueueMode:   "fifo",
+		TitleHint:   "Webhook session",
+	}, AgentResolution{
+		AgentName: "AnyClaw",
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if len(store.createCalls) != 1 {
+		t.Fatalf("expected one create call, got %d", len(store.createCalls))
+	}
+	if store.createCalls[0].Title != "Webhook ticket" {
+		t.Fatalf("expected request title hint to win, got %q", store.createCalls[0].Title)
 	}
 }
 

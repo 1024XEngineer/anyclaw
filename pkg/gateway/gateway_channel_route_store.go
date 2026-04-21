@@ -112,7 +112,10 @@ func (s ingressSessionStore) buildStateCreateOptions(opts ingress.SessionCreateO
 	}
 
 	agentName := firstNonEmpty(opts.AgentName, s.server.mainRuntime.Config.ResolveMainAgentName())
-	orgID, projectID, workspaceID := defaultResourceIDs(s.server.mainRuntime.WorkingDir)
+	orgID, projectID, workspaceID := routeResourceSelection(opts.TransportMeta)
+	if orgID == "" && projectID == "" && workspaceID == "" {
+		orgID, projectID, workspaceID = defaultResourceIDs(s.server.mainRuntime.WorkingDir)
+	}
 	org, project, workspace, err := s.server.validateResourceSelection(orgID, projectID, workspaceID)
 	if err != nil {
 		return state.SessionCreateOptions{}, err
@@ -163,4 +166,13 @@ func (s ingressSessionStore) buildStateCreateOptions(opts ingress.SessionCreateO
 		createOpts.SessionMode = "main"
 	}
 	return createOpts, nil
+}
+
+func routeResourceSelection(meta map[string]string) (string, string, string) {
+	if len(meta) == 0 {
+		return "", "", ""
+	}
+	return firstNonEmpty(meta["org"], meta["org_id"]),
+		firstNonEmpty(meta["project"], meta["project_id"]),
+		firstNonEmpty(meta["workspace"], meta["workspace_id"])
 }
