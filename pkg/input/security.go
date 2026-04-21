@@ -549,7 +549,6 @@ func AuditChannelPolicy(policy *ChannelPolicy) SecurityAuditResult {
 	riskAck := policy.riskAcknowledged
 	defaultDeny := policy.defaultDenyDM
 	policy.mu.RUnlock()
-	_ = allowFromCount
 
 	if dmPolicy != DMPolicyAllowAll || riskAck {
 		score++

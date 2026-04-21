@@ -616,11 +616,8 @@ func (pm *PresenceManager) SetPresence(channel, userID string, status string, ac
 		LastUpdate: now,
 	}
 
-	if existing, ok := pm.presences[key]; ok {
+	if existing, ok := pm.presences[key]; ok && existing.Status == status {
 		info.Since = existing.Since
-		if existing.Status == status {
-			info.Since = existing.Since
-		}
 	}
 
 	pm.presences[key] = info
@@ -667,12 +664,35 @@ func (pm *PresenceManager) CleanupStale(timeout time.Duration) {
 	defer pm.mu.Unlock()
 	now := time.Now().UTC()
 	for key, info := range pm.presences {
-		if now.Sub(info.LastUpdate) > timeout && info.Status != "offline" {
+		if now.Sub(info.LastUpdate) <= timeout {
+			continue
+		}
+		if info.Status == "offline" {
+			delete(pm.presences, key)
+			continue
+		}
+		if pm.onUpdate != nil {
+			channel, userID := splitPresenceKey(key)
 			info.Status = "offline"
+			info.Activity = ""
 			info.LastUpdate = now
 			pm.presences[key] = info
+			pm.onUpdate(channel, userID, info)
+			continue
 		}
+		info.Status = "offline"
+		info.Activity = ""
+		info.LastUpdate = now
+		pm.presences[key] = info
 	}
+}
+
+func splitPresenceKey(key string) (string, string) {
+	parts := strings.SplitN(key, ":", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
 }
 
 func (pm *PresenceManager) Wrap(handler InboundHandler) InboundHandler {
@@ -710,8 +730,10 @@ func (pm *PresenceManager) WrapStream(handler StreamChunkHandler) StreamChunkHan
 }
 
 type ContactDirectory struct {
-	mu       sync.RWMutex
-	contacts map[string]ContactInfo
+	mu         sync.RWMutex
+	contacts   map[string]ContactInfo
+	maxEntries int
+	staleAfter time.Duration
 }
 
 type ContactInfo struct {
@@ -729,7 +751,9 @@ type ContactInfo struct {
 
 func NewContactDirectory() *ContactDirectory {
 	return &ContactDirectory{
-		contacts: make(map[string]ContactInfo),
+		contacts:   make(map[string]ContactInfo),
+		maxEntries: 4096,
+		staleAfter: 30 * 24 * time.Hour,
 	}
 }
 
@@ -755,6 +779,8 @@ func (cd *ContactDirectory) AddOrUpdate(contact ContactInfo) {
 	}
 
 	cd.contacts[key] = contact
+	cd.cleanupStaleLocked(now, cd.staleAfter)
+	cd.evictOverflowLocked()
 }
 
 func (cd *ContactDirectory) Get(channel, userID string) (ContactInfo, bool) {
@@ -805,6 +831,67 @@ func (cd *ContactDirectory) Count() int {
 	cd.mu.RLock()
 	defer cd.mu.RUnlock()
 	return len(cd.contacts)
+}
+
+func (cd *ContactDirectory) SetMaxEntries(maxEntries int) {
+	cd.mu.Lock()
+	defer cd.mu.Unlock()
+	cd.maxEntries = maxEntries
+	cd.evictOverflowLocked()
+}
+
+func (cd *ContactDirectory) SetStaleAfter(staleAfter time.Duration) {
+	cd.mu.Lock()
+	defer cd.mu.Unlock()
+	cd.staleAfter = staleAfter
+	cd.cleanupStaleLocked(time.Now().UTC(), cd.staleAfter)
+}
+
+func (cd *ContactDirectory) CleanupStale(maxAge time.Duration) int {
+	cd.mu.Lock()
+	defer cd.mu.Unlock()
+	return cd.cleanupStaleLocked(time.Now().UTC(), maxAge)
+}
+
+func (cd *ContactDirectory) cleanupStaleLocked(now time.Time, maxAge time.Duration) int {
+	if maxAge <= 0 {
+		return 0
+	}
+
+	removed := 0
+	for key, contact := range cd.contacts {
+		if now.Sub(contact.LastSeen) > maxAge {
+			delete(cd.contacts, key)
+			removed++
+		}
+	}
+	return removed
+}
+
+func (cd *ContactDirectory) evictOverflowLocked() int {
+	if cd.maxEntries <= 0 || len(cd.contacts) <= cd.maxEntries {
+		return 0
+	}
+
+	removed := 0
+	for len(cd.contacts) > cd.maxEntries {
+		var oldestKey string
+		var oldestSeen time.Time
+		first := true
+		for key, contact := range cd.contacts {
+			if first || contact.LastSeen.Before(oldestSeen) {
+				oldestKey = key
+				oldestSeen = contact.LastSeen
+				first = false
+			}
+		}
+		if first {
+			return removed
+		}
+		delete(cd.contacts, oldestKey)
+		removed++
+	}
+	return removed
 }
 
 func (cd *ContactDirectory) Wrap(handler InboundHandler) InboundHandler {

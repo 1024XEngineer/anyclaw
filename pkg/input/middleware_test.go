@@ -467,16 +467,30 @@ func TestPresenceManagerLifecycleAndWrappers(t *testing.T) {
 		updates = append(updates, info.Status)
 	})
 
+	referenceTime := time.Now().UTC().Add(-time.Hour)
+	presence.presences["slack:user-1"] = PresenceInfo{
+		Status:     "online",
+		Activity:   "reading",
+		Since:      referenceTime,
+		LastUpdate: referenceTime,
+	}
+
 	presence.SetPresence("slack", "user-1", "online", "reading")
 	info, ok := presence.GetPresence("slack", "user-1")
 	if !ok || info.Status != "online" || info.Activity != "reading" {
 		t.Fatalf("unexpected presence after SetPresence: ok=%v info=%+v", ok, info)
+	}
+	if !info.Since.Equal(referenceTime) {
+		t.Fatalf("expected same-status presence to keep original since, got %v want %v", info.Since, referenceTime)
 	}
 
 	presence.SetTyping("slack", "user-1", true)
 	info, ok = presence.GetPresence("slack", "user-1")
 	if !ok || info.Status != "typing" {
 		t.Fatalf("expected typing presence, got ok=%v info=%+v", ok, info)
+	}
+	if !info.Since.After(referenceTime) {
+		t.Fatalf("expected status change to reset since, got %v want after %v", info.Since, referenceTime)
 	}
 
 	presence.SetTyping("slack", "user-1", false)
@@ -495,6 +509,15 @@ func TestPresenceManagerLifecycleAndWrappers(t *testing.T) {
 	staleInfo, ok := presence.GetPresence("slack", "user-2")
 	if !ok || staleInfo.Status != "offline" {
 		t.Fatalf("expected stale presence to be marked offline, got ok=%v info=%+v", ok, staleInfo)
+	}
+	presence.presences[staleKey] = PresenceInfo{
+		Status:     "offline",
+		Since:      time.Now().UTC().Add(-2 * time.Hour),
+		LastUpdate: time.Now().UTC().Add(-2 * time.Hour),
+	}
+	presence.CleanupStale(time.Minute)
+	if _, ok := presence.GetPresence("slack", "user-2"); ok {
+		t.Fatal("expected stale offline presence to be removed")
 	}
 
 	wrappedPresence := NewPresenceManager(nil)
@@ -642,5 +665,66 @@ func TestContactDirectoryLifecycleAndWrappers(t *testing.T) {
 	directory.Remove("discord", "user-2")
 	if got := directory.Count(); got != 3 {
 		t.Fatalf("expected 3 contacts after removal, got %d", got)
+	}
+}
+
+func TestContactDirectoryCleanupAndEviction(t *testing.T) {
+	directory := NewContactDirectory()
+	directory.SetMaxEntries(2)
+
+	now := time.Now().UTC()
+	directory.contacts["slack:user-1"] = ContactInfo{
+		UserID:   "user-1",
+		Channel:  "slack",
+		AddedAt:  now.Add(-3 * time.Hour),
+		LastSeen: now.Add(-3 * time.Hour),
+	}
+	directory.contacts["slack:user-2"] = ContactInfo{
+		UserID:   "user-2",
+		Channel:  "slack",
+		AddedAt:  now.Add(-2 * time.Hour),
+		LastSeen: now.Add(-30 * time.Minute),
+	}
+
+	directory.AddOrUpdate(ContactInfo{
+		UserID:      "user-3",
+		Channel:     "slack",
+		DisplayName: "Carol",
+	})
+	if got := directory.Count(); got != 2 {
+		t.Fatalf("expected contact count to respect max entries, got %d", got)
+	}
+	if _, ok := directory.Get("slack", "user-1"); ok {
+		t.Fatal("expected oldest contact to be evicted when max entries is exceeded")
+	}
+	if _, ok := directory.Get("slack", "user-2"); !ok {
+		t.Fatal("expected newer contact to remain after eviction")
+	}
+	if _, ok := directory.Get("slack", "user-3"); !ok {
+		t.Fatal("expected newest contact to remain after eviction")
+	}
+
+	directory.contacts["discord:user-4"] = ContactInfo{
+		UserID:   "user-4",
+		Channel:  "discord",
+		AddedAt:  now.Add(-48 * time.Hour),
+		LastSeen: now.Add(-48 * time.Hour),
+	}
+	if removed := directory.CleanupStale(time.Hour); removed != 1 {
+		t.Fatalf("expected one stale contact to be removed, got %d", removed)
+	}
+	if _, ok := directory.Get("discord", "user-4"); ok {
+		t.Fatal("expected stale contact to be removed by cleanup")
+	}
+
+	directory.contacts["telegram:user-5"] = ContactInfo{
+		UserID:   "user-5",
+		Channel:  "telegram",
+		AddedAt:  now.Add(-72 * time.Hour),
+		LastSeen: now.Add(-72 * time.Hour),
+	}
+	directory.SetStaleAfter(time.Hour)
+	if _, ok := directory.Get("telegram", "user-5"); ok {
+		t.Fatal("expected SetStaleAfter to enforce stale cleanup immediately")
 	}
 }
