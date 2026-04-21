@@ -1,0 +1,63 @@
+{
+  "name": "vision-agent",
+  "description": "Siri-like autonomous desktop control",
+  "version": "1.0.0",
+  "workflows": {
+    "launch_app": {
+      "description": "Launch an application and verify it opened",
+      "steps": [
+        {"tool": "desktop_open", "params": {"target": "wechat", "kind": "app"}},
+        {"tool": "desktop_wait", "params": {"wait_ms": 2000}},
+        {"tool": "desktop_screenshot", "params": {"path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_ocr", "params": {"path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_verify_text", "params": {"text": "微信", "scope": "screen"}}
+      ]
+    },
+    "click_button": {
+      "description": "Find and click a button by text",
+      "steps": [
+        {"tool": "desktop_screenshot", "params": {"path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_find_text", "params": {"text": "确定", "path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}}
+      ]
+    },
+    "type_text": {
+      "description": "Click input box and type text",
+      "steps": [
+        {"tool": "desktop_screenshot", "params": {"path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_find_text", "params": {"text": "请输入", "path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}},
+        {"tool": "desktop_type_human", "params": {"text": "Hello World", "delay_ms": 50}}
+      ]
+    },
+    "fill_form": {
+      "description": "Fill a login form with username and password",
+      "steps": [
+        {"tool": "desktop_screenshot", "params": {"path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_find_text", "params": {"text": "用户名", "path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}},
+        {"tool": "desktop_type_human", "params": {"text": "admin", "delay_ms": 30}},
+        {"tool": "desktop_find_text", "params": {"text": "密码", "path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}},
+        {"tool": "desktop_type_human", "params": {"text": "password123", "delay_ms": 30}},
+        {"tool": "desktop_find_text", "params": {"text": "登录", "path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}}
+      ]
+    },
+    "send_message": {
+      "description": "Open WeChat and send a message",
+      "steps": [
+        {"tool": "desktop_open", "params": {"target": "wechat", "kind": "app"}},
+        {"tool": "desktop_wait", "params": {"wait_ms": 3000}},
+        {"tool": "desktop_focus_window", "params": {"title": "微信"}},
+        {"tool": "desktop_screenshot", "params": {"path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_find_text", "params": {"text": "张三", "path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}},
+        {"tool": "desktop_wait", "params": {"wait_ms": 1000}},
+        {"tool": "desktop_type_human", "params": {"text": "我马上到", "delay_ms": 50}},
+        {"tool": "desktop_find_text", "params": {"text": "发送", "path": ".anyclaw/vision/screen.png"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}}
+      ]
+    }
+  }
+}
