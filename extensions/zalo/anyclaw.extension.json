@@ -1,0 +1,34 @@
+{
+  "id": "zalo",
+  "name": "Zalo Channel",
+  "version": "1.0.0",
+  "description": "Zalo messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["zalo"],
+  "entrypoint": "zalo_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "app_id": {
+        "type": "string",
+        "description": "Zalo Official Account App ID"
+      },
+      "secret_key": {
+        "type": "string",
+        "description": "Zalo Official Account Secret Key",
+        "sensitive": true
+      },
+      "oa_id": {
+        "type": "string",
+        "description": "Zalo Official Account ID"
+      },
+      "webhook_token": {
+        "type": "string",
+        "description": "Webhook verification token",
+        "sensitive": true
+      }
+    },
+    "required": ["app_id", "secret_key", "oa_id"]
+  }
+}
