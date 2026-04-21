@@ -8,10 +8,16 @@ import (
 
 // MemoryService composes higher-level memory workflows on top of a storage backend.
 type MemoryService struct {
-	backend MemoryBackend
+	backend interface {
+		Add(entry MemoryEntry) error
+		List() ([]MemoryEntry, error)
+	}
 }
 
-func NewMemoryService(backend MemoryBackend) *MemoryService {
+func NewMemoryService(backend interface {
+	Add(entry MemoryEntry) error
+	List() ([]MemoryEntry, error)
+}) *MemoryService {
 	return &MemoryService{backend: backend}
 }
 
