@@ -20,7 +20,7 @@ func NewClient(cfg Config) *Client {
 
 func (c *Client) Run(ctx context.Context, args []string) (string, error) {
 	if len(args) == 0 {
-		return "Usage: zip <command> [args]\nCommands: create, extract, list, add", nil
+		return "", fmt.Errorf("usage: zip <command> [args]")
 	}
 
 	switch args[0] {
@@ -188,36 +188,79 @@ func (c *Client) add(ctx context.Context, args []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	writer := zip.NewWriter(temp)
 
-	original, err := os.Open(archive)
-	if err == nil {
-		zipReader, _ := zip.OpenReader(archive)
-		if zipReader != nil {
-			writer := zip.NewWriter(temp)
-
-			for _, file := range zipReader.File {
-				rc, _ := file.Open()
-				if rc != nil {
-					header, _ := zip.FileInfoHeader(file.FileInfo())
-					header.Name = file.Name
-					entry, _ := writer.CreateHeader(header)
-					io.Copy(entry, rc)
-					rc.Close()
-				}
+	if _, err := os.Stat(archive); err == nil {
+		zipReader, err := zip.OpenReader(archive)
+		if err != nil {
+			_ = writer.Close()
+			_ = temp.Close()
+			_ = os.Remove(tempFile)
+			return "", err
+		}
+		for _, file := range zipReader.File {
+			rc, err := file.Open()
+			if err != nil {
+				zipReader.Close()
+				_ = writer.Close()
+				_ = temp.Close()
+				_ = os.Remove(tempFile)
+				return "", err
 			}
-
-			for _, file := range files {
-				c.addFile(writer, file)
+			header, err := zip.FileInfoHeader(file.FileInfo())
+			if err != nil {
+				rc.Close()
+				zipReader.Close()
+				_ = writer.Close()
+				_ = temp.Close()
+				_ = os.Remove(tempFile)
+				return "", err
 			}
+			header.Name = file.Name
+			entry, err := writer.CreateHeader(header)
+			if err != nil {
+				rc.Close()
+				zipReader.Close()
+				_ = writer.Close()
+				_ = temp.Close()
+				_ = os.Remove(tempFile)
+				return "", err
+			}
+			if _, err := io.Copy(entry, rc); err != nil {
+				rc.Close()
+				zipReader.Close()
+				_ = writer.Close()
+				_ = temp.Close()
+				_ = os.Remove(tempFile)
+				return "", err
+			}
+			rc.Close()
+		}
+		zipReader.Close()
+	}
 
-			writer.Close()
-			original.Close()
-			zipReader.Close()
+	for _, file := range files {
+		if err := c.addFile(writer, file); err != nil {
+			_ = writer.Close()
+			_ = temp.Close()
+			_ = os.Remove(tempFile)
+			return "", err
 		}
 	}
-	temp.Close()
 
-	os.Rename(tempFile, archive)
+	if err := writer.Close(); err != nil {
+		_ = temp.Close()
+		_ = os.Remove(tempFile)
+		return "", err
+	}
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempFile)
+		return "", err
+	}
+	if err := os.Rename(tempFile, archive); err != nil {
+		_ = os.Remove(tempFile)
+		return "", err
+	}
 
 	return fmt.Sprintf("Added %d files to %s", len(files), archive), nil
 }
