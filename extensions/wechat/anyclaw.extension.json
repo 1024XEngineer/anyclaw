@@ -1,0 +1,35 @@
+{
+  "id": "wechat",
+  "name": "WeChat Channel",
+  "version": "1.0.0",
+  "description": "WeChat messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["wechat"],
+  "entrypoint": "wechat_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "app_id": {
+        "type": "string",
+        "description": "WeChat App ID"
+      },
+      "app_secret": {
+        "type": "string",
+        "description": "WeChat App Secret",
+        "sensitive": true
+      },
+      "token": {
+        "type": "string",
+        "description": "WeChat webhook token",
+        "sensitive": true
+      },
+      "encoding_aes_key": {
+        "type": "string",
+        "description": "WeChat message encoding AES key",
+        "sensitive": true
+      }
+    },
+    "required": ["app_id", "app_secret"]
+  }
+}

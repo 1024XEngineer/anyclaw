@@ -1,0 +1,30 @@
+{
+  "id": "zalouser",
+  "name": "Zalo Personal Channel",
+  "version": "1.0.0",
+  "description": "Zalo personal account messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["zalouser"],
+  "entrypoint": "zalouser_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "cookie": {
+        "type": "string",
+        "description": "Zalo web session cookie",
+        "sensitive": true
+      },
+      "imei": {
+        "type": "string",
+        "description": "Device IMEI for Zalo API"
+      },
+      "poll_interval": {
+        "type": "integer",
+        "description": "Poll interval in seconds",
+        "default": 10
+      }
+    },
+    "required": ["cookie", "imei"]
+  }
+}
