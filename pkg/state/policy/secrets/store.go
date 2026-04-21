@@ -120,7 +120,7 @@ func (s *Store) saveLocked() error {
 		Secrets:          cloneEntries(s.data.Secrets),
 		Snapshots:        cloneSnapshots(s.data.Snapshots),
 		Locks:            cloneLocks(s.data.Locks),
-		VersionHistories: s.data.VersionHistories,
+		VersionHistories: cloneVersionHistories(s.data.VersionHistories),
 		RotationPolicies: s.data.RotationPolicies,
 		AuditLog:         cloneAuditEntries(s.data.AuditLog),
 		LastUpdate:       time.Now().UTC(),
@@ -921,4 +921,12 @@ func cloneVersionHistory(vh *VersionHistory) *VersionHistory {
 		c.Policy = &p
 	}
 	return &c
+}
+
+func cloneVersionHistories(histories []*VersionHistory) []*VersionHistory {
+	result := make([]*VersionHistory, len(histories))
+	for i, vh := range histories {
+		result[i] = cloneVersionHistory(vh)
+	}
+	return result
 }

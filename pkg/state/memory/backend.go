@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"path/filepath"
 	"time"
 )
 
@@ -50,10 +51,24 @@ type DailyBackend interface {
 	DailyDir() string
 }
 
+type WarmupBackend interface {
+	Warmup(queries []string, concurrency int) WarmupProgress
+}
+
+type CacheStatsBackend interface {
+	CacheStats() CacheStats
+}
+
+type AutoBackupBackend interface {
+	StartAutoBackup(backupDir string, interval time.Duration, maxBackups int) error
+}
+
 type Config struct {
-	Backend     BackendType
+	Backend BackendType
+	WorkDir string
+	SQLite  SQLiteConfig
+
 	DSN         string
-	WorkDir     string
 	MaxOpen     int
 	BusyTimeout time.Duration
 	Embedder    EmbeddingProvider
@@ -65,6 +80,16 @@ type BackendCacheConfig struct {
 	Enabled bool
 	MaxSize int
 	TTL     time.Duration
+}
+
+type SQLiteCacheConfig = BackendCacheConfig
+
+type SQLiteConfig struct {
+	DSN         string
+	MaxOpen     int
+	BusyTimeout time.Duration
+	Embedder    EmbeddingProvider
+	Cache       SQLiteCacheConfig
 }
 
 type BackendWarmupConfig struct {
@@ -81,17 +106,15 @@ const (
 )
 
 func DefaultConfig(workDir string) Config {
+	sqliteCfg := DefaultSQLiteConfig(workDir)
 	return Config{
-		Backend:     BackendDual,
-		DSN:         workDir + "/memory.db",
+		Backend:     BackendSQLite,
 		WorkDir:     workDir,
-		MaxOpen:     1,
-		BusyTimeout: 30,
-		Cache: BackendCacheConfig{
-			Enabled: true,
-			MaxSize: 5000,
-			TTL:     5 * time.Minute,
-		},
+		SQLite:      sqliteCfg,
+		DSN:         sqliteCfg.DSN,
+		MaxOpen:     sqliteCfg.MaxOpen,
+		BusyTimeout: sqliteCfg.BusyTimeout,
+		Cache:       sqliteCfg.Cache,
 		Warmup: BackendWarmupConfig{
 			Enabled: true,
 			Queries: []string{
@@ -101,6 +124,19 @@ func DefaultConfig(workDir string) Config {
 				"error",
 				"setup",
 			},
+		},
+	}
+}
+
+func DefaultSQLiteConfig(workDir string) SQLiteConfig {
+	return SQLiteConfig{
+		DSN:         filepath.Join(workDir, "memory.db"),
+		MaxOpen:     1,
+		BusyTimeout: 30 * time.Second,
+		Cache: SQLiteCacheConfig{
+			Enabled: true,
+			MaxSize: 5000,
+			TTL:     5 * time.Minute,
 		},
 	}
 }

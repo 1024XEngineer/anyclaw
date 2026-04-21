@@ -418,6 +418,43 @@ func TestSaveRelativizesPathsInsideConfigDirectory(t *testing.T) {
 	}
 }
 
+func TestSaveDoesNotMutateOriginalConfigPaths(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	path := filepath.Join(configDir, "anyclaw.json")
+
+	cfg := DefaultConfig()
+	profileDir := filepath.Join(configDir, "workflows", "go")
+	subAgentDir := filepath.Join(configDir, "workflows", "worker")
+	cfg.Agent.Profiles = []AgentProfile{
+		{
+			Name:            "Go Expert",
+			Description:     "Go specialist",
+			WorkingDir:      profileDir,
+			PermissionLevel: "limited",
+		},
+	}
+	cfg.Orchestrator.SubAgents = []SubAgentConfig{
+		{
+			Name:            "worker",
+			Description:     "background worker",
+			PermissionLevel: "limited",
+			WorkingDir:      subAgentDir,
+		},
+	}
+
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save should succeed: %v", err)
+	}
+
+	if got := cfg.Agent.Profiles[0].WorkingDir; got != profileDir {
+		t.Fatalf("expected original profile working dir to remain %q, got %q", profileDir, got)
+	}
+	if got := cfg.Orchestrator.SubAgents[0].WorkingDir; got != subAgentDir {
+		t.Fatalf("expected original sub-agent working dir to remain %q, got %q", subAgentDir, got)
+	}
+}
+
 func TestValidateDefaultProviderRef(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Providers = []ProviderProfile{

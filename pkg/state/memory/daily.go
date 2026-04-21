@@ -51,6 +51,36 @@ func (m *FileMemory) GetDaily(dayRef string) (*DailyMemoryFile, error) {
 	return GetDailyMarkdown(m.DailyDir(), dayRef)
 }
 
+func (m *SQLiteMemory) SetDailyDir(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		m.dailyDir = filepath.Join(m.baseDir, "memory")
+		return
+	}
+	m.dailyDir = filepath.Clean(dir)
+}
+
+func (m *SQLiteMemory) DailyDir() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if strings.TrimSpace(m.dailyDir) == "" {
+		return filepath.Join(m.baseDir, "memory")
+	}
+	return m.dailyDir
+}
+
+func (m *SQLiteMemory) SearchDaily(query string, limit int, dayRef string) ([]DailyMemoryMatch, error) {
+	return SearchDailyMarkdown(m.DailyDir(), query, limit, dayRef)
+}
+
+func (m *SQLiteMemory) GetDaily(dayRef string) (*DailyMemoryFile, error) {
+	return GetDailyMarkdown(m.DailyDir(), dayRef)
+}
+
 func SearchDailyMarkdown(memoryDir string, query string, limit int, dayRef string) ([]DailyMemoryMatch, error) {
 	return searchDailyMarkdownAt(memoryDir, query, limit, dayRef, time.Now())
 }
@@ -119,9 +149,13 @@ func getDailyMarkdownAt(memoryDir string, dayRef string, now time.Time) (*DailyM
 }
 
 func (m *FileMemory) appendDailyMarkdownLocked(entry MemoryEntry) error {
-	dailyDir := strings.TrimSpace(m.dailyDir)
+	return appendDailyMarkdown(m.dailyDir, m.baseDir, entry)
+}
+
+func appendDailyMarkdown(dailyDir string, fallbackDir string, entry MemoryEntry) error {
+	dailyDir = strings.TrimSpace(dailyDir)
 	if dailyDir == "" {
-		dailyDir = m.baseDir
+		dailyDir = fallbackDir
 	}
 	if err := os.MkdirAll(dailyDir, 0o755); err != nil {
 		return err

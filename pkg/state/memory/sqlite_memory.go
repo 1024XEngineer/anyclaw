@@ -18,16 +18,20 @@ import (
 )
 
 type SQLiteMemory struct {
-	db      *sql.DB
-	baseDir string
-	mu      sync.RWMutex
-	ctx     context.Context
+	db       *sql.DB
+	baseDir  string
+	dsn      string
+	dailyDir string
+	mu       sync.RWMutex
+	ctx      context.Context
 
 	embedder   EmbeddingProvider
 	dimensions int
 
-	cache      *SearchCache
-	warmupDone bool
+	cache       *SearchCache
+	warmupDone  bool
+	maxOpen     int
+	busyTimeout time.Duration
 }
 
 type SQLiteMemoryOption func(*SQLiteMemory)
@@ -47,11 +51,35 @@ func WithCache(cfg CacheConfig) SQLiteMemoryOption {
 	}
 }
 
+func WithMaxOpenConns(maxOpen int) SQLiteMemoryOption {
+	return func(m *SQLiteMemory) {
+		if maxOpen > 0 {
+			m.maxOpen = maxOpen
+		}
+	}
+}
+
+func WithBusyTimeout(timeout time.Duration) SQLiteMemoryOption {
+	return func(m *SQLiteMemory) {
+		if timeout > 0 {
+			m.busyTimeout = timeout
+		}
+	}
+}
+
 func NewSQLiteMemory(workDir string, dsn string, opts ...SQLiteMemoryOption) (*SQLiteMemory, error) {
 	if dsn == "" {
-		dsn = workDir + "/memory.db"
+		dsn = filepath.Join(workDir, "memory.db")
 	}
-	m := &SQLiteMemory{baseDir: workDir, ctx: context.Background(), dimensions: 1536}
+	m := &SQLiteMemory{
+		baseDir:     workDir,
+		dsn:         dsn,
+		dailyDir:    filepath.Join(workDir, "memory"),
+		ctx:         context.Background(),
+		dimensions:  1536,
+		maxOpen:     1,
+		busyTimeout: 30 * time.Second,
+	}
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -59,7 +87,7 @@ func NewSQLiteMemory(workDir string, dsn string, opts ...SQLiteMemoryOption) (*S
 }
 
 func (m *SQLiteMemory) Init() error {
-	return m.InitWithDSN("")
+	return m.InitWithDSN(m.dsn)
 }
 
 func (m *SQLiteMemory) InitWithDSN(dsn string) error {
@@ -67,20 +95,33 @@ func (m *SQLiteMemory) InitWithDSN(dsn string) error {
 	defer m.mu.Unlock()
 
 	if dsn == "" {
-		dsn = m.baseDir + "/memory.db"
+		dsn = m.dsn
 	}
+	if dsn == "" {
+		dsn = filepath.Join(m.baseDir, "memory.db")
+	}
+	m.dsn = dsn
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open SQLite: %w", err)
 	}
 
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	maxOpen := m.maxOpen
+	if maxOpen <= 0 {
+		maxOpen = 1
+	}
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxOpen)
 	db.SetConnMaxLifetime(time.Hour)
 
+	busyTimeout := m.busyTimeout
+	if busyTimeout <= 0 {
+		busyTimeout = 30 * time.Second
+	}
+
 	pragmas := []string{
-		"PRAGMA busy_timeout = 30000",
+		fmt.Sprintf("PRAGMA busy_timeout = %d", busyTimeout.Milliseconds()),
 		"PRAGMA journal_mode = WAL",
 		"PRAGMA synchronous = NORMAL",
 		"PRAGMA cache_size = -64000",
@@ -137,7 +178,11 @@ func (m *SQLiteMemory) Add(entry MemoryEntry) error {
 	defer m.mu.Unlock()
 
 	if entry.ID == "" {
-		entry.ID = fmt.Sprintf("%d-%s", time.Now().UnixMilli(), randomID(8))
+		suffix, err := randomID(8)
+		if err != nil {
+			return fmt.Errorf("generate memory id: %w", err)
+		}
+		entry.ID = fmt.Sprintf("%d-%s", time.Now().UnixMilli(), suffix)
 	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
@@ -151,6 +196,9 @@ func (m *SQLiteMemory) Add(entry MemoryEntry) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert memory: %w", err)
+	}
+	if err := appendDailyMarkdown(m.dailyDir, filepath.Join(m.baseDir, "memory"), entry); err != nil {
+		return err
 	}
 
 	if m.embedder != nil && strings.TrimSpace(entry.Content) != "" {
@@ -633,10 +681,14 @@ func (m *SQLiteMemory) backup_loop(backupDir string, interval time.Duration, max
 func (m *SQLiteMemory) performBackup(backupDir string, maxBackups int) error {
 	m.mu.RLock()
 	db := m.db
+	srcPath := m.currentDBPathLocked()
 	m.mu.RUnlock()
 
 	if db == nil {
 		return fmt.Errorf("database not initialized")
+	}
+	if srcPath == "" {
+		return fmt.Errorf("cannot determine source database path")
 	}
 
 	if _, err := db.ExecContext(m.ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
@@ -645,11 +697,6 @@ func (m *SQLiteMemory) performBackup(backupDir string, maxBackups int) error {
 
 	timestamp := time.Now().Format("20060102_150405")
 	backupPath := filepath.Join(backupDir, fmt.Sprintf("backup_%s.db", timestamp))
-
-	srcPath := m.baseDir + "/memory.db"
-	if srcPath == "" {
-		return fmt.Errorf("cannot determine source database path")
-	}
 
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
@@ -742,4 +789,15 @@ func scanVectorRowWithScore(row rowScanner) (VectorEntry, error) {
 	}
 
 	return entry, nil
+}
+
+func (m *SQLiteMemory) currentDBPathLocked() string {
+	dsn := strings.TrimSpace(m.dsn)
+	if dsn == "" {
+		return filepath.Join(m.baseDir, "memory.db")
+	}
+	if dsn == ":memory:" || strings.HasPrefix(dsn, "file:") || strings.Contains(dsn, "mode=memory") {
+		return ""
+	}
+	return dsn
 }

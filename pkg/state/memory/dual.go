@@ -50,6 +50,18 @@ func (d *DualMemory) Add(entry MemoryEntry) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	if entry.ID == "" {
+		suffix, err := randomID(8)
+		if err != nil {
+			return fmt.Errorf("generate memory id: %w", err)
+		}
+		entry.ID = fmt.Sprintf("%d-%s", time.Now().UnixMilli(), suffix)
+	}
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now()
+	}
+	entry.Timestamp = entry.Timestamp.UTC().Truncate(time.Second)
+
 	sqliteErr := d.sqlite.Add(entry)
 	if sqliteErr != nil {
 		return fmt.Errorf("sqlite add failed: %w", sqliteErr)
@@ -85,11 +97,17 @@ func (d *DualMemory) Delete(id string) error {
 	defer d.mu.Unlock()
 
 	sqliteErr := d.sqlite.Delete(id)
-	if sqliteErr != nil && d.syncOnWrite {
-		d.file.Delete(id)
+	if sqliteErr != nil {
+		return sqliteErr
 	}
 
-	return sqliteErr
+	if d.syncOnWrite {
+		if err := d.file.Delete(id); err != nil {
+			return fmt.Errorf("file delete failed: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (d *DualMemory) List() ([]MemoryEntry, error) {

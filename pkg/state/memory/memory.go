@@ -1,6 +1,7 @@
 package memory
 
 import (
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -74,7 +75,11 @@ func (m *FileMemory) Add(entry MemoryEntry) error {
 	defer m.mu.Unlock()
 
 	if entry.ID == "" {
-		entry.ID = fmt.Sprintf("%d-%s", time.Now().UnixMilli(), randomID(8))
+		suffix, err := randomID(8)
+		if err != nil {
+			return fmt.Errorf("generate memory id: %w", err)
+		}
+		entry.ID = fmt.Sprintf("%d-%s", time.Now().UnixMilli(), suffix)
 	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
@@ -347,11 +352,31 @@ func (m *FileMemory) GetStats() (map[string]int, error) {
 	return stats, nil
 }
 
-func randomID(length int) string {
+func randomID(length int) (string, error) {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-	result := make([]byte, length)
-	for i := range result {
-		result[i] = chars[time.Now().UnixNano()%int64(len(chars))]
+	if length <= 0 {
+		return "", nil
 	}
-	return string(result)
+
+	result := make([]byte, length)
+	randomBytes := make([]byte, length)
+	maxRandomByte := byte(256 - (256 % len(chars)))
+
+	for i := 0; i < length; {
+		if _, err := cryptorand.Read(randomBytes); err != nil {
+			return "", err
+		}
+		for _, b := range randomBytes {
+			if b >= maxRandomByte {
+				continue
+			}
+			result[i] = chars[int(b)%len(chars)]
+			i++
+			if i == length {
+				break
+			}
+		}
+	}
+
+	return string(result), nil
 }

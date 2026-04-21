@@ -57,6 +57,12 @@ func (c *Config) persistableCopy(path string) *Config {
 	}
 
 	snapshot := *c
+	if len(snapshot.Agent.Profiles) > 0 {
+		snapshot.Agent.Profiles = append([]AgentProfile(nil), snapshot.Agent.Profiles...)
+	}
+	if len(snapshot.Orchestrator.SubAgents) > 0 {
+		snapshot.Orchestrator.SubAgents = append([]SubAgentConfig(nil), snapshot.Orchestrator.SubAgents...)
+	}
 	snapshot.Agent.WorkDir = persistConfigPath(path, snapshot.Agent.WorkDir)
 	snapshot.Agent.WorkingDir = persistConfigPath(path, snapshot.Agent.WorkingDir)
 	for i := range snapshot.Agent.Profiles {
