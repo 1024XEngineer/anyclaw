@@ -31,6 +31,9 @@ func WithToolApprovalHook(ctx context.Context, hook ToolApprovalHook) context.Co
 	if hook == nil {
 		return ctx
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return context.WithValue(ctx, toolApprovalHookKey{}, hook)
 }
 

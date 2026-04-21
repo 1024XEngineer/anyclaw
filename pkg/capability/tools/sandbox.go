@@ -20,6 +20,9 @@ type SandboxScope struct {
 }
 
 func WithSandboxScope(ctx context.Context, scope SandboxScope) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return context.WithValue(ctx, sandboxContextKey{}, scope)
 }
 
@@ -52,7 +55,9 @@ func (m *SandboxManager) ResolveExecution(ctx context.Context, requestedCwd stri
 	if m == nil || !m.config.Enabled {
 		cwd := strings.TrimSpace(requestedCwd)
 		if cwd == "" {
-			cwd = m.workingDir
+			if m != nil {
+				cwd = m.workingDir
+			}
 		}
 		return cwd, nil, nil
 	}
