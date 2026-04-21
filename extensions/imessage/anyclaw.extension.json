@@ -1,0 +1,40 @@
+{
+  "id": "imessage",
+  "name": "iMessage Channel",
+  "version": "1.0.0",
+  "description": "iMessage channel adapter for AnyClaw (macOS only)",
+  "kind": "channel",
+  "channels": ["imessage"],
+  "entrypoint": "imessage_adapter.go",
+  "permissions": ["net:out", "exec"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "description": "Connection mode: 'bridge' (BlueBubbles/local server) or 'database' (poll chat.db)",
+        "default": "bridge"
+      },
+      "bridge_url": {
+        "type": "string",
+        "description": "Bridge server URL (e.g. http://localhost:12345)",
+        "default": "http://localhost:12345"
+      },
+      "bridge_password": {
+        "type": "string",
+        "description": "Bridge server password",
+        "sensitive": true
+      },
+      "chat_db_path": {
+        "type": "string",
+        "description": "Path to Messages chat.db (for database mode)"
+      },
+      "poll_interval": {
+        "type": "integer",
+        "description": "Poll interval in seconds",
+        "default": 5
+      }
+    },
+    "required": ["mode"]
+  }
+}

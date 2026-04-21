@@ -1,0 +1,40 @@
+{
+  "id": "irc",
+  "name": "IRC Channel",
+  "version": "1.0.0",
+  "description": "IRC messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["irc"],
+  "entrypoint": "irc_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "server": {
+        "type": "string",
+        "description": "IRC server address",
+        "default": "irc.libera.chat"
+      },
+      "port": {
+        "type": "integer",
+        "description": "IRC server port",
+        "default": 6667
+      },
+      "nick": {
+        "type": "string",
+        "description": "IRC nickname"
+      },
+      "channels": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Channels to join"
+      },
+      "use_tls": {
+        "type": "boolean",
+        "description": "Use TLS connection",
+        "default": false
+      }
+    },
+    "required": ["nick", "channels"]
+  }
+}

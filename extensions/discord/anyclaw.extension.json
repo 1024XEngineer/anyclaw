@@ -1,0 +1,26 @@
+{
+  "id": "discord",
+  "name": "Discord Channel",
+  "version": "1.0.0",
+  "description": "Discord messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["discord"],
+  "entrypoint": "discord_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "bot_token": {
+        "type": "string",
+        "description": "Discord Bot API token",
+        "sensitive": true
+      },
+      "api_base_url": {
+        "type": "string",
+        "description": "Optional: custom Discord API base URL",
+        "default": "https://discord.com/api/v10"
+      }
+    },
+    "required": ["bot_token"]
+  }
+}
