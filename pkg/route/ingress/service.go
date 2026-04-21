@@ -1,7 +1,6 @@
 package ingress
 
 import (
-	"context"
 	"fmt"
 	"strings"
 )
@@ -76,12 +75,9 @@ func (s *Service) DecideChannel(req ChannelRequest) (SessionRoute, error) {
 }
 
 // Route executes the ingress route chain: M1 projector, M2 agent resolution, M3 session resolution, and M4 delivery resolution.
-func (s *Service) Route(ctx context.Context, input RouteInput) (RouteOutput, error) {
+func (s *Service) Route(input RouteInput) (RouteOutput, error) {
 	if s == nil {
 		return RouteOutput{}, fmt.Errorf("ingress route service is nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return RouteOutput{}, err
 	}
 
 	request, err := s.projector.Project(input.Entry)

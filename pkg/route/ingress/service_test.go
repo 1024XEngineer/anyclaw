@@ -1,7 +1,6 @@
 package ingress
 
 import (
-	"context"
 	"testing"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
@@ -51,7 +50,7 @@ func TestServiceRouteRunsFullIngressChain(t *testing.T) {
 		WithSessionStore(store),
 	)
 
-	output, err := service.Route(context.Background(), RouteInput{
+	output, err := service.Route(RouteInput{
 		Entry: IngressRoutingEntry{
 			Text: "reuse this session",
 			Scope: MessageScope{
@@ -78,22 +77,5 @@ func TestServiceRouteRunsFullIngressChain(t *testing.T) {
 	}
 	if output.Request.Route.Delivery.TransportMeta["conversation_key"] != "telegram:chat-22" {
 		t.Fatalf("expected delivery metadata conversation_key telegram:chat-22, got %#v", output.Request.Route.Delivery.TransportMeta)
-	}
-}
-
-func TestServiceRouteReturnsContextError(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	service := NewService(NewRouter(config.RoutingConfig{Mode: "per-chat"}))
-	_, err := service.Route(ctx, RouteInput{
-		Entry: IngressRoutingEntry{
-			Scope: MessageScope{
-				ChannelID: "telegram",
-			},
-		},
-	})
-	if err == nil {
-		t.Fatal("expected Route to return context error")
 	}
 }
