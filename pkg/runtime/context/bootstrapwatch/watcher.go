@@ -58,6 +58,7 @@ type Watcher struct {
 	opsMu        sync.Mutex
 	dispatchMu   sync.Mutex
 	dispatchTail chan struct{}
+	loopDone     chan struct{}
 	files        map[FileType]*FileEntry
 	handlers     []ChangeHandler
 	interval     time.Duration
@@ -99,9 +100,9 @@ func NewWatcher(cfg WatcherConfig) *Watcher {
 	w := &Watcher{
 		files:        make(map[FileType]*FileEntry),
 		interval:     cfg.PollInterval,
-		stopCh:       make(chan struct{}),
 		baseDir:      cfg.BaseDir,
 		dispatchTail: closedSignal(),
+		loopDone:     closedSignal(),
 	}
 
 	if cfg.OnChange != nil {
@@ -123,23 +124,32 @@ func (w *Watcher) Start() error {
 		w.mu.Unlock()
 		return fmt.Errorf("bootstrap: watcher already running")
 	}
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	w.stopCh = stopCh
+	w.loopDone = done
 	w.running = true
 	w.mu.Unlock()
 
-	go w.watchLoop()
+	go w.watchLoop(stopCh, done)
 	return nil
 }
 
 func (w *Watcher) Stop() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if !w.running {
+		w.mu.Unlock()
 		return
 	}
+	stopCh := w.stopCh
+	done := w.loopDone
 	w.running = false
-	close(w.stopCh)
-	w.stopCh = make(chan struct{})
+	w.stopCh = nil
+	w.loopDone = closedSignal()
+	w.mu.Unlock()
+
+	close(stopCh)
+	<-done
 }
 
 func (w *Watcher) Get(ft FileType) (*FileEntry, bool) {
@@ -204,13 +214,14 @@ func (w *Watcher) OnChange(handler ChangeHandler) {
 	w.handlers = append(w.handlers, handler)
 }
 
-func (w *Watcher) watchLoop() {
+func (w *Watcher) watchLoop(stopCh <-chan struct{}, done chan<- struct{}) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
+	defer close(done)
 
 	for {
 		select {
-		case <-w.stopCh:
+		case <-stopCh:
 			return
 		case <-ticker.C:
 			w.checkChanges()
