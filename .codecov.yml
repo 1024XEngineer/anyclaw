@@ -1,9 +1,0 @@
-ignore:
-  - "capability-models/**"
-  - "capability-skills/**"
-  - "capability-tools/**"
-  - "extensions-mcp/**"
-  - "extensions-plugin/**"
-  - "extensions-adapters/**"
-  - "extensions-bundle/**"
-  - "skills-bundle/**"
