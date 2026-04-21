@@ -64,6 +64,7 @@ type Watcher struct {
 	interval     time.Duration
 	stopCh       chan struct{}
 	running      bool
+	stopping     bool
 	baseDir      string
 }
 
@@ -120,7 +121,7 @@ func NewWatcher(cfg WatcherConfig) *Watcher {
 
 func (w *Watcher) Start() error {
 	w.mu.Lock()
-	if w.running {
+	if w.running || w.stopping {
 		w.mu.Unlock()
 		return fmt.Errorf("bootstrap: watcher already running")
 	}
@@ -137,19 +138,31 @@ func (w *Watcher) Start() error {
 
 func (w *Watcher) Stop() {
 	w.mu.Lock()
-	if !w.running {
+	if !w.running && !w.stopping {
 		w.mu.Unlock()
 		return
 	}
+	if w.stopping {
+		done := w.loopDone
+		w.mu.Unlock()
+		<-done
+		return
+	}
+
 	stopCh := w.stopCh
 	done := w.loopDone
-	w.running = false
-	w.stopCh = nil
-	w.loopDone = closedSignal()
+	w.stopping = true
 	w.mu.Unlock()
 
 	close(stopCh)
 	<-done
+
+	w.mu.Lock()
+	w.running = false
+	w.stopping = false
+	w.stopCh = nil
+	w.loopDone = closedSignal()
+	w.mu.Unlock()
 }
 
 func (w *Watcher) Get(ft FileType) (*FileEntry, bool) {

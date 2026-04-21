@@ -380,6 +380,46 @@ func TestWatcherStartTwice(t *testing.T) {
 	}
 }
 
+func TestWatcherStartWhileStopping(t *testing.T) {
+	dir := setupTestDir(t)
+
+	w := NewWatcher(WatcherConfig{
+		BaseDir:      dir,
+		PollInterval: 10 * time.Millisecond,
+	})
+
+	w.opsMu.Lock()
+	if err := w.Start(); err != nil {
+		w.opsMu.Unlock()
+		t.Fatalf("start: %v", err)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		w.Stop()
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+
+	if err := w.Start(); err == nil {
+		w.opsMu.Unlock()
+		<-stopDone
+		t.Fatal("expected start to fail while stop is waiting for the loop to exit")
+	}
+
+	w.opsMu.Unlock()
+	<-stopDone
+
+	if err := w.Start(); err != nil {
+		t.Fatalf("restart after stop: %v", err)
+	}
+
+	w.Stop()
+}
+
 func TestWatcherSameContentNoEvent(t *testing.T) {
 	dir := setupTestDir(t)
 	path := writeFile(t, dir, "AGENTS.md", "content")
