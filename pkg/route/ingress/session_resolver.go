@@ -3,6 +3,9 @@ package ingress
 import (
 	"fmt"
 	"strings"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // SessionResolver implements M3 for conversation-key reuse and explicit session reuse.
@@ -167,14 +170,14 @@ func buildSessionCreateOptions(request MainRouteRequest, decision RouteDecision,
 }
 
 func sessionTitle(request MainRouteRequest, decision RouteDecision) string {
+	if title := strings.TrimSpace(request.TitleHint); title != "" {
+		return title
+	}
 	if title := strings.TrimSpace(decision.TitleHint); title != "" {
 		return title
 	}
 	source := strings.TrimSpace(firstNonEmpty(request.Scope.ChannelID, "channel"))
-	if source == "" {
-		return "Session"
-	}
-	return strings.ToUpper(source[:1]) + strings.ToLower(source[1:]) + " session"
+	return cases.Title(language.English).String(source) + " session"
 }
 
 func derivedSessionKey(request MainRouteRequest) string {

@@ -10,7 +10,7 @@ type IngressRouteProjector struct{}
 
 // Project converts one gateway-trusted ingress entry into the route layer contract.
 func (p IngressRouteProjector) Project(entry IngressRoutingEntry) (MainRouteRequest, error) {
-	channelID := firstNonEmpty(entry.Scope.ChannelID, entry.Delivery.ChannelID)
+	channelID := strings.TrimSpace(firstNonEmpty(entry.Scope.ChannelID, entry.Delivery.ChannelID))
 	entryPoint := strings.TrimSpace(entry.Scope.EntryPoint)
 	if channelID == "" && entryPoint == "" {
 		return MainRouteRequest{}, fmt.Errorf("ingress routing entry requires an entry point or channel id")
@@ -21,33 +21,33 @@ func (p IngressRouteProjector) Project(entry IngressRoutingEntry) (MainRouteRequ
 
 	scopeMetadata := cloneStringMap(entry.Scope.Metadata)
 	deliveryMetadata := cloneStringMap(entry.Delivery.Metadata)
-	conversationID := firstNonEmpty(
+	conversationID := strings.TrimSpace(firstNonEmpty(
 		entry.Scope.ConversationID,
 		entry.Delivery.ConversationID,
 		entry.Hint.RequestedSessionID,
 		scopeMetadata["conversation_id"],
 		scopeMetadata["chat_id"],
-	)
-	threadID := firstNonEmpty(
+	))
+	threadID := strings.TrimSpace(firstNonEmpty(
 		entry.Scope.ThreadID,
 		entry.Delivery.ThreadID,
 		scopeMetadata["thread_id"],
-	)
+	))
 
 	scope := MessageScope{
 		EntryPoint:     entryPoint,
 		ChannelID:      channelID,
 		ConversationID: conversationID,
 		ThreadID:       threadID,
-		GroupID:        firstNonEmpty(entry.Scope.GroupID, scopeMetadata["group_id"], scopeMetadata["guild_id"]),
+		GroupID:        strings.TrimSpace(firstNonEmpty(entry.Scope.GroupID, scopeMetadata["group_id"], scopeMetadata["guild_id"])),
 		IsGroup:        entry.Scope.IsGroup,
 		Metadata:       scopeMetadata,
 	}
 	delivery := DeliveryHint{
-		ChannelID:      firstNonEmpty(entry.Delivery.ChannelID, scope.ChannelID),
-		ConversationID: firstNonEmpty(entry.Delivery.ConversationID, scope.ConversationID),
+		ChannelID:      strings.TrimSpace(firstNonEmpty(entry.Delivery.ChannelID, scope.ChannelID)),
+		ConversationID: strings.TrimSpace(firstNonEmpty(entry.Delivery.ConversationID, scope.ConversationID)),
 		ReplyTo:        strings.TrimSpace(entry.Delivery.ReplyTo),
-		ThreadID:       firstNonEmpty(entry.Delivery.ThreadID, scope.ThreadID),
+		ThreadID:       strings.TrimSpace(firstNonEmpty(entry.Delivery.ThreadID, scope.ThreadID)),
 		Metadata:       deliveryMetadata,
 	}
 	if len(delivery.Metadata) == 0 {
@@ -55,16 +55,17 @@ func (p IngressRouteProjector) Project(entry IngressRoutingEntry) (MainRouteRequ
 	}
 
 	return MainRouteRequest{
-		MessageID: firstNonEmpty(entry.MessageID, scopeMetadata["message_id"]),
+		MessageID: strings.TrimSpace(firstNonEmpty(entry.MessageID, scopeMetadata["message_id"])),
 		Text:      entry.Text,
+		TitleHint: strings.TrimSpace(firstNonEmpty(entry.TitleHint, scopeMetadata["title_hint"], scopeMetadata["title"])),
 		Actor: MessageActor{
-			UserID: firstNonEmpty(entry.Actor.UserID, scopeMetadata["user_id"]),
-			DisplayName: firstNonEmpty(
+			UserID: strings.TrimSpace(firstNonEmpty(entry.Actor.UserID, scopeMetadata["user_id"])),
+			DisplayName: strings.TrimSpace(firstNonEmpty(
 				entry.Actor.DisplayName,
 				scopeMetadata["user_name"],
 				scopeMetadata["username"],
 				scopeMetadata["display_name"],
-			),
+			)),
 		},
 		Scope:        scope,
 		DeliveryHint: delivery,
