@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -55,6 +56,47 @@ func TestBuildAdaptersIncludesTelegramAndSignal(t *testing.T) {
 	}
 }
 
+func TestNewManagerBuildsStatusesForChannelAdapters(t *testing.T) {
+	manager := NewManager(config.ChannelsConfig{
+		Telegram: config.TelegramChannelConfig{
+			Enabled:  true,
+			BotToken: "telegram-token",
+		},
+		Slack: config.SlackChannelConfig{
+			Enabled:        true,
+			BotToken:       "slack-token",
+			AppToken:       "app-token",
+			DefaultChannel: "C123",
+		},
+		Discord: config.DiscordChannelConfig{
+			Enabled:        true,
+			BotToken:       "discord-token",
+			DefaultChannel: "123",
+		},
+		Signal: config.SignalChannelConfig{
+			Enabled: true,
+			BaseURL: "https://signal.example",
+			Number:  "+1000",
+		},
+	}, nil)
+
+	if manager == nil {
+		t.Fatal("expected channel manager to be created")
+	}
+
+	statuses := manager.Statuses()
+	if len(statuses) != 4 {
+		t.Fatalf("expected 4 adapter statuses, got %d", len(statuses))
+	}
+
+	wantNames := []string{"telegram", "slack", "discord", "signal"}
+	for i, want := range wantNames {
+		if statuses[i].Name != want {
+			t.Fatalf("expected status %d to be %q, got %+v", i, want, statuses[i])
+		}
+	}
+}
+
 func TestSignalFindAudioAttachmentMatchesByMIMEWithoutURL(t *testing.T) {
 	adapter := &SignalAdapter{}
 	attachments := []struct {
@@ -73,6 +115,70 @@ func TestSignalFindAudioAttachmentMatchesByMIMEWithoutURL(t *testing.T) {
 	}
 	if audioURL != "" {
 		t.Fatalf("expected empty audio URL when attachment has no filename, got %q", audioURL)
+	}
+}
+
+func TestSignalAdapterSendMessageUsesDefaultRecipientAndBearerToken(t *testing.T) {
+	var (
+		gotAuth string
+		gotBody string
+		calls   int
+	)
+
+	adapter := NewSignalAdapter(config.SignalChannelConfig{
+		Enabled:          true,
+		BaseURL:          "https://signal.example/",
+		Number:           "+1000",
+		DefaultRecipient: "+2000",
+		BearerToken:      "secret",
+	}, nil)
+
+	if adapter.Name() != "signal" {
+		t.Fatalf("expected signal adapter name, got %q", adapter.Name())
+	}
+	if !adapter.Enabled() {
+		t.Fatal("expected signal adapter to be enabled")
+	}
+	status := adapter.Status()
+	if !status.Enabled || status.Name != "signal" {
+		t.Fatalf("unexpected signal adapter status: %+v", status)
+	}
+	if signalChannelType("group-1") != "group" || signalChannelType("") != "private" {
+		t.Fatal("expected signal channel type helper to distinguish group/private chats")
+	}
+
+	adapter.client = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			calls++
+			gotAuth = req.Header.Get("Authorization")
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatalf("read signal send body: %v", err)
+			}
+			gotBody = string(body)
+			return jsonResponse(http.StatusOK, map[string]any{"timestamp": 1}), nil
+		}),
+	}
+
+	if err := adapter.sendMessage(context.Background(), "", "hello"); err != nil {
+		t.Fatalf("sendMessage returned error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected one outbound signal send, got %d", calls)
+	}
+	if gotAuth != "Bearer secret" {
+		t.Fatalf("expected bearer token header, got %q", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"+2000"`) || !strings.Contains(gotBody, `"+1000"`) || !strings.Contains(gotBody, `"hello"`) {
+		t.Fatalf("unexpected signal send payload: %s", gotBody)
+	}
+
+	adapter.config.DefaultRecipient = ""
+	if err := adapter.sendMessage(context.Background(), "", "ignored"); err != nil {
+		t.Fatalf("expected empty recipient branch to return nil, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected empty recipient branch to skip HTTP call, got %d calls", calls)
 	}
 }
 
@@ -95,6 +201,193 @@ func TestTelegramSendMessageReturnsAPIErrorWhenOKFalse(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "chat not found") {
 		t.Fatalf("expected chat not found error, got %v", err)
+	}
+}
+
+func TestTelegramAdapterLifecycleAndHelperMethods(t *testing.T) {
+	var (
+		cancelRun       context.CancelFunc
+		cancelRunStream context.CancelFunc
+		editBody        string
+		deleteCalls     int32
+		sendCalls       int32
+	)
+
+	adapter := NewTelegramAdapter(config.TelegramChannelConfig{
+		Enabled:   true,
+		BotToken:  "token",
+		PollEvery: 1,
+	}, nil)
+
+	if adapter.Name() != "telegram" {
+		t.Fatalf("expected telegram adapter name, got %q", adapter.Name())
+	}
+	if !adapter.Enabled() {
+		t.Fatal("expected telegram adapter to be enabled")
+	}
+	status := adapter.Status()
+	if !status.Enabled || status.Name != "telegram" {
+		t.Fatalf("unexpected telegram adapter status: %+v", status)
+	}
+	if got := telegramFileRef(" file-1 "); got != "telegram-file:file-1" {
+		t.Fatalf("expected telegram file ref helper to trim file id, got %q", got)
+	}
+	if got := telegramFileRef("   "); got != "" {
+		t.Fatalf("expected empty telegram file ref for blank id, got %q", got)
+	}
+	if channelType, isGroup := telegramConversationMetadata("private", 42, 42); channelType != "private" || isGroup {
+		t.Fatalf("expected private telegram conversation metadata, got %q %v", channelType, isGroup)
+	}
+	if channelType, isGroup := telegramConversationMetadata("supergroup", -100, 42); channelType != "supergroup" || !isGroup {
+		t.Fatalf("expected group telegram conversation metadata, got %q %v", channelType, isGroup)
+	}
+
+	adapter.client = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case strings.Contains(req.URL.String(), "/getUpdates"):
+				return jsonResponse(http.StatusOK, map[string]any{
+					"ok": true,
+					"result": []map[string]any{
+						{
+							"update_id": 12,
+							"message": map[string]any{
+								"text": "hello",
+								"chat": map[string]any{"id": 42, "type": "private"},
+								"from": map[string]any{"id": 99, "username": "alice"},
+							},
+						},
+					},
+				}), nil
+			case strings.Contains(req.URL.String(), "/sendMessage"):
+				atomic.AddInt32(&sendCalls, 1)
+				body, err := io.ReadAll(req.Body)
+				if err != nil {
+					t.Fatalf("read telegram send body: %v", err)
+				}
+				values, err := url.ParseQuery(string(body))
+				if err != nil {
+					t.Fatalf("parse telegram send body: %v", err)
+				}
+				switch values.Get("text") {
+				case "hello":
+					if cancelRun != nil {
+						cancelRun()
+					}
+					return jsonResponse(http.StatusOK, map[string]any{"ok": true}), nil
+				case "\u200B", "hello again":
+					return jsonResponse(http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77}}), nil
+				default:
+					return jsonResponse(http.StatusOK, map[string]any{"ok": true}), nil
+				}
+			case strings.Contains(req.URL.String(), "/editMessageText"):
+				body, err := io.ReadAll(req.Body)
+				if err != nil {
+					t.Fatalf("read telegram edit body: %v", err)
+				}
+				editBody = string(body)
+				if cancelRunStream != nil {
+					cancelRunStream()
+				}
+				return jsonResponse(http.StatusOK, map[string]any{"ok": true}), nil
+			case strings.Contains(req.URL.String(), "/deleteMessage"):
+				atomic.AddInt32(&deleteCalls, 1)
+				return jsonResponse(http.StatusOK, map[string]any{"ok": true}), nil
+			default:
+				return nil, fmt.Errorf("unexpected telegram lifecycle request: %s", req.URL.String())
+			}
+		}),
+	}
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	cancelRun = runCancel
+	if err := adapter.Run(runCtx, func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
+		if message != "hello" {
+			t.Fatalf("expected telegram Run to pass text message, got %q", message)
+		}
+		return "session-run", "hello", nil
+	}); err != nil {
+		t.Fatalf("telegram Run returned error: %v", err)
+	}
+
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	cancelRunStream = streamCancel
+	if err := adapter.RunStream(streamCtx, func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
+		if message != "hello" {
+			t.Fatalf("expected telegram RunStream to pass text message, got %q", message)
+		}
+		if err := onChunk(strings.Repeat("x", 4105)); err != nil {
+			return "", err
+		}
+		return "session-stream", nil
+	}); err != nil {
+		t.Fatalf("telegram RunStream returned error: %v", err)
+	}
+
+	if ts, err := adapter.sendMessageWithResult(context.Background(), "42", "hello again"); err != nil || ts != "77" {
+		t.Fatalf("expected sendMessageWithResult to return message id, got %q %v", ts, err)
+	}
+	if err := adapter.editMessage(context.Background(), "42", "77", strings.Repeat("x", 4105)); err != nil {
+		t.Fatalf("editMessage returned error: %v", err)
+	}
+	values, err := url.ParseQuery(editBody)
+	if err != nil {
+		t.Fatalf("parse telegram edit body: %v", err)
+	}
+	if got := values.Get("text"); len([]rune(got)) != 4096 || !strings.HasSuffix(got, "...") {
+		t.Fatalf("expected telegram edit text to be truncated to 4096 runes, got len=%d text=%q", len([]rune(got)), got)
+	}
+	if err := adapter.deleteMessage(context.Background(), "42", "77"); err != nil {
+		t.Fatalf("deleteMessage returned error: %v", err)
+	}
+	if err := adapter.deleteMessage(context.Background(), "42", ""); err != nil {
+		t.Fatalf("expected blank deleteMessage to be a no-op, got %v", err)
+	}
+	if atomic.LoadInt32(&sendCalls) < 3 {
+		t.Fatalf("expected lifecycle test to send multiple telegram requests, got %d", sendCalls)
+	}
+	if atomic.LoadInt32(&deleteCalls) != 1 {
+		t.Fatalf("expected one explicit telegram delete call, got %d", deleteCalls)
+	}
+}
+
+func TestTelegramResolveAndDownloadFileErrors(t *testing.T) {
+	adapter := NewTelegramAdapter(config.TelegramChannelConfig{
+		Enabled:  true,
+		BotToken: "token",
+	}, nil)
+
+	if _, err := adapter.resolveFileDownloadURL(context.Background(), "   "); err == nil {
+		t.Fatal("expected missing telegram file id to fail")
+	}
+
+	adapter.client = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case strings.Contains(req.URL.String(), "/getFile") && strings.Contains(req.URL.RawQuery, "file_id=missing"):
+				return jsonResponse(http.StatusOK, map[string]any{"ok": false, "description": "missing file"}), nil
+			case strings.Contains(req.URL.String(), "/getFile") && strings.Contains(req.URL.RawQuery, "file_id=download-fail"):
+				return jsonResponse(http.StatusOK, map[string]any{
+					"ok":     true,
+					"result": map[string]any{"file_id": "download-fail", "file_path": "voice/fail.ogg"},
+				}), nil
+			case strings.Contains(req.URL.String(), "/file/bottoken/voice/fail.ogg"):
+				return &http.Response{
+					StatusCode: http.StatusBadGateway,
+					Body:       io.NopCloser(strings.NewReader("bad gateway")),
+					Header:     make(http.Header),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected telegram helper request: %s", req.URL.String())
+			}
+		}),
+	}
+
+	if _, err := adapter.resolveFileDownloadURL(context.Background(), "missing"); err == nil || !strings.Contains(err.Error(), "missing file") {
+		t.Fatalf("expected telegram getFile error, got %v", err)
+	}
+	if _, _, err := adapter.downloadFile(context.Background(), "download-fail"); err == nil || !strings.Contains(err.Error(), "download failed") {
+		t.Fatalf("expected telegram download error, got %v", err)
 	}
 }
 
@@ -738,6 +1031,190 @@ func TestSignalPollOnceProcessesDistinctMessagesWithSameTimestamp(t *testing.T) 
 	}
 	if adapter.latestTS != 123 {
 		t.Fatalf("expected latestTS to advance to 123, got %d", adapter.latestTS)
+	}
+}
+
+func TestSignalPollOnceProcessesVoiceGroupMessages(t *testing.T) {
+	var (
+		eventType    string
+		eventSession string
+		eventPayload map[string]any
+		sendBody     string
+	)
+
+	adapter := NewSignalAdapter(config.SignalChannelConfig{
+		Enabled:     true,
+		BaseURL:     "https://signal.example",
+		Number:      "+1000",
+		PollEvery:   1,
+		BearerToken: "secret",
+	}, func(kind string, sessionID string, payload map[string]any) {
+		eventType = kind
+		eventSession = sessionID
+		eventPayload = payload
+	})
+
+	adapter.client = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch {
+			case strings.Contains(req.URL.String(), "/v1/receive/"):
+				if req.Header.Get("Authorization") != "Bearer secret" {
+					t.Fatalf("expected bearer token on signal receive request, got %q", req.Header.Get("Authorization"))
+				}
+				return jsonResponse(http.StatusOK, []map[string]any{
+					{
+						"envelope": map[string]any{
+							"timestamp":  234,
+							"source":     "+2000",
+							"sourceName": "bob",
+							"groupInfo":  map[string]any{"groupId": "group-1"},
+							"dataMessage": map[string]any{
+								"message": "voice caption",
+								"attachments": []map[string]any{
+									{"filename": "clip.m4a"},
+								},
+							},
+						},
+					},
+				}), nil
+			case strings.Contains(req.URL.String(), "/v2/send"):
+				body, err := io.ReadAll(req.Body)
+				if err != nil {
+					t.Fatalf("read signal send body: %v", err)
+				}
+				sendBody = string(body)
+				if req.Header.Get("Authorization") != "Bearer secret" {
+					t.Fatalf("expected bearer token on signal send request, got %q", req.Header.Get("Authorization"))
+				}
+				return jsonResponse(http.StatusOK, map[string]any{"timestamp": 235}), nil
+			default:
+				return nil, fmt.Errorf("unexpected signal voice request: %s", req.URL.String())
+			}
+		}),
+	}
+
+	err := adapter.pollOnce(context.Background(), func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
+		if message != "clip.m4a" {
+			t.Fatalf("expected voice attachment filename as message payload, got %q", message)
+		}
+		if meta["message_type"] != "voice_note" || meta["audio_url"] != "clip.m4a" || meta["audio_mime"] != "audio/mp4" {
+			t.Fatalf("unexpected signal voice metadata: %+v", meta)
+		}
+		if meta["caption"] != "voice caption" || meta["reply_target"] != "group-1" {
+			t.Fatalf("expected caption and group reply target, got %+v", meta)
+		}
+		if meta["channel_type"] != "group" || meta["is_group"] != "true" {
+			t.Fatalf("expected group metadata, got %+v", meta)
+		}
+		return "session-voice", "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("pollOnce failed: %v", err)
+	}
+	if !strings.Contains(sendBody, `"group-1"`) {
+		t.Fatalf("expected signal outbound send to target group recipient, got %s", sendBody)
+	}
+	if adapter.latestTS != 234 {
+		t.Fatalf("expected latestTS to advance after voice success, got %d", adapter.latestTS)
+	}
+	expectedMessageID := signalMessageID(
+		"+2000",
+		"group-1",
+		234,
+		"voice caption",
+		[]struct {
+			ContentType string `json:"contentType"`
+			Filename    string `json:"filename"`
+		}{
+			{Filename: "clip.m4a"},
+		},
+	)
+	if !adapter.hasSeen(expectedMessageID) {
+		t.Fatalf("expected signal voice message %q to be marked seen", expectedMessageID)
+	}
+	if eventType != "channel.signal.voice" || eventSession != "session-voice" {
+		t.Fatalf("unexpected signal voice event info: %q %q", eventType, eventSession)
+	}
+	if got := eventPayload["audio_mime"]; got != "audio/mp4" {
+		t.Fatalf("expected signal voice event mime, got %+v", eventPayload)
+	}
+}
+
+func TestSignalRunRecordsPollErrorsBeforeShutdown(t *testing.T) {
+	var eventPayload map[string]any
+
+	adapter := NewSignalAdapter(config.SignalChannelConfig{
+		Enabled:   true,
+		BaseURL:   "https://signal.example",
+		Number:    "+1000",
+		PollEvery: 1,
+	}, func(kind string, sessionID string, payload map[string]any) {
+		if kind == "channel.signal.error" {
+			eventPayload = payload
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	adapter.client = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			cancel()
+			return jsonResponse(http.StatusBadGateway, map[string]any{"error": "fail"}), nil
+		}),
+	}
+
+	if err := adapter.Run(ctx, func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
+		t.Fatal("expected handler not to be called when signal receive fails")
+		return "", "", nil
+	}); err != nil {
+		t.Fatalf("signal Run returned error: %v", err)
+	}
+
+	status := adapter.Status()
+	if !strings.Contains(status.LastError, "signal receive failed") || status.Healthy {
+		t.Fatalf("expected signal status to record poll error, got %+v", status)
+	}
+	if eventPayload == nil || !strings.Contains(fmt.Sprint(eventPayload["error"]), "signal receive failed") {
+		t.Fatalf("expected signal error event payload, got %+v", eventPayload)
+	}
+}
+
+func TestSignalAdapterStateHelpers(t *testing.T) {
+	adapter := &SignalAdapter{
+		processed: make(map[string]time.Time),
+	}
+
+	if adapter.seen("msg-1") {
+		t.Fatal("expected first seen check to report false")
+	}
+	if !adapter.seen("msg-1") {
+		t.Fatal("expected second seen check to report true")
+	}
+
+	adapter.processed["stale"] = time.Now().Add(-31 * time.Minute)
+	if adapter.hasSeen("stale") {
+		t.Fatal("expected stale processed message to be pruned")
+	}
+
+	adapter.advanceTimestamp(10)
+	adapter.advanceTimestamp(5)
+	if adapter.latestTS != 10 {
+		t.Fatalf("expected advanceTimestamp to keep max timestamp, got %d", adapter.latestTS)
+	}
+
+	messageID := signalMessageID(
+		" +2000 ",
+		" group-1 ",
+		123,
+		" hello ",
+		[]struct {
+			ContentType string `json:"contentType"`
+			Filename    string `json:"filename"`
+		}{
+			{ContentType: "audio/ogg", Filename: " clip.ogg "},
+		},
+	)
+	if messageID != "+2000|group-1|123|hello|audio/ogg:clip.ogg" {
+		t.Fatalf("unexpected normalized signal message id: %q", messageID)
 	}
 }
 
