@@ -1,0 +1,34 @@
+{
+  "id": "mattermost",
+  "name": "Mattermost Channel",
+  "version": "1.0.0",
+  "description": "Mattermost messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["mattermost"],
+  "entrypoint": "mattermost_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "server_url": {
+        "type": "string",
+        "description": "Mattermost server URL (e.g. https://mattermost.example.com)"
+      },
+      "bot_token": {
+        "type": "string",
+        "description": "Mattermost bot access token",
+        "sensitive": true
+      },
+      "team_id": {
+        "type": "string",
+        "description": "Mattermost team ID"
+      },
+      "poll_interval": {
+        "type": "integer",
+        "description": "Poll interval in seconds",
+        "default": 5
+      }
+    },
+    "required": ["server_url", "bot_token"]
+  }
+}

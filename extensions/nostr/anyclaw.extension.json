@@ -1,0 +1,31 @@
+{
+  "id": "nostr",
+  "name": "Nostr Channel",
+  "version": "1.0.0",
+  "description": "Nostr decentralized messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["nostr"],
+  "entrypoint": "nostr_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "relay_url": {
+        "type": "string",
+        "description": "Nostr relay URL (e.g. wss://relay.damus.io)",
+        "default": "wss://relay.damus.io"
+      },
+      "private_key": {
+        "type": "string",
+        "description": "Nostr private key (hex)",
+        "sensitive": true
+      },
+      "poll_interval": {
+        "type": "integer",
+        "description": "Poll interval in seconds",
+        "default": 10
+      }
+    },
+    "required": ["relay_url", "private_key"]
+  }
+}

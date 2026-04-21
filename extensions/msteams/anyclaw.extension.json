@@ -1,0 +1,33 @@
+{
+  "id": "msteams",
+  "name": "Microsoft Teams Channel",
+  "version": "1.0.0",
+  "description": "Microsoft Teams messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["msteams"],
+  "entrypoint": "msteams_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "app_id": {
+        "type": "string",
+        "description": "Azure AD App (client) ID"
+      },
+      "app_secret": {
+        "type": "string",
+        "description": "Azure AD App Secret",
+        "sensitive": true
+      },
+      "tenant_id": {
+        "type": "string",
+        "description": "Azure AD Tenant ID"
+      },
+      "webhook_url": {
+        "type": "string",
+        "description": "Teams incoming webhook URL for outbound messages"
+      }
+    },
+    "required": ["app_id", "app_secret", "tenant_id"]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "synology-chat",
+  "name": "Synology Chat Channel",
+  "version": "1.0.0",
+  "description": "Synology Chat messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["synology-chat"],
+  "entrypoint": "synology_chat_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "server_url": {
+        "type": "string",
+        "description": "Synology Chat server URL (e.g. https://synology.example.com:5000)"
+      },
+      "api_token": {
+        "type": "string",
+        "description": "Synology Chat bot API token",
+        "sensitive": true
+      },
+      "poll_interval": {
+        "type": "integer",
+        "description": "Poll interval in seconds",
+        "default": 5
+      }
+    },
+    "required": ["server_url", "api_token"]
+  }
+}
