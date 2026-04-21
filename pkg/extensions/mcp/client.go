@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -99,7 +100,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 	if len(env) > 0 {
-		cmd.Env = append(cmd.Env, env...)
+		cmd.Env = append(os.Environ(), env...)
 	}
 
 	stdin, err := cmd.StdinPipe()
@@ -134,6 +135,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	if err := c.discoverTools(ctx); err != nil {
+		c.Close()
 		return fmt.Errorf("discover tools: %w", err)
 	}
 
@@ -394,12 +396,16 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.stdin != nil {
-		c.stdin.Close()
+		_ = c.stdin.Close()
+		c.stdin = nil
 	}
 	if c.cmd != nil && c.running {
-		c.cmd.Process.Kill()
-		c.cmd.Wait()
+		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
 	}
+	c.stdout = nil
+	c.stderr = nil
+	c.cmd = nil
 	c.running = false
 	return nil
 }
