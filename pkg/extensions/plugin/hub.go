@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -129,6 +131,40 @@ func (c *HubClient) Download(ctx context.Context, pluginID string, version strin
 }
 
 func writeFileAtomic(path string, data []byte) error {
+	if path == "" {
+		return fmt.Errorf("write file: empty path")
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("write file: create parent dir: %w", err)
+	}
+
+	tempFile, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return fmt.Errorf("write file: create temp file: %w", err)
+	}
+
+	tempPath := tempFile.Name()
+	cleanup := func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath)
+	}
+
+	if _, err := tempFile.Write(data); err != nil {
+		cleanup()
+		return fmt.Errorf("write file: write temp file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("write file: close temp file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("write file: move temp file into place: %w", err)
+	}
+
 	return nil
 }
 
