@@ -1,0 +1,28 @@
+{
+  "id": "googlechat",
+  "name": "Google Chat Channel",
+  "version": "1.0.0",
+  "description": "Google Chat messaging channel adapter for AnyClaw",
+  "kind": "channel",
+  "channels": ["googlechat"],
+  "entrypoint": "googlechat_adapter.go",
+  "permissions": ["net:out"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "project_id": {
+        "type": "string",
+        "description": "Google Cloud Project ID"
+      },
+      "service_account_key": {
+        "type": "string",
+        "description": "Path to service account JSON key file"
+      },
+      "webhook_url": {
+        "type": "string",
+        "description": "Google Chat webhook URL for outbound messages"
+      }
+    },
+    "required": ["project_id"]
+  }
+}
