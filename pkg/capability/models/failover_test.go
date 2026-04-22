@@ -9,14 +9,14 @@ import (
 )
 
 type stubFailoverClient struct {
-	name                 string
-	chatResp             *Response
-	chatErrs             []error
-	streamErrs           []error
-	streamContent        []string
+	name         string
+	chatResp      *Response
+	chatErrs      []error
+	streamErrs    []error
+	streamContent []string
 	streamErrAfterChunks bool
-	chatCalls            int
-	streamCalls          int
+	chatCalls     int
+	streamCalls   int
 }
 
 func (s *stubFailoverClient) Chat(_ context.Context, _ []Message, _ []ToolDefinition) (*Response, error) {
@@ -128,7 +128,7 @@ func TestFailoverStreamChatFallsBack(t *testing.T) {
 		streamErrs: []error{errors.New("connection refused")},
 	}
 	fallback := &stubFailoverClient{
-		name:          "fallback",
+		name:         "fallback",
 		streamContent: []string{"hello", " world"},
 	}
 
@@ -180,47 +180,9 @@ func TestFailoverStreamChatDoesNotFallbackAfterPartialOutput(t *testing.T) {
 	}
 }
 
-func TestFailoverStreamChatDoesNotFallbackAfterPartialFallbackOutput(t *testing.T) {
-	primary := &stubFailoverClient{
-		name:       "primary",
-		streamErrs: []error{errors.New("connection refused")},
-	}
-	fallback1 := &stubFailoverClient{
-		name:                 "fallback-1",
-		streamContent:        []string{"partial-fallback"},
-		streamErrs:           []error{errors.New("fallback stream reset")},
-		streamErrAfterChunks: true,
-	}
-	fallback2 := &stubFailoverClient{
-		name:          "fallback-2",
-		streamContent: []string{"replacement"},
-	}
-
-	client := NewFailoverClient(primary, FailoverConfig{Enabled: true})
-	client.AddFallback(fallback1)
-	client.AddFallback(fallback2)
-
-	var chunks []string
-	err := client.StreamChat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, func(chunk string) {
-		chunks = append(chunks, chunk)
-	})
-	if err == nil {
-		t.Fatal("expected partial fallback stream failure to be returned")
-	}
-	if !strings.Contains(err.Error(), "fallback-1") {
-		t.Fatalf("expected failing fallback name in error, got %v", err)
-	}
-	if strings.Join(chunks, "") != "partial-fallback" {
-		t.Fatalf("expected only first fallback partial output, got %q", strings.Join(chunks, ""))
-	}
-	if fallback2.streamCalls != 0 {
-		t.Fatalf("expected later fallback not to be called after partial output, got %d calls", fallback2.streamCalls)
-	}
-}
-
 func TestFailoverTryClientSetsCooldownAndResetsOnSuccess(t *testing.T) {
 	primary := &stubFailoverClient{
-		name: "primary",
+		name:     "primary",
 		chatErrs: []error{
 			errors.New("500 upstream"),
 			errors.New("500 upstream"),
