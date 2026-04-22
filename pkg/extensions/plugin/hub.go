@@ -1,13 +1,43 @@
 package plugin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
+
+type atomicTempFile interface {
+	Name() string
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+type atomicFileWriter struct {
+	mkdirAll   func(string, os.FileMode) error
+	createTemp func(string, string) (atomicTempFile, error)
+	remove     func(string) error
+	rename     func(string, string) error
+}
+
+func newAtomicFileWriter() atomicFileWriter {
+	return atomicFileWriter{
+		mkdirAll: os.MkdirAll,
+		createTemp: func(dir, pattern string) (atomicTempFile, error) {
+			return os.CreateTemp(dir, pattern)
+		},
+		remove: os.Remove,
+		rename: os.Rename,
+	}
+}
 
 type HubClient struct {
 	baseURL    string
@@ -38,6 +68,33 @@ type HubSearchResult struct {
 	Limit   int         `json:"limit"`
 }
 
+type HubCategories struct {
+	Categories []HubCategory `json:"categories"`
+}
+
+type HubCategory struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Count       int    `json:"count"`
+}
+
+type HubStats struct {
+	TotalPlugins   int `json:"total_plugins"`
+	TotalDownloads int `json:"total_downloads"`
+	TotalStars     int `json:"total_stars"`
+	TotalSigners   int `json:"total_signers"`
+}
+
+type HubManager struct {
+	hubClient  *HubClient
+	localCache *LocalCache
+}
+
+type LocalCache struct {
+	dir string
+}
+
 func NewHubClient(baseURL string) *HubClient {
 	return &HubClient{
 		baseURL: baseURL,
@@ -48,12 +105,21 @@ func NewHubClient(baseURL string) *HubClient {
 }
 
 func (c *HubClient) Search(ctx context.Context, query string, category string, limit int, offset int) (*HubSearchResult, error) {
-	url := fmt.Sprintf("%s/api/v1/plugins/search?q=%s&limit=%d&offset=%d", c.baseURL, query, limit, offset)
+	values := url.Values{
+		"q":      []string{query},
+		"limit":  []string{fmt.Sprintf("%d", limit)},
+		"offset": []string{fmt.Sprintf("%d", offset)},
+	}
 	if category != "" {
-		url += "&category=" + category
+		values.Set("category", category)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	requestURL, err := c.buildURL([]string{"plugins", "search"}, values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -77,9 +143,12 @@ func (c *HubClient) Search(ctx context.Context, query string, category string, l
 }
 
 func (c *HubClient) GetPlugin(ctx context.Context, pluginID string) (*HubPlugin, error) {
-	url := fmt.Sprintf("%s/api/v1/plugins/%s", c.baseURL, pluginID)
+	requestURL, err := c.buildURL([]string{"plugins", pluginID}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -103,9 +172,14 @@ func (c *HubClient) GetPlugin(ctx context.Context, pluginID string) (*HubPlugin,
 }
 
 func (c *HubClient) Download(ctx context.Context, pluginID string, version string, dest string) error {
-	url := fmt.Sprintf("%s/api/v1/plugins/%s/download?version=%s", c.baseURL, pluginID, version)
+	requestURL, err := c.buildURL([]string{"plugins", pluginID, "download"}, url.Values{
+		"version": []string{version},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -120,33 +194,59 @@ func (c *HubClient) Download(ctx context.Context, pluginID string, version strin
 		return fmt.Errorf("download failed with status: %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
-	}
-
-	return writeFileAtomic(dest, data)
+	return writeReaderAtomic(dest, resp.Body)
 }
 
 func writeFileAtomic(path string, data []byte) error {
+	return newAtomicFileWriter().write(path, bytes.NewReader(data))
+}
+
+func writeReaderAtomic(path string, src io.Reader) error {
+	return newAtomicFileWriter().write(path, src)
+}
+
+func (w atomicFileWriter) write(path string, src io.Reader) error {
+	if err := w.mkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create destination dir: %w", err)
+	}
+
+	tempFile, err := w.createTemp(filepath.Dir(path), ".hub-download-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	success := false
+	defer func() {
+		_ = tempFile.Close()
+		if !success {
+			_ = w.remove(tempPath)
+		}
+	}()
+
+	if _, err := io.Copy(tempFile, src); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tempFile.Sync(); err != nil {
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := w.rename(tempPath, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	success = true
 	return nil
 }
 
-type HubCategories struct {
-	Categories []HubCategory `json:"categories"`
-}
-
-type HubCategory struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Count       int    `json:"count"`
-}
-
 func (c *HubClient) GetCategories(ctx context.Context) ([]HubCategory, error) {
-	url := fmt.Sprintf("%s/api/v1/categories", c.baseURL)
+	requestURL, err := c.buildURL([]string{"categories"}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -170,9 +270,12 @@ func (c *HubClient) GetCategories(ctx context.Context) ([]HubCategory, error) {
 }
 
 func (c *HubClient) GetVersions(ctx context.Context, pluginID string) ([]string, error) {
-	url := fmt.Sprintf("%s/api/v1/plugins/%s/versions", c.baseURL, pluginID)
+	requestURL, err := c.buildURL([]string{"plugins", pluginID, "versions"}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -195,17 +298,13 @@ func (c *HubClient) GetVersions(ctx context.Context, pluginID string) ([]string,
 	return versions, nil
 }
 
-type HubStats struct {
-	TotalPlugins   int `json:"total_plugins"`
-	TotalDownloads int `json:"total_downloads"`
-	TotalStars     int `json:"total_stars"`
-	TotalSigners   int `json:"total_signers"`
-}
-
 func (c *HubClient) GetStats(ctx context.Context) (*HubStats, error) {
-	url := fmt.Sprintf("%s/api/v1/stats", c.baseURL)
+	requestURL, err := c.buildURL([]string{"stats"}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -228,17 +327,45 @@ func (c *HubClient) GetStats(ctx context.Context) (*HubStats, error) {
 	return &stats, nil
 }
 
-type HubManager struct {
-	hubClient  *HubClient
-	localCache *LocalCache
-}
+func (c *HubClient) buildURL(segments []string, query url.Values) (string, error) {
+	baseURL, err := url.Parse(c.baseURL)
+	if err != nil {
+		return "", err
+	}
+	baseURL.RawQuery = ""
+	baseURL.Fragment = ""
 
-type LocalCache struct {
-	dir string
+	apiPath := append([]string{"api", "v1"}, segments...)
+	escapedSegments := make([]string, 0, len(apiPath))
+	for _, segment := range apiPath {
+		escapedSegments = append(escapedSegments, url.PathEscape(segment))
+	}
+
+	base := strings.TrimRight(baseURL.String(), "/")
+	requestURL := base + "/" + strings.Join(escapedSegments, "/")
+	if query != nil {
+		requestURL += "?" + query.Encode()
+	}
+
+	return requestURL, nil
 }
 
 func (lc *LocalCache) GetPlugin(pluginID string) (*HubPlugin, bool) {
-	return nil, false
+	if lc == nil || lc.dir == "" || pluginID == "" {
+		return nil, false
+	}
+
+	data, err := os.ReadFile(filepath.Join(lc.dir, pluginID+".json"))
+	if err != nil {
+		return nil, false
+	}
+
+	var plugin HubPlugin
+	if err := json.Unmarshal(data, &plugin); err != nil {
+		return nil, false
+	}
+
+	return &plugin, true
 }
 
 func NewHubManager(baseURL string, cacheDir string) *HubManager {
@@ -266,8 +393,11 @@ func (hm *HubManager) InstallPlugin(ctx context.Context, pluginID string, versio
 	if targetVersion == "" && len(versions) > 0 {
 		targetVersion = versions[0]
 	}
+	if targetVersion == "" {
+		return fmt.Errorf("no versions available for plugin %s", pluginID)
+	}
 
-	dest := installDir + "/" + pluginID + ".tar.gz"
+	dest := filepath.Join(installDir, pluginID+".tar.gz")
 	return hm.hubClient.Download(ctx, pluginID, targetVersion, dest)
 }
 
@@ -281,6 +411,6 @@ func (hm *HubManager) UpdatePlugin(ctx context.Context, pluginID string, install
 		return fmt.Errorf("no versions available for plugin %s", pluginID)
 	}
 
-	dest := installDir + "/" + pluginID + ".tar.gz"
+	dest := filepath.Join(installDir, pluginID+".tar.gz")
 	return hm.hubClient.Download(ctx, pluginID, versions[0], dest)
 }
