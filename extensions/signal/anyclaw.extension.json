@@ -18,6 +18,11 @@
       "number": {
         "type": "string",
         "description": "Signal phone number with country code"
+      },
+      "poll_every": {
+        "type": "integer",
+        "description": "Polling interval in seconds",
+        "default": 3
       }
     },
     "required": ["number"]

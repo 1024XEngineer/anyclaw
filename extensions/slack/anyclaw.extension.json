@@ -24,6 +24,11 @@
         "type": "string",
         "description": "Slack signing secret for webhook verification",
         "sensitive": true
+      },
+      "port": {
+        "type": "integer",
+        "description": "Webhook port for Slack Events API",
+        "default": 8080
       }
     },
     "required": ["bot_token"]
