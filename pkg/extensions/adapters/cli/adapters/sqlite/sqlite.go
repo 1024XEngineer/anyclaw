@@ -25,7 +25,7 @@ func NewClient(cfg Config) *Client {
 
 func (c *Client) Run(ctx context.Context, args []string) (string, error) {
 	if len(args) < 2 {
-		return "Usage: sqlite <db> <sql>", nil
+		return "", fmt.Errorf("usage: sqlite <db> <sql>")
 	}
 
 	dbPath := args[0]
