@@ -598,10 +598,10 @@ func (w *ClientWrapper) Name() string {
 }
 
 func (w *ClientWrapper) SwitchProvider(provider string) error {
-	w.provider = normalizeProvider(provider)
-	if w.baseURL == "" {
+	if w.baseURL == getDefaultBaseURL(w.provider) {
 		w.baseURL = getDefaultBaseURL(provider)
 	}
+	w.provider = normalizeProvider(provider)
 	return w.initClient()
 }
 
