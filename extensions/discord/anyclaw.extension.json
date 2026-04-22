@@ -19,6 +19,16 @@
         "type": "string",
         "description": "Optional: custom Discord API base URL",
         "default": "https://discord.com/api/v10"
+      },
+      "channel_ids": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Discord channel IDs to poll for messages"
+      },
+      "poll_every": {
+        "type": "integer",
+        "description": "Polling interval in seconds",
+        "default": 3
       }
     },
     "required": ["bot_token"]
