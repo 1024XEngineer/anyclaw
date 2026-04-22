@@ -398,3 +398,74 @@ func TestVecStoreUpsert(t *testing.T) {
 		t.Errorf("expected vector updated, got %v", item.Vector)
 	}
 }
+
+func TestVecStoreRejectsInvalidIdentifiers(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer db.Close()
+
+	testCases := []struct {
+		name string
+		cfg  VecStoreConfig
+	}{
+		{
+			name: "invalid table name",
+			cfg: VecStoreConfig{
+				DB:         db,
+				TableName:  `bad"; DROP TABLE users;--`,
+				Dimensions: 4,
+				Distance:   DistanceCosine,
+			},
+		},
+		{
+			name: "invalid metadata column",
+			cfg: VecStoreConfig{
+				DB:         db,
+				TableName:  "safe_table",
+				Dimensions: 4,
+				Distance:   DistanceCosine,
+				Metadata:   []string{"category", "bad-name"},
+			},
+		},
+		{
+			name: "invalid aux column",
+			cfg: VecStoreConfig{
+				DB:         db,
+				TableName:  "safe_table",
+				Dimensions: 4,
+				Distance:   DistanceCosine,
+				AuxColumns: []string{"source", "bad name"},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			vs := NewVecStore(tc.cfg)
+			if err := vs.Init(context.Background()); err == nil {
+				t.Fatal("expected invalid identifier error")
+			}
+		})
+	}
+}
+
+func TestVecStoreRejectsUnsupportedDistance(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer db.Close()
+
+	vs := NewVecStore(VecStoreConfig{
+		DB:         db,
+		TableName:  "safe_table",
+		Dimensions: 4,
+		Distance:   DistanceMetric("manhattan"),
+	})
+
+	if err := vs.Init(context.Background()); err == nil {
+		t.Fatal("expected unsupported distance error")
+	}
+}

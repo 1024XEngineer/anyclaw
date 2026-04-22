@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 )
 
@@ -34,6 +35,8 @@ type VecStoreConfig struct {
 	AuxColumns []string
 }
 
+var validIdentifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 func NewVecStore(cfg VecStoreConfig) *VecStore {
 	if cfg.Distance == "" {
 		cfg.Distance = DistanceCosine
@@ -49,6 +52,9 @@ func NewVecStore(cfg VecStoreConfig) *VecStore {
 }
 
 func (vs *VecStore) Init(ctx context.Context) error {
+	if err := vs.validateConfig(); err != nil {
+		return err
+	}
 	if err := vs.enableVec(ctx); err != nil {
 		return err
 	}
@@ -65,15 +71,22 @@ func (vs *VecStore) enableVec(ctx context.Context) error {
 }
 
 func (vs *VecStore) createTable(ctx context.Context) error {
-	sql := vs.buildCreateTableSQL()
-	_, err := vs.db.ExecContext(ctx, sql)
+	sql, err := vs.buildCreateTableSQL()
+	if err != nil {
+		return err
+	}
+	_, err = vs.db.ExecContext(ctx, sql)
 	if err != nil {
 		return fmt.Errorf("create vec0 table: %w", err)
 	}
 	return nil
 }
 
-func (vs *VecStore) buildCreateTableSQL() string {
+func (vs *VecStore) buildCreateTableSQL() (string, error) {
+	if err := vs.validateConfig(); err != nil {
+		return "", err
+	}
+
 	cols := []string{
 		fmt.Sprintf("vector float[%d] distance=%s", vs.dimensions, vs.distance),
 	}
@@ -88,17 +101,20 @@ func (vs *VecStore) buildCreateTableSQL() string {
 
 	return fmt.Sprintf(
 		"CREATE VIRTUAL TABLE IF NOT EXISTS %s USING vec0(%s)",
-		vs.tableName,
+		quoteIdentifier(vs.tableName),
 		strings.Join(cols, ", "),
-	)
+	), nil
 }
 
 func (vs *VecStore) Insert(ctx context.Context, id any, vector []float32, metadata map[string]string) error {
+	if err := vs.validateConfig(); err != nil {
+		return err
+	}
 	if len(vector) != vs.dimensions {
 		return fmt.Errorf("vector dimension mismatch: expected %d, got %d", vs.dimensions, len(vector))
 	}
 
-	vs.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", vs.tableName), id)
+	_, _ = vs.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", quoteIdentifier(vs.tableName)), id)
 
 	cols := []string{"rowid", "vector"}
 	args := []any{id, vectorToBlob(vector)}
@@ -108,7 +124,7 @@ func (vs *VecStore) Insert(ctx context.Context, id any, vector []float32, metada
 		if metadata != nil {
 			val = metadata[key]
 		}
-		cols = append(cols, key)
+		cols = append(cols, quoteIdentifier(key))
 		args = append(args, val)
 	}
 
@@ -119,7 +135,7 @@ func (vs *VecStore) Insert(ctx context.Context, id any, vector []float32, metada
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s)",
-		vs.tableName,
+		quoteIdentifier(vs.tableName),
 		strings.Join(cols, ", "),
 		strings.Join(placeholders, ", "),
 	)
@@ -132,6 +148,9 @@ func (vs *VecStore) Insert(ctx context.Context, id any, vector []float32, metada
 }
 
 func (vs *VecStore) InsertBatch(ctx context.Context, items []VecItem) error {
+	if err := vs.validateConfig(); err != nil {
+		return err
+	}
 	tx, err := vs.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -140,7 +159,7 @@ func (vs *VecStore) InsertBatch(ctx context.Context, items []VecItem) error {
 
 	cols := []string{"rowid", "vector"}
 	for _, key := range vs.metadata {
-		cols = append(cols, key)
+		cols = append(cols, quoteIdentifier(key))
 	}
 
 	placeholders := make([]string, len(cols))
@@ -150,12 +169,12 @@ func (vs *VecStore) InsertBatch(ctx context.Context, items []VecItem) error {
 
 	query := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s)",
-		vs.tableName,
+		quoteIdentifier(vs.tableName),
 		strings.Join(cols, ", "),
 		strings.Join(placeholders, ", "),
 	)
 
-	delQuery := fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", vs.tableName)
+	delQuery := fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", quoteIdentifier(vs.tableName))
 
 	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
@@ -175,7 +194,7 @@ func (vs *VecStore) InsertBatch(ctx context.Context, items []VecItem) error {
 				item.ID, vs.dimensions, len(item.Vector))
 		}
 
-		delStmt.ExecContext(ctx, item.ID)
+		_, _ = delStmt.ExecContext(ctx, item.ID)
 
 		args := []any{item.ID, vectorToBlob(item.Vector)}
 		for _, key := range vs.metadata {
@@ -199,6 +218,9 @@ func (vs *VecStore) Search(ctx context.Context, queryVector []float32, limit int
 }
 
 func (vs *VecStore) SearchWithFilter(ctx context.Context, queryVector []float32, limit int, threshold float64, metadataFilter map[string]string) ([]VecSearchResult, error) {
+	if err := vs.validateConfig(); err != nil {
+		return nil, err
+	}
 	if len(queryVector) != vs.dimensions {
 		return nil, fmt.Errorf("query vector dimension mismatch: expected %d, got %d", vs.dimensions, len(queryVector))
 	}
@@ -209,13 +231,13 @@ func (vs *VecStore) SearchWithFilter(ctx context.Context, queryVector []float32,
 
 	selectCols := "SELECT rowid, distance"
 	for _, meta := range vs.metadata {
-		selectCols += fmt.Sprintf(", %s", meta)
+		selectCols += fmt.Sprintf(", %s", quoteIdentifier(meta))
 	}
 
 	query := fmt.Sprintf(
 		"%s FROM %s WHERE vector MATCH ? AND k = ?",
 		selectCols,
-		vs.tableName,
+		quoteIdentifier(vs.tableName),
 	)
 
 	args := []any{vectorToBlob(queryVector), limit}
@@ -230,7 +252,7 @@ func (vs *VecStore) SearchWithFilter(ctx context.Context, queryVector []float32,
 		if !ok {
 			continue
 		}
-		query += fmt.Sprintf(" AND %s = ?", key)
+		query += fmt.Sprintf(" AND %s = ?", quoteIdentifier(key))
 		args = append(args, val)
 	}
 
@@ -277,12 +299,15 @@ func (vs *VecStore) SearchWithFilter(ctx context.Context, queryVector []float32,
 }
 
 func (vs *VecStore) Get(ctx context.Context, id any) (*VecItem, error) {
+	if err := vs.validateConfig(); err != nil {
+		return nil, err
+	}
 	selectCols := "SELECT rowid, vector"
 	for _, meta := range vs.metadata {
-		selectCols += fmt.Sprintf(", %s", meta)
+		selectCols += fmt.Sprintf(", %s", quoteIdentifier(meta))
 	}
 
-	query := fmt.Sprintf("%s FROM %s WHERE rowid = ?", selectCols, vs.tableName)
+	query := fmt.Sprintf("%s FROM %s WHERE rowid = ?", selectCols, quoteIdentifier(vs.tableName))
 
 	row := vs.db.QueryRowContext(ctx, query, id)
 
@@ -316,7 +341,10 @@ func (vs *VecStore) Get(ctx context.Context, id any) (*VecItem, error) {
 }
 
 func (vs *VecStore) Delete(ctx context.Context, id any) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", vs.tableName)
+	if err := vs.validateConfig(); err != nil {
+		return err
+	}
+	query := fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", quoteIdentifier(vs.tableName))
 	_, err := vs.db.ExecContext(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("delete vector item: %w", err)
@@ -325,11 +353,14 @@ func (vs *VecStore) Delete(ctx context.Context, id any) error {
 }
 
 func (vs *VecStore) UpdateVector(ctx context.Context, id any, vector []float32) error {
+	if err := vs.validateConfig(); err != nil {
+		return err
+	}
 	if len(vector) != vs.dimensions {
 		return fmt.Errorf("vector dimension mismatch: expected %d, got %d", vs.dimensions, len(vector))
 	}
 
-	query := fmt.Sprintf("UPDATE %s SET vector = ? WHERE rowid = ?", vs.tableName)
+	query := fmt.Sprintf("UPDATE %s SET vector = ? WHERE rowid = ?", quoteIdentifier(vs.tableName))
 	_, err := vs.db.ExecContext(ctx, query, vectorToBlob(vector), id)
 	if err != nil {
 		return fmt.Errorf("update vector: %w", err)
@@ -338,6 +369,9 @@ func (vs *VecStore) UpdateVector(ctx context.Context, id any, vector []float32) 
 }
 
 func (vs *VecStore) UpdateMetadata(ctx context.Context, id any, metadata map[string]string) error {
+	if err := vs.validateConfig(); err != nil {
+		return err
+	}
 	if len(metadata) == 0 {
 		return nil
 	}
@@ -347,7 +381,7 @@ func (vs *VecStore) UpdateMetadata(ctx context.Context, id any, metadata map[str
 
 	for _, key := range vs.metadata {
 		if val, ok := metadata[key]; ok {
-			setClauses = append(setClauses, fmt.Sprintf("%s = ?", key))
+			setClauses = append(setClauses, fmt.Sprintf("%s = ?", quoteIdentifier(key)))
 			args = append(args, val)
 		}
 	}
@@ -357,7 +391,7 @@ func (vs *VecStore) UpdateMetadata(ctx context.Context, id any, metadata map[str
 	}
 
 	args = append(args, id)
-	query := fmt.Sprintf("UPDATE %s SET %s WHERE rowid = ?", vs.tableName, strings.Join(setClauses, ", "))
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE rowid = ?", quoteIdentifier(vs.tableName), strings.Join(setClauses, ", "))
 
 	_, err := vs.db.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -367,8 +401,11 @@ func (vs *VecStore) UpdateMetadata(ctx context.Context, id any, metadata map[str
 }
 
 func (vs *VecStore) Count(ctx context.Context) (int64, error) {
+	if err := vs.validateConfig(); err != nil {
+		return 0, err
+	}
 	var count int64
-	err := vs.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", vs.tableName)).Scan(&count)
+	err := vs.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", quoteIdentifier(vs.tableName))).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -376,7 +413,10 @@ func (vs *VecStore) Count(ctx context.Context) (int64, error) {
 }
 
 func (vs *VecStore) List(ctx context.Context, limit int) ([]VecItem, error) {
-	query := fmt.Sprintf("SELECT rowid, vector FROM %s", vs.tableName)
+	if err := vs.validateConfig(); err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf("SELECT rowid, vector FROM %s", quoteIdentifier(vs.tableName))
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
@@ -409,6 +449,9 @@ func (vs *VecStore) VecVersion(ctx context.Context) (string, error) {
 }
 
 func (vs *VecStore) TableInfo(ctx context.Context) (*VecTableInfo, error) {
+	if err := vs.validateConfig(); err != nil {
+		return nil, err
+	}
 	var info VecTableInfo
 	info.TableName = vs.tableName
 	info.Dimensions = vs.dimensions
@@ -497,4 +540,43 @@ func L2Distance(a, b []float32) float64 {
 		sum += diff * diff
 	}
 	return math.Sqrt(sum)
+}
+
+func (vs *VecStore) validateConfig() error {
+	if vs.db == nil {
+		return fmt.Errorf("vec store db is nil")
+	}
+	if vs.dimensions <= 0 {
+		return fmt.Errorf("vec store dimensions must be positive")
+	}
+	if err := validateIdentifier("table name", vs.tableName); err != nil {
+		return err
+	}
+	for _, meta := range vs.metadata {
+		if err := validateIdentifier("metadata column", meta); err != nil {
+			return err
+		}
+	}
+	for _, aux := range vs.auxColumns {
+		if err := validateIdentifier("aux column", aux); err != nil {
+			return err
+		}
+	}
+	switch vs.distance {
+	case DistanceCosine, DistanceL2:
+		return nil
+	default:
+		return fmt.Errorf("unsupported distance metric %q", vs.distance)
+	}
+}
+
+func validateIdentifier(kind, value string) error {
+	if !validIdentifierPattern.MatchString(value) {
+		return fmt.Errorf("invalid %s %q", kind, value)
+	}
+	return nil
+}
+
+func quoteIdentifier(value string) string {
+	return `"` + value + `"`
 }
