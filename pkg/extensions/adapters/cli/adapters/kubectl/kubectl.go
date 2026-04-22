@@ -3,6 +3,7 @@ package kubectl
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -306,6 +307,7 @@ func (c *Client) version(ctx context.Context) (string, error) {
 
 func (c *Client) run(ctx context.Context, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.kubectlPath, args...)
+	cmd.Env = os.Environ()
 	if c.kubeconfig != "" {
 		cmd.Env = append(cmd.Env, "KUBECONFIG="+c.kubeconfig)
 	}
