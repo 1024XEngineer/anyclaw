@@ -416,7 +416,7 @@ func envEchoScript() string {
 	if runtime.GOOS == "windows" {
 		return "$out = @{input=$env:ANYCLAW_SKILL_INPUT;name=$env:ANYCLAW_SKILL_NAME;version=$env:ANYCLAW_SKILL_VERSION;perms=$env:ANYCLAW_SKILL_PERMISSIONS} | ConvertTo-Json -Compress\nWrite-Output $out\n"
 	}
-	return "#!/bin/sh\nprintf '{\"input\":\"%s\",\"name\":\"%s\",\"version\":\"%s\",\"perms\":\"%s\"}' \"$ANYCLAW_SKILL_INPUT\" \"$ANYCLAW_SKILL_NAME\" \"$ANYCLAW_SKILL_VERSION\" \"$ANYCLAW_SKILL_PERMISSIONS\"\n"
+	return "#!/bin/sh\ninput=missing\nif [ -n \"$ANYCLAW_SKILL_INPUT\" ]; then\n  input=present\nfi\nprintf '{\"input\":\"%s\",\"name\":\"%s\",\"version\":\"%s\",\"perms\":\"%s\"}' \"$input\" \"$ANYCLAW_SKILL_NAME\" \"$ANYCLAW_SKILL_VERSION\" \"$ANYCLAW_SKILL_PERMISSIONS\"\n"
 }
 
 func TestExecuteSkillEntrypointTimeoutIsFast(t *testing.T) {
