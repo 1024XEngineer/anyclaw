@@ -153,6 +153,44 @@ func TestVecStoreSearchWithThreshold(t *testing.T) {
 	}
 }
 
+func TestVecStoreSearchWithMetadataFilter(t *testing.T) {
+	vs := setupVecStore(t)
+	ctx := context.Background()
+
+	if err := vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{
+		"category": "keep",
+		"source":   "unit",
+	}); err != nil {
+		t.Fatalf("insert item 1 failed: %v", err)
+	}
+
+	if err := vs.Insert(ctx, 2, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{
+		"category": "skip",
+		"source":   "unit",
+	}); err != nil {
+		t.Fatalf("insert item 2 failed: %v", err)
+	}
+
+	results, err := vs.SearchWithFilter(ctx, []float32{0.1, 0.2, 0.3, 0.4}, 10, 0, map[string]string{
+		"category": "keep",
+	})
+	if err != nil {
+		t.Fatalf("search with metadata filter failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results[0].RowID != 1 {
+		t.Fatalf("expected rowid 1, got %d", results[0].RowID)
+	}
+
+	if got := results[0].Metadata["category"]; got != "keep" {
+		t.Fatalf("expected category keep, got %v", got)
+	}
+}
+
 func TestVecStoreGet(t *testing.T) {
 	vs := setupVecStore(t)
 	ctx := context.Background()

@@ -79,7 +79,7 @@ func (vs *VecStore) buildCreateTableSQL() string {
 	}
 
 	for _, meta := range vs.metadata {
-		cols = append(cols, fmt.Sprintf("+%s text", meta))
+		cols = append(cols, fmt.Sprintf("%s text", meta))
 	}
 
 	for _, aux := range vs.auxColumns {
@@ -223,6 +223,15 @@ func (vs *VecStore) SearchWithFilter(ctx context.Context, queryVector []float32,
 	if threshold > 0 {
 		query += " AND distance <= ?"
 		args = append(args, threshold)
+	}
+
+	for _, key := range vs.metadata {
+		val, ok := metadataFilter[key]
+		if !ok {
+			continue
+		}
+		query += fmt.Sprintf(" AND %s = ?", key)
+		args = append(args, val)
 	}
 
 	rows, err := vs.db.QueryContext(ctx, query, args...)
