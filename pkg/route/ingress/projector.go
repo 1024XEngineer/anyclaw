@@ -71,6 +71,7 @@ func (p IngressRouteProjector) Project(entry IngressRoutingEntry) (MainRouteRequ
 		Hint: RouteHint{
 			RequestedAgentName: strings.TrimSpace(entry.Hint.RequestedAgentName),
 			RequestedSessionID: strings.TrimSpace(entry.Hint.RequestedSessionID),
+			TitleHint:          strings.TrimSpace(entry.Hint.TitleHint),
 		},
 		ReceivedAt: entry.ReceivedAt,
 	}, nil

@@ -59,7 +59,6 @@ func (s Service) PrepareNormalizedEntry(request gatewaygovernance.NormalizedRequ
 	return routeingress.IngressRoutingEntry{
 		MessageID: request.RequestID,
 		Text:      strings.TrimSpace(request.ContentText),
-		TitleHint: strings.TrimSpace(request.TitleHint),
 		Actor: routeingress.MessageActor{
 			UserID:      strings.TrimSpace(request.Actor.UserID),
 			DisplayName: strings.TrimSpace(request.Actor.DisplayName),
@@ -83,6 +82,7 @@ func (s Service) PrepareNormalizedEntry(request gatewaygovernance.NormalizedRequ
 		Hint: routeingress.RouteHint{
 			RequestedAgentName: strings.TrimSpace(request.RequestedAgentName),
 			RequestedSessionID: strings.TrimSpace(request.RequestedSessionID),
+			TitleHint:          strings.TrimSpace(request.TitleHint),
 		},
 		ReceivedAt: time.Now().UTC(),
 	}
@@ -126,8 +126,7 @@ func (s Service) PrepareMessageEntry(input MessageInput) routeingress.IngressRou
 	)
 
 	return routeingress.IngressRoutingEntry{
-		Text:      strings.TrimSpace(input.Message),
-		TitleHint: strings.TrimSpace(firstNonEmpty(input.TitleHint, meta["title_hint"], meta["title"])),
+		Text: strings.TrimSpace(input.Message),
 		Actor: routeingress.MessageActor{
 			UserID:      actorUserID,
 			DisplayName: actorDisplayName,
@@ -151,6 +150,7 @@ func (s Service) PrepareMessageEntry(input MessageInput) routeingress.IngressRou
 		Hint: routeingress.RouteHint{
 			RequestedAgentName: requestedAgentName,
 			RequestedSessionID: requestedSessionID,
+			TitleHint:          strings.TrimSpace(firstNonEmpty(input.TitleHint, meta["title_hint"], meta["title"])),
 		},
 		ReceivedAt: time.Now().UTC(),
 	}
@@ -185,7 +185,7 @@ func (s Service) RouteMessage(ctx context.Context, input MessageInput) (routeing
 	if s.Routes == nil {
 		return routeingress.RouteOutput{}, fmt.Errorf("ingress service not initialized")
 	}
-	return s.Routes.Route(ctx, routeingress.RouteInput{
+	return s.Routes.Route(routeingress.RouteInput{
 		Entry: s.PrepareMessageEntry(input),
 	})
 }
@@ -195,7 +195,7 @@ func (s Service) RouteNormalized(ctx context.Context, request gatewaygovernance.
 	if s.Routes == nil {
 		return routeingress.RouteOutput{}, fmt.Errorf("ingress service not initialized")
 	}
-	return s.Routes.Route(ctx, routeingress.RouteInput{
+	return s.Routes.Route(routeingress.RouteInput{
 		Entry: s.PrepareNormalizedEntry(request),
 	})
 }

@@ -27,8 +27,8 @@ func TestPrepareSignedEntryBuildsWebhookIngressEntry(t *testing.T) {
 	if entry.Hint.RequestedSessionID != "sess-1" {
 		t.Fatalf("expected requested session sess-1, got %q", entry.Hint.RequestedSessionID)
 	}
-	if entry.TitleHint != "Webhook ticket" {
-		t.Fatalf("expected title hint Webhook ticket, got %q", entry.TitleHint)
+	if entry.Hint.TitleHint != "Webhook ticket" {
+		t.Fatalf("expected title hint Webhook ticket, got %q", entry.Hint.TitleHint)
 	}
 	if entry.Actor.UserID != "user-7" {
 		t.Fatalf("expected actor user user-7, got %q", entry.Actor.UserID)
@@ -64,8 +64,8 @@ func TestPrepareNormalizedEntryBuildsTrustedRouteEntry(t *testing.T) {
 	if entry.MessageID != "req-1" {
 		t.Fatalf("expected message id req-1, got %q", entry.MessageID)
 	}
-	if entry.TitleHint != "Webhook ticket" {
-		t.Fatalf("expected title hint Webhook ticket, got %q", entry.TitleHint)
+	if entry.Hint.TitleHint != "Webhook ticket" {
+		t.Fatalf("expected title hint Webhook ticket, got %q", entry.Hint.TitleHint)
 	}
 	if entry.Scope.EntryPoint != "webhook" {
 		t.Fatalf("expected webhook entry point, got %q", entry.Scope.EntryPoint)

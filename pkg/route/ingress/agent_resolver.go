@@ -70,11 +70,12 @@ func routeRequestFromMainRequest(request *MainRouteRequest) RouteRequest {
 	}
 
 	return RouteRequest{
-		Channel:  request.Scope.ChannelID,
-		Source:   request.Scope.ConversationID,
-		Text:     request.Text,
-		ThreadID: request.Scope.ThreadID,
-		IsGroup:  request.Scope.IsGroup,
-		GroupID:  request.Scope.GroupID,
+		Channel:   request.Scope.ChannelID,
+		Source:    request.Scope.ConversationID,
+		Text:      request.Text,
+		ThreadID:  request.Scope.ThreadID,
+		IsGroup:   request.Scope.IsGroup,
+		GroupID:   request.Scope.GroupID,
+		TitleHint: request.Hint.TitleHint,
 	}
 }
