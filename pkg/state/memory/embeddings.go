@@ -30,10 +30,14 @@ type OpenAIEmbeddingProvider struct {
 	httpClient *http.Client
 }
 
-func NewOpenAIEmbeddingProvider(apiKey, model string) *OpenAIEmbeddingProvider {
+func NewOpenAIEmbeddingProvider(apiKey, model, baseURL string) *OpenAIEmbeddingProvider {
 	if model == "" {
 		model = "text-embedding-3-small"
 	}
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
 	dim := 1536
 	if strings.Contains(model, "large") {
 		dim = 3072
@@ -41,7 +45,7 @@ func NewOpenAIEmbeddingProvider(apiKey, model string) *OpenAIEmbeddingProvider {
 	return &OpenAIEmbeddingProvider{
 		apiKey:     apiKey,
 		model:      model,
-		baseURL:    "https://api.openai.com/v1",
+		baseURL:    baseURL,
 		dimension:  dim,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
