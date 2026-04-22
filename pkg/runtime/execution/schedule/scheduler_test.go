@@ -55,6 +55,16 @@ func (p *failingPersister) LoadTasks() ([]*Task, error)    { return nil, nil }
 func (p *failingPersister) SaveRuns(runs []*TaskRun) error { return p.saveRunsErr }
 func (p *failingPersister) LoadRuns() ([]*TaskRun, error)  { return nil, nil }
 
+type loadFailingPersister struct {
+	loadTasksErr error
+	loadRunsErr  error
+}
+
+func (p *loadFailingPersister) SaveTasks(tasks []*Task) error  { return nil }
+func (p *loadFailingPersister) LoadTasks() ([]*Task, error)    { return nil, p.loadTasksErr }
+func (p *loadFailingPersister) SaveRuns(runs []*TaskRun) error { return nil }
+func (p *loadFailingPersister) LoadRuns() ([]*TaskRun, error)  { return nil, p.loadRunsErr }
+
 func TestSchedulerAddTaskAndCopies(t *testing.T) {
 	scheduler := New()
 	taskID, err := scheduler.AddTask(&Task{
@@ -451,5 +461,132 @@ func TestSchedulerPersistenceErrorsOnTaskOperations(t *testing.T) {
 	}
 	if err := scheduler.LastPersistenceError(); err == nil || err.Error() != "cannot save tasks" {
 		t.Fatalf("expected add persistence error to be recorded, got %v", err)
+	}
+}
+
+func TestSchedulerCheckAndRunTasksAndQueryHelpers(t *testing.T) {
+	executor := &stubExecutor{started: make(chan struct{}), blockCh: make(chan struct{})}
+	scheduler := NewScheduler(executor)
+
+	taskID, err := scheduler.AddTask(&Task{
+		Name:     "due-now",
+		Schedule: "@every 1m",
+		Command:  "echo",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	scheduler.mu.Lock()
+	past := time.Now().UTC().Add(-time.Second)
+	scheduler.tasks[taskID].NextRun = &past
+	scheduler.mu.Unlock()
+
+	scheduler.checkAndRunTasks()
+
+	select {
+	case <-executor.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected scheduled task to start running")
+	}
+
+	if runs := scheduler.GetAllRuns(1); len(runs) != 1 || runs[0].Status != "running" {
+		t.Fatalf("expected one running task in GetAllRuns, got %+v", runs)
+	}
+	if runs := scheduler.GetRunHistory(taskID, 1); len(runs) != 1 || runs[0].TaskID != taskID {
+		t.Fatalf("expected one run in GetRunHistory, got %+v", runs)
+	}
+
+	nextRuns := scheduler.NextRunTimes(2)
+	if len(nextRuns[taskID]) != 2 {
+		t.Fatalf("expected next run times for enabled task, got %+v", nextRuns)
+	}
+
+	close(executor.blockCh)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runs := scheduler.GetTaskRuns(taskID)
+		if len(runs) == 1 && runs[0].Status == "success" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected scheduled run to finish successfully")
+}
+
+func TestSchedulerRunningStateTaskValidationAndLoadEdges(t *testing.T) {
+	scheduler := New()
+	if scheduler.IsRunning() {
+		t.Fatal("expected new scheduler to be stopped")
+	}
+	if err := scheduler.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	if !scheduler.IsRunning() {
+		t.Fatal("expected scheduler to report running after Start")
+	}
+	scheduler.Stop()
+	if scheduler.IsRunning() {
+		t.Fatal("expected scheduler to report stopped after Stop")
+	}
+
+	if err := (&Task{}).Validate(); err == nil {
+		t.Fatal("expected empty task validation to fail")
+	}
+	if err := (&Task{Schedule: "@hourly"}).Validate(); err == nil {
+		t.Fatal("expected missing command validation to fail")
+	}
+	if err := (&Task{Schedule: "@hourly", Command: "echo", Timezone: "No/SuchZone"}).Validate(); err == nil {
+		t.Fatal("expected invalid timezone validation to fail")
+	}
+
+	disabledTimes := scheduler.NextRunTimes(2)
+	if len(disabledTimes) != 0 {
+		t.Fatalf("expected empty next run map for empty scheduler, got %+v", disabledTimes)
+	}
+
+	taskID, err := scheduler.AddTask(&Task{
+		Name:     "history",
+		Schedule: "@hourly",
+		Command:  "echo",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("AddTask failed: %v", err)
+	}
+
+	scheduler.mu.Lock()
+	run1 := &TaskRun{ID: "run-1", TaskID: taskID, Status: "success", StartTime: time.Now().UTC().Add(-2 * time.Hour)}
+	run2 := &TaskRun{ID: "run-2", TaskID: taskID, Status: "failed", StartTime: time.Now().UTC().Add(-time.Hour)}
+	scheduler.taskRuns[taskID] = []*TaskRun{run1, run2}
+	scheduler.mu.Unlock()
+
+	if got := scheduler.GetRunHistory(taskID, 1); len(got) != 1 || got[0].ID != "run-2" {
+		t.Fatalf("expected limited run history to return newest run, got %+v", got)
+	}
+	if got := scheduler.GetAllRuns(1); len(got) != 1 || got[0].ID != "run-2" {
+		t.Fatalf("expected limited GetAllRuns to return newest run, got %+v", got)
+	}
+
+	persister := &failingPersister{saveRunsErr: errors.New("cannot save runs")}
+	scheduler.SetPersister(persister)
+	if err := scheduler.ClearHistory(taskID); err == nil {
+		t.Fatal("expected ClearHistory to surface persistence failure")
+	}
+	if err := scheduler.LastPersistenceError(); err == nil || err.Error() != "cannot save runs" {
+		t.Fatalf("expected save-runs failure to be recorded, got %v", err)
+	}
+
+	scheduler = New()
+	if err := scheduler.LoadPersisted(); err != nil {
+		t.Fatalf("LoadPersisted without persister failed: %v", err)
+	}
+
+	loader := New()
+	loader.SetPersister(&loadFailingPersister{loadTasksErr: errors.New("load tasks failed")})
+	if err := loader.LoadPersisted(); err == nil {
+		t.Fatal("expected LoadPersisted to fail on task load error")
 	}
 }
