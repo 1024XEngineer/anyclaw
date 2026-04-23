@@ -1,7 +1,6 @@
 package memory
 
 import (
-	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -75,11 +74,7 @@ func (m *FileMemory) Add(entry MemoryEntry) error {
 	defer m.mu.Unlock()
 
 	if entry.ID == "" {
-		suffix, err := randomID(8)
-		if err != nil {
-			return fmt.Errorf("generate memory id: %w", err)
-		}
-		entry.ID = fmt.Sprintf("%d-%s", time.Now().UnixMilli(), suffix)
+		entry.ID = fmt.Sprintf("%d-%s", time.Now().UnixMilli(), randomID(8))
 	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
@@ -214,6 +209,64 @@ func (m *FileMemory) listLocked() ([]MemoryEntry, error) {
 	return entries, nil
 }
 
+func (m *FileMemory) GetConversationHistory(limit int) ([]MemoryEntry, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entries, err := m.listLocked()
+	if err != nil {
+		return nil, err
+	}
+
+	var history []MemoryEntry
+	for _, e := range entries {
+		if e.Type == TypeConversation {
+			history = append(history, e)
+			if limit > 0 && len(history) >= limit {
+				break
+			}
+		}
+	}
+
+	sort.Slice(history, func(i, j int) bool {
+		return history[i].Timestamp.Before(history[j].Timestamp)
+	})
+
+	return history, nil
+}
+
+func (m *FileMemory) AddReflection(content string, metadata map[string]string) error {
+	return m.Add(MemoryEntry{Type: TypeReflection, Content: content, Metadata: metadata})
+}
+
+func (m *FileMemory) AddFact(content string, metadata map[string]string) error {
+	return m.Add(MemoryEntry{Type: TypeFact, Content: content, Metadata: metadata})
+}
+
+func (m *FileMemory) FormatAsMarkdown() (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entries, err := m.listLocked()
+	if err != nil {
+		return "", err
+	}
+
+	if len(entries) == 0 {
+		return "# Memory\n\n(No entries)", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Memory\n\n")
+
+	for _, entry := range entries {
+		sb.WriteString(fmt.Sprintf("## [%s] %s - %s\n\n%s\n\n",
+			entry.Type, entry.ID, entry.Timestamp.Format("2006-01-02 15:04"), entry.Content))
+	}
+
+	return sb.String(), nil
+}
+
 func (m *FileMemory) getDirForType(memType string) string {
 	switch memType {
 	case TypeConversation:
@@ -275,32 +328,30 @@ func (m *FileMemory) Delete(id string) error {
 	return fmt.Errorf("memory entry not found: %s", id)
 }
 
-func randomID(length int) (string, error) {
+func (m *FileMemory) GetStats() (map[string]int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entries, err := m.listLocked()
+	if err != nil {
+		return nil, err
+	}
+
+	stats := make(map[string]int)
+	stats["total"] = len(entries)
+
+	for _, e := range entries {
+		stats[e.Type]++
+	}
+
+	return stats, nil
+}
+
+func randomID(length int) string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-
-	if length <= 0 {
-		return "", nil
-	}
-
 	result := make([]byte, length)
-	randomBytes := make([]byte, length)
-	maxRandomByte := byte(256 - (256 % len(chars)))
-
-	for i := 0; i < length; {
-		if _, err := cryptorand.Read(randomBytes); err != nil {
-			return "", err
-		}
-		for _, b := range randomBytes {
-			if b >= maxRandomByte {
-				continue
-			}
-			result[i] = chars[int(b)%len(chars)]
-			i++
-			if i == length {
-				break
-			}
-		}
+	for i := range result {
+		result[i] = chars[time.Now().UnixNano()%int64(len(chars))]
 	}
-
-	return string(result), nil
+	return string(result)
 }

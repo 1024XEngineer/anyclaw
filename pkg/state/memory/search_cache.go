@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -15,9 +14,9 @@ type SearchCache struct {
 	items     map[string]cacheEntry
 	maxSize   int
 	ttl       time.Duration
-	hits      atomic.Int64
-	misses    atomic.Int64
-	evictions atomic.Int64
+	hits      int64
+	misses    int64
+	evictions int64
 }
 
 type cacheEntry struct {
@@ -58,14 +57,14 @@ func (sc *SearchCache) Get(key string) ([]SearchResult, bool) {
 
 	entry, ok := sc.items[key]
 	if !ok {
-		sc.misses.Add(1)
+		sc.misses++
 		return nil, false
 	}
 	if time.Now().After(entry.expiresAt) {
-		sc.misses.Add(1)
+		sc.misses++
 		return nil, false
 	}
-	sc.hits.Add(1)
+	sc.hits++
 	return entry.results, true
 }
 
@@ -89,7 +88,7 @@ func (sc *SearchCache) evictLocked() {
 	for k, v := range sc.items {
 		if now.After(v.expiresAt) {
 			delete(sc.items, k)
-			sc.evictions.Add(1)
+			sc.evictions++
 		}
 	}
 
@@ -112,7 +111,7 @@ func (sc *SearchCache) evictLocked() {
 		}
 		for i := 0; i < half; i++ {
 			delete(sc.items, oldest[i].key)
-			sc.evictions.Add(1)
+			sc.evictions++
 		}
 	}
 }
@@ -133,21 +132,18 @@ func (sc *SearchCache) Stats() CacheStats {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
 
-	hits := sc.hits.Load()
-	misses := sc.misses.Load()
-	evictions := sc.evictions.Load()
-	total := hits + misses
+	total := sc.hits + sc.misses
 	hitRate := float64(0)
 	if total > 0 {
-		hitRate = float64(hits) / float64(total)
+		hitRate = float64(sc.hits) / float64(total)
 	}
 
 	return CacheStats{
 		Size:      len(sc.items),
 		MaxSize:   sc.maxSize,
-		Hits:      hits,
-		Misses:    misses,
-		Evictions: evictions,
+		Hits:      sc.hits,
+		Misses:    sc.misses,
+		Evictions: sc.evictions,
 		HitRate:   hitRate,
 	}
 }
@@ -162,9 +158,11 @@ type CacheStats struct {
 }
 
 func (sc *SearchCache) ResetStats() {
-	sc.hits.Store(0)
-	sc.misses.Store(0)
-	sc.evictions.Store(0)
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.hits = 0
+	sc.misses = 0
+	sc.evictions = 0
 }
 
 type WarmupConfig struct {
