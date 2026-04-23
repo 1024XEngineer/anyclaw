@@ -11,11 +11,10 @@ import (
 	"time"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
-	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
 )
 
 type SignalAdapter struct {
-	base        inputlayer.BaseAdapter
+	base        BaseAdapter
 	config      config.SignalChannelConfig
 	client      *http.Client
 	appendEvent func(eventType string, sessionID string, payload map[string]any)
@@ -25,7 +24,7 @@ type SignalAdapter struct {
 
 func NewSignalAdapter(cfg config.SignalChannelConfig, appendEvent func(eventType string, sessionID string, payload map[string]any)) *SignalAdapter {
 	return &SignalAdapter{
-		base:        inputlayer.NewBaseAdapter("signal", cfg.Enabled && cfg.BaseURL != ""),
+		base:        NewBaseAdapter("signal", cfg.Enabled && cfg.BaseURL != ""),
 		config:      cfg,
 		client:      &http.Client{Timeout: 20 * time.Second},
 		appendEvent: appendEvent,
@@ -39,13 +38,13 @@ func (a *SignalAdapter) Enabled() bool {
 	return a.config.Enabled && strings.TrimSpace(a.config.BaseURL) != "" && strings.TrimSpace(a.config.Number) != ""
 }
 
-func (a *SignalAdapter) Status() inputlayer.Status {
+func (a *SignalAdapter) Status() Status {
 	status := a.base.Status()
 	status.Enabled = a.Enabled()
 	return status
 }
 
-func (a *SignalAdapter) Run(ctx context.Context, handle inputlayer.InboundHandler) error {
+func (a *SignalAdapter) Run(ctx context.Context, handle InboundHandler) error {
 	a.base.SetRunning(true)
 	defer a.base.SetRunning(false)
 	interval := time.Duration(a.config.PollEvery) * time.Second
@@ -69,7 +68,7 @@ func (a *SignalAdapter) Run(ctx context.Context, handle inputlayer.InboundHandle
 	}
 }
 
-func (a *SignalAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundHandler) error {
+func (a *SignalAdapter) pollOnce(ctx context.Context, handle InboundHandler) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(a.config.BaseURL), "/")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/receive/"+url.PathEscape(a.config.Number), nil)
 	if err != nil {
@@ -107,20 +106,15 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundH
 		return err
 	}
 	for _, item := range payload {
-		threadID := strings.TrimSpace(item.Envelope.GroupInfo.GroupID)
-		messageID := signalMessageID(
-			item.Envelope.Source,
-			threadID,
-			item.Envelope.Timestamp,
-			item.Envelope.DataMessage.Message,
-			item.Envelope.DataMessage.Attachments,
-		)
-		if item.Envelope.Timestamp < a.latestTS || a.hasSeen(messageID) {
+		messageID := fmt.Sprintf("%s:%d", item.Envelope.Source, item.Envelope.Timestamp)
+		if item.Envelope.Timestamp <= a.latestTS || a.seen(messageID) {
 			continue
 		}
+		a.latestTS = item.Envelope.Timestamp
 
 		msg := strings.TrimSpace(item.Envelope.DataMessage.Message)
 		replyTarget := item.Envelope.Source
+		threadID := strings.TrimSpace(item.Envelope.GroupInfo.GroupID)
 		if threadID != "" {
 			replyTarget = threadID
 		}
@@ -133,17 +127,13 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundH
 			"thread_id":    threadID,
 			"message_id":   messageID,
 			"sender":       item.Envelope.SourceName,
-			"channel_type": signalChannelType(threadID),
-			"is_group":     boolString(threadID != ""),
 		}
 
-		audioURL, audioMIME, hasAudio := a.findAudioAttachment(item.Envelope.DataMessage.Attachments)
-		if hasAudio {
+		audioURL, audioMIME := a.findAudioAttachment(item.Envelope.DataMessage.Attachments)
+		if audioURL != "" {
 			meta["message_type"] = "voice_note"
+			meta["audio_url"] = audioURL
 			meta["audio_mime"] = audioMIME
-			if audioURL != "" {
-				meta["audio_url"] = audioURL
-			}
 			if msg != "" {
 				meta["caption"] = msg
 			}
@@ -155,8 +145,6 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundH
 			if err := a.sendMessage(ctx, replyTarget, response); err != nil {
 				return err
 			}
-			a.advanceTimestamp(item.Envelope.Timestamp)
-			a.markSeen(messageID)
 			a.base.MarkActivity()
 			a.append("channel.signal.voice", sessionID, map[string]any{
 				"source":       item.Envelope.Source,
@@ -170,8 +158,6 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundH
 		}
 
 		if msg == "" {
-			a.advanceTimestamp(item.Envelope.Timestamp)
-			a.markSeen(messageID)
 			continue
 		}
 
@@ -185,8 +171,6 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundH
 		if err := a.sendMessage(ctx, replyTarget, response); err != nil {
 			return err
 		}
-		a.advanceTimestamp(item.Envelope.Timestamp)
-		a.markSeen(messageID)
 		a.base.MarkActivity()
 		a.append("channel.signal.message", sessionID, map[string]any{
 			"source":      item.Envelope.Source,
@@ -197,13 +181,6 @@ func (a *SignalAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundH
 		})
 	}
 	return nil
-}
-
-func signalChannelType(threadID string) string {
-	if strings.TrimSpace(threadID) != "" {
-		return "group"
-	}
-	return "private"
 }
 
 func (a *SignalAdapter) sendMessage(ctx context.Context, recipient string, text string) error {
@@ -245,73 +222,28 @@ func (a *SignalAdapter) append(eventType string, sessionID string, payload map[s
 	}
 }
 
-func (a *SignalAdapter) advanceTimestamp(ts int64) {
-	if ts > a.latestTS {
-		a.latestTS = ts
-	}
-}
-
-func (a *SignalAdapter) pruneSeen() {
+func (a *SignalAdapter) seen(id string) bool {
 	for key, ts := range a.processed {
 		if time.Since(ts) > 30*time.Minute {
 			delete(a.processed, key)
 		}
 	}
-}
-
-func (a *SignalAdapter) hasSeen(id string) bool {
-	a.pruneSeen()
-	_, ok := a.processed[id]
-	return ok
-}
-
-func (a *SignalAdapter) markSeen(id string) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return
-	}
-	a.pruneSeen()
-	a.processed[id] = time.Now().UTC()
-}
-
-func (a *SignalAdapter) seen(id string) bool {
-	if a.hasSeen(id) {
+	if _, ok := a.processed[id]; ok {
 		return true
 	}
-	a.markSeen(id)
+	a.processed[id] = time.Now().UTC()
 	return false
-}
-
-func signalMessageID(source string, threadID string, timestamp int64, message string, attachments []struct {
-	ContentType string `json:"contentType"`
-	Filename    string `json:"filename"`
-}) string {
-	var b strings.Builder
-	b.WriteString(strings.TrimSpace(source))
-	b.WriteString("|")
-	b.WriteString(strings.TrimSpace(threadID))
-	b.WriteString("|")
-	b.WriteString(fmt.Sprintf("%d", timestamp))
-	b.WriteString("|")
-	b.WriteString(strings.TrimSpace(message))
-	for _, attachment := range attachments {
-		b.WriteString("|")
-		b.WriteString(strings.TrimSpace(attachment.ContentType))
-		b.WriteString(":")
-		b.WriteString(strings.TrimSpace(attachment.Filename))
-	}
-	return b.String()
 }
 
 func (a *SignalAdapter) findAudioAttachment(attachments []struct {
 	ContentType string `json:"contentType"`
 	Filename    string `json:"filename"`
-}) (string, string, bool) {
+}) (string, string) {
 	for _, att := range attachments {
 		mime := strings.ToLower(att.ContentType)
 		fn := strings.ToLower(att.Filename)
 		if strings.HasPrefix(mime, "audio/") {
-			return strings.TrimSpace(att.Filename), att.ContentType, true
+			return "", att.ContentType
 		}
 		if strings.HasSuffix(fn, ".ogg") || strings.HasSuffix(fn, ".mp3") || strings.HasSuffix(fn, ".wav") || strings.HasSuffix(fn, ".flac") || strings.HasSuffix(fn, ".m4a") || strings.HasSuffix(fn, ".webm") {
 			mimeType := "audio/unknown"
@@ -329,8 +261,8 @@ func (a *SignalAdapter) findAudioAttachment(attachments []struct {
 			case strings.HasSuffix(fn, ".webm"):
 				mimeType = "audio/webm"
 			}
-			return strings.TrimSpace(att.Filename), mimeType, true
+			return "", mimeType
 		}
 	}
-	return "", "", false
+	return "", ""
 }

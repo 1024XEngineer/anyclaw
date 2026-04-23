@@ -33,7 +33,6 @@ type ChannelPolicy struct {
 	dmPolicy         DMPolicy
 	groupPolicy      GroupPolicy
 	allowFrom        map[string]bool
-	pairedDMs        map[string]time.Time
 	pairingEnabled   bool
 	pairingTTL       time.Duration
 	mentionGate      bool
@@ -46,7 +45,6 @@ func DefaultChannelPolicy() *ChannelPolicy {
 		dmPolicy:         DMPolicyAllowList,
 		groupPolicy:      GroupPolicyMention,
 		allowFrom:        make(map[string]bool),
-		pairedDMs:        make(map[string]time.Time),
 		pairingEnabled:   false,
 		pairingTTL:       72 * time.Hour,
 		mentionGate:      true,
@@ -91,12 +89,12 @@ func ChannelPolicyFromConfig(cfg config.ChannelSecurityConfig) *ChannelPolicy {
 	if cfg.PairingTTLHours > 0 {
 		policy.pairingTTL = time.Duration(cfg.PairingTTLHours) * time.Hour
 	}
-	if cfg.MentionGateSet() {
-		policy.mentionGate = cfg.MentionGate
+	if cfg.MentionGate {
+		policy.mentionGate = true
 	}
 	policy.riskAcknowledged = cfg.RiskAcknowledged
-	if cfg.DefaultDenyDMSet() {
-		policy.defaultDenyDM = cfg.DefaultDenyDM
+	if cfg.DefaultDenyDM {
+		policy.defaultDenyDM = true
 	}
 
 	return policy
@@ -124,10 +122,6 @@ func (p *ChannelPolicy) Validate() []string {
 		issues = append(issues, "dm_policy is allow-list but allow_from is empty")
 	}
 
-	if p.dmPolicy == DMPolicyPairing && !p.pairingEnabled {
-		issues = append(issues, "dm_policy is pairing but pairing is disabled")
-	}
-
 	if p.dmPolicy == DMPolicyAllowAll && !p.riskAcknowledged {
 		issues = append(issues, "dm_policy is allow-all without risk acknowledgement")
 	}
@@ -140,31 +134,20 @@ func (p *ChannelPolicy) Validate() []string {
 }
 
 func (p *ChannelPolicy) AllowDM(userID string) bool {
-	return p.allowDM(userID, nil)
-}
-
-func (p *ChannelPolicy) allowDM(userID string, meta map[string]string) bool {
 	p.mu.RLock()
-	dmPolicy := p.dmPolicy
-	allowed := p.allowFrom[userID]
-	pairingEnabled := p.pairingEnabled
-	defaultDenyDM := p.defaultDenyDM
-	p.mu.RUnlock()
+	defer p.mu.RUnlock()
 
-	switch dmPolicy {
+	switch p.dmPolicy {
 	case DMPolicyDenyAll:
 		return false
 	case DMPolicyAllowAll:
 		return true
 	case DMPolicyAllowList:
-		return allowed
+		return p.allowFrom[userID]
 	case DMPolicyPairing:
-		if !pairingEnabled {
-			return false
-		}
-		return p.IsDMPaired(userID, meta)
+		return true
 	default:
-		if defaultDenyDM {
+		if p.defaultDenyDM {
 			return false
 		}
 		return true
@@ -301,62 +284,26 @@ func (p *ChannelPolicy) DefaultDenyDM() bool {
 	return p.defaultDenyDM
 }
 
-func (p *ChannelPolicy) PairDM(userID string, meta map[string]string) {
-	key := directPairingKey(userID, meta)
-	if key == "" {
-		return
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.pairedDMs[key] = time.Now().UTC().Add(p.pairingTTL)
-}
-
-func (p *ChannelPolicy) UnpairDM(userID string, meta map[string]string) {
-	key := directPairingKey(userID, meta)
-	if key == "" {
-		return
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.pairedDMs, key)
-}
-
-func (p *ChannelPolicy) IsDMPaired(userID string, meta map[string]string) bool {
-	key := directPairingKey(userID, meta)
-	if key == "" {
-		return false
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	expiresAt, ok := p.pairedDMs[key]
-	if !ok {
-		return false
-	}
-	if time.Now().UTC().After(expiresAt) {
-		delete(p.pairedDMs, key)
-		return false
-	}
-	return true
-}
-
 func (p *ChannelPolicy) Wrap(handler InboundHandler) InboundHandler {
 	return func(ctx context.Context, sessionID string, message string, meta map[string]string) (string, string, error) {
 		userID := meta["user_id"]
-		channelType, isGroup, groupID := inferChannelPolicyContext(meta)
-		mentioned := isMentioned(message, mentionIDsForPolicy(meta))
+		channelType := meta["channel_type"]
+		isGroup := meta["is_group"] == "true"
+		isGuild := meta["guild_id"] != ""
+		mentioned := isMentioned(message, []string{meta["bot_user_id"]})
 
-		if isGroup {
-			if !p.AllowGroup(userID, groupID, mentioned) {
+		if isGroup || isGuild {
+			if !p.AllowGroup(userID, meta["guild_id"], mentioned) {
 				return sessionID, "", fmt.Errorf("user %s blocked by group policy", userID)
 			}
-		} else if isDirectChannelPolicyType(channelType) {
-			if !p.allowDM(userID, meta) {
+		} else if channelType == "dm" || channelType == "private" {
+			if !p.AllowDM(userID) {
 				return sessionID, "", fmt.Errorf("user %s blocked by DM policy", userID)
 			}
+		}
+
+		if len(p.allowFrom) > 0 && !p.IsUserAllowed(userID) {
+			return sessionID, "", fmt.Errorf("user %s not in allow_from list", userID)
 		}
 
 		return handler(ctx, sessionID, message, meta)
@@ -366,158 +313,27 @@ func (p *ChannelPolicy) Wrap(handler InboundHandler) InboundHandler {
 func (p *ChannelPolicy) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
 	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
 		userID := meta["user_id"]
-		channelType, isGroup, groupID := inferChannelPolicyContext(meta)
-		mentioned := isMentioned(message, mentionIDsForPolicy(meta))
+		channelType := meta["channel_type"]
+		isGroup := meta["is_group"] == "true"
+		isGuild := meta["guild_id"] != ""
+		mentioned := isMentioned(message, []string{meta["bot_user_id"]})
 
-		if isGroup {
-			if !p.AllowGroup(userID, groupID, mentioned) {
+		if isGroup || isGuild {
+			if !p.AllowGroup(userID, meta["guild_id"], mentioned) {
 				return sessionID, fmt.Errorf("user %s blocked by group policy", userID)
 			}
-		} else if isDirectChannelPolicyType(channelType) {
-			if !p.allowDM(userID, meta) {
+		} else if channelType == "dm" || channelType == "private" {
+			if !p.AllowDM(userID) {
 				return sessionID, fmt.Errorf("user %s blocked by DM policy", userID)
 			}
 		}
 
+		if len(p.allowFrom) > 0 && !p.IsUserAllowed(userID) {
+			return sessionID, fmt.Errorf("user %s not in allow_from list", userID)
+		}
+
 		return handler(ctx, sessionID, message, meta, onChunk)
 	}
-}
-
-func inferChannelPolicyContext(meta map[string]string) (string, bool, string) {
-	channelType := strings.ToLower(strings.TrimSpace(meta["channel_type"]))
-	isGroup := strings.EqualFold(strings.TrimSpace(meta["is_group"]), "true")
-	groupID := strings.TrimSpace(meta["guild_id"])
-	if groupID == "" {
-		groupID = strings.TrimSpace(meta["thread_id"])
-	}
-
-	switch strings.ToLower(strings.TrimSpace(meta["channel"])) {
-	case "discord":
-		if channelType == "" {
-			if strings.TrimSpace(meta["guild_id"]) != "" {
-				channelType = "guild"
-				isGroup = true
-			} else {
-				channelType = "private"
-			}
-		}
-	case "slack":
-		if channelType == "" {
-			channelID := strings.ToUpper(strings.TrimSpace(meta["channel_id"]))
-			if strings.HasPrefix(channelID, "D") {
-				channelType = "dm"
-			} else if channelID != "" {
-				channelType = "group"
-				isGroup = true
-				if groupID == "" {
-					groupID = channelID
-				}
-			}
-		}
-	case "telegram":
-		chatID := strings.TrimSpace(meta["chat_id"])
-		if channelType == "" {
-			chatType := strings.ToLower(strings.TrimSpace(meta["chat_type"]))
-			switch chatType {
-			case "private":
-				channelType = "private"
-			case "group", "supergroup", "channel":
-				channelType = chatType
-				isGroup = true
-			default:
-				switch {
-				case strings.HasPrefix(chatID, "-"):
-					channelType = "group"
-					isGroup = true
-				case chatID != "" && chatID == strings.TrimSpace(meta["user_id"]):
-					channelType = "private"
-				}
-			}
-		}
-		if groupID == "" && isGroup {
-			groupID = chatID
-		}
-	case "signal":
-		if channelType == "" {
-			if strings.TrimSpace(meta["thread_id"]) != "" {
-				channelType = "group"
-				isGroup = true
-			} else {
-				channelType = "private"
-			}
-		}
-	}
-
-	if !isGroup {
-		switch channelType {
-		case "group", "supergroup", "guild", "channel":
-			isGroup = true
-		}
-	}
-
-	if groupID == "" && isGroup {
-		if id := strings.TrimSpace(meta["chat_id"]); id != "" {
-			groupID = id
-		} else if id := strings.TrimSpace(meta["channel_id"]); id != "" {
-			groupID = id
-		}
-	}
-
-	if channelType == "" && !isGroup {
-		channelType = "private"
-	}
-
-	return channelType, isGroup, groupID
-}
-
-func isDirectChannelPolicyType(channelType string) bool {
-	switch channelType {
-	case "dm", "private", "direct", "im":
-		return true
-	default:
-		return false
-	}
-}
-
-func mentionIDsForPolicy(meta map[string]string) []string {
-	result := make([]string, 0, 4)
-	if id := strings.TrimSpace(meta["bot_user_id"]); id != "" {
-		result = append(result, id)
-	}
-	for _, rawID := range strings.Split(strings.TrimSpace(meta["bot_mention_ids"]), ",") {
-		if id := strings.TrimSpace(rawID); id != "" {
-			result = append(result, id)
-		}
-	}
-	return result
-}
-
-func directPairingKey(userID string, meta map[string]string) string {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return ""
-	}
-
-	channel := strings.TrimSpace(meta["channel"])
-	if channel == "" {
-		channel = "direct"
-	}
-
-	scope := strings.TrimSpace(meta["device_id"])
-	if scope == "" {
-		scope = strings.TrimSpace(meta["chat_id"])
-	}
-	if scope == "" {
-		scope = strings.TrimSpace(meta["channel_id"])
-	}
-	if scope == "" {
-		scope = strings.TrimSpace(meta["thread_id"])
-	}
-	if scope == "" {
-		scope = userID
-	}
-
-	return fmt.Sprintf("%s:%s:%s", channel, userID, scope)
 }
 
 type SecurityAuditResult struct {
@@ -549,6 +365,7 @@ func AuditChannelPolicy(policy *ChannelPolicy) SecurityAuditResult {
 	riskAck := policy.riskAcknowledged
 	defaultDeny := policy.defaultDenyDM
 	policy.mu.RUnlock()
+	_ = allowFromCount
 
 	if dmPolicy != DMPolicyAllowAll || riskAck {
 		score++

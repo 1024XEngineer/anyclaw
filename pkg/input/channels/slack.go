@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,11 +11,10 @@ import (
 	"time"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
-	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
 )
 
 type SlackAdapter struct {
-	base        inputlayer.BaseAdapter
+	base        BaseAdapter
 	config      config.SlackChannelConfig
 	client      *http.Client
 	appendEvent func(eventType string, sessionID string, payload map[string]any)
@@ -25,7 +23,7 @@ type SlackAdapter struct {
 
 func NewSlackAdapter(cfg config.SlackChannelConfig, appendEvent func(eventType string, sessionID string, payload map[string]any)) *SlackAdapter {
 	return &SlackAdapter{
-		base:        inputlayer.NewBaseAdapter("slack", cfg.Enabled && cfg.BotToken != ""),
+		base:        NewBaseAdapter("slack", cfg.Enabled && cfg.BotToken != ""),
 		config:      cfg,
 		client:      &http.Client{Timeout: 20 * time.Second},
 		appendEvent: appendEvent,
@@ -40,13 +38,13 @@ func (a *SlackAdapter) Enabled() bool {
 	return a.config.Enabled && strings.TrimSpace(a.config.BotToken) != "" && strings.TrimSpace(a.config.DefaultChannel) != ""
 }
 
-func (a *SlackAdapter) Status() inputlayer.Status {
+func (a *SlackAdapter) Status() Status {
 	status := a.base.Status()
 	status.Enabled = a.Enabled()
 	return status
 }
 
-func (a *SlackAdapter) Run(ctx context.Context, handle inputlayer.InboundHandler) error {
+func (a *SlackAdapter) Run(ctx context.Context, handle InboundHandler) error {
 	a.base.SetRunning(true)
 	defer a.base.SetRunning(false)
 	interval := time.Duration(a.config.PollEvery) * time.Second
@@ -71,7 +69,7 @@ func (a *SlackAdapter) Run(ctx context.Context, handle inputlayer.InboundHandler
 	}
 }
 
-func (a *SlackAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundHandler) error {
+func (a *SlackAdapter) pollOnce(ctx context.Context, handle InboundHandler) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://slack.com/api/conversations.history?channel="+a.config.DefaultChannel+"&limit=10", nil)
 	if err != nil {
 		return err
@@ -84,8 +82,7 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundHa
 	defer resp.Body.Close()
 
 	var payload struct {
-		OK       bool   `json:"ok"`
-		Error    string `json:"error"`
+		OK       bool `json:"ok"`
 		Messages []struct {
 			Text     string `json:"text"`
 			Ts       string `json:"ts"`
@@ -102,19 +99,13 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundHa
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return err
 	}
-	if !payload.OK {
-		if strings.TrimSpace(payload.Error) == "" {
-			return fmt.Errorf("slack history failed: api returned ok=false")
-		}
-		return fmt.Errorf("slack history failed: %s", payload.Error)
-	}
 
 	for i := len(payload.Messages) - 1; i >= 0; i-- {
 		msg := payload.Messages[i]
-		if msg.Ts == "" || slackTSLessOrEqual(msg.Ts, a.latestTS) || msg.BotID != "" {
+		if msg.Ts == "" || msg.Ts == a.latestTS || msg.BotID != "" {
 			continue
 		}
-		channelType, isGroup := slackConversationMetadata(a.config.DefaultChannel)
+		a.latestTS = msg.Ts
 
 		meta := map[string]string{
 			"channel":      "slack",
@@ -124,8 +115,6 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundHa
 			"message_id":   msg.Ts,
 			"sender":       msg.User,
 			"thread_id":    msg.ThreadTS,
-			"channel_type": channelType,
-			"is_group":     boolString(isGroup),
 		}
 
 		audioURL, audioMIME := a.findAudioFile(msg.Files)
@@ -144,7 +133,6 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundHa
 			if err := a.sendMessage(ctx, response, msg.ThreadTS); err != nil {
 				return err
 			}
-			a.latestTS = msg.Ts
 			a.base.MarkActivity()
 			a.append("channel.slack.voice", sessionID, map[string]any{
 				"channel":      a.config.DefaultChannel,
@@ -157,7 +145,6 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundHa
 		}
 
 		if strings.TrimSpace(msg.Text) == "" {
-			a.latestTS = msg.Ts
 			continue
 		}
 
@@ -168,7 +155,6 @@ func (a *SlackAdapter) pollOnce(ctx context.Context, handle inputlayer.InboundHa
 		if err := a.sendMessage(ctx, response, msg.ThreadTS); err != nil {
 			return err
 		}
-		a.latestTS = msg.Ts
 		a.base.MarkActivity()
 		a.append("channel.slack.message", sessionID, map[string]any{
 			"channel": a.config.DefaultChannel,
@@ -199,20 +185,6 @@ func (a *SlackAdapter) sendMessage(ctx context.Context, text string, threadTS st
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("slack send failed: %s", resp.Status)
 	}
-
-	var result struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-	if !result.OK {
-		if strings.TrimSpace(result.Error) == "" {
-			return fmt.Errorf("slack send failed: api returned ok=false")
-		}
-		return fmt.Errorf("slack send failed: %s", result.Error)
-	}
 	return nil
 }
 
@@ -236,12 +208,8 @@ func (a *SlackAdapter) findAudioFile(files []struct {
 	return "", ""
 }
 
-func (a *SlackAdapter) sendMessageWithResult(ctx context.Context, text string, threadTS string) (string, error) {
-	bodyMap := map[string]any{"channel": a.config.DefaultChannel, "text": text}
-	if strings.TrimSpace(threadTS) != "" {
-		bodyMap["thread_ts"] = threadTS
-	}
-	body, _ := json.Marshal(bodyMap)
+func (a *SlackAdapter) sendMessageWithResult(ctx context.Context, text string) (string, error) {
+	body, _ := json.Marshal(map[string]any{"channel": a.config.DefaultChannel, "text": text})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/chat.postMessage", bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -258,18 +226,14 @@ func (a *SlackAdapter) sendMessageWithResult(ctx context.Context, text string, t
 	}
 
 	var result struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-		Ts    string `json:"ts"`
+		OK bool   `json:"ok"`
+		Ts string `json:"ts"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", err
 	}
-	if !result.OK {
-		if strings.TrimSpace(result.Error) == "" {
-			return "", fmt.Errorf("slack send failed: api returned ok=false")
-		}
-		return "", fmt.Errorf("slack send failed: %s", result.Error)
+	if !result.OK || result.Ts == "" {
+		return "", nil
 	}
 	return result.Ts, nil
 }
@@ -287,54 +251,31 @@ func (a *SlackAdapter) editMessage(ctx context.Context, ts string, text string) 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return err
+		return nil
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("slack update failed: %s", resp.Status)
-	}
-	var result struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-	if !result.OK {
-		if strings.TrimSpace(result.Error) == "" {
-			return fmt.Errorf("slack update failed: api returned ok=false")
-		}
-		return fmt.Errorf("slack update failed: %s", result.Error)
-	}
 	return nil
 }
 
-func (a *SlackAdapter) sendStreamingMessage(ctx context.Context, threadTS string, streamFn func(onChunk func(chunk string) error) error) error {
+func (a *SlackAdapter) sendStreamingMessage(ctx context.Context, streamFn func(onChunk func(chunk string)) error) error {
 	streamInterval := time.Duration(a.config.StreamInterval) * time.Millisecond
 	if streamInterval <= 0 {
 		streamInterval = 500 * time.Millisecond
 	}
 
-	initialTs, err := a.sendMessageWithResult(ctx, "\u200B", threadTS)
+	initialTs, err := a.sendMessageWithResult(ctx, "\u200B")
 	if err != nil {
 		return err
 	}
 	if initialTs == "" {
-		return streamWithMessageFallback(func(onChunk func(chunk string)) error {
-			return streamFn(func(chunk string) error {
-				onChunk(chunk)
-				return nil
-			})
-		}, func(final string) error {
-			return a.sendMessage(ctx, final, threadTS)
-		})
+		return streamFn(func(chunk string) {})
 	}
 
 	var accumulated strings.Builder
 	var mu sync.Mutex
 	lastEdit := time.Now()
 
-	onChunk := func(chunk string) error {
+	onChunk := func(chunk string) {
 		mu.Lock()
 		accumulated.WriteString(chunk)
 		shouldEdit := time.Since(lastEdit) >= streamInterval
@@ -347,30 +288,26 @@ func (a *SlackAdapter) sendStreamingMessage(ctx context.Context, threadTS string
 			mu.Lock()
 			text := accumulated.String()
 			mu.Unlock()
-			if err := a.editMessage(ctx, initialTs, text); err != nil {
-				return err
-			}
+			a.editMessage(ctx, initialTs, text)
 		}
-		return nil
 	}
 
 	if err := streamFn(onChunk); err != nil {
 		mu.Lock()
 		final := accumulated.String()
 		mu.Unlock()
-		if editErr := a.editMessage(ctx, initialTs, final+"\n\n[Error: "+err.Error()+"]"); editErr != nil {
-			return errors.Join(err, editErr)
-		}
+		a.editMessage(ctx, initialTs, final+"\n\n[Error: "+err.Error()+"]")
 		return err
 	}
 
 	mu.Lock()
 	final := accumulated.String()
 	mu.Unlock()
-	return a.editMessage(ctx, initialTs, final)
+	a.editMessage(ctx, initialTs, final)
+	return nil
 }
 
-func (a *SlackAdapter) RunStream(ctx context.Context, handle inputlayer.StreamChunkHandler) error {
+func (a *SlackAdapter) RunStream(ctx context.Context, handle StreamChunkHandler) error {
 	a.base.SetRunning(true)
 	defer a.base.SetRunning(false)
 	interval := time.Duration(a.config.PollEvery) * time.Second
@@ -395,7 +332,7 @@ func (a *SlackAdapter) RunStream(ctx context.Context, handle inputlayer.StreamCh
 	}
 }
 
-func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle inputlayer.StreamChunkHandler) error {
+func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHandler) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://slack.com/api/conversations.history?channel="+a.config.DefaultChannel+"&limit=10", nil)
 	if err != nil {
 		return err
@@ -408,8 +345,7 @@ func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle inputlayer.Str
 	defer resp.Body.Close()
 
 	var payload struct {
-		OK       bool   `json:"ok"`
-		Error    string `json:"error"`
+		OK       bool `json:"ok"`
 		Messages []struct {
 			Text     string `json:"text"`
 			Ts       string `json:"ts"`
@@ -421,24 +357,17 @@ func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle inputlayer.Str
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return err
 	}
-	if !payload.OK {
-		if strings.TrimSpace(payload.Error) == "" {
-			return fmt.Errorf("slack history failed: api returned ok=false")
-		}
-		return fmt.Errorf("slack history failed: %s", payload.Error)
-	}
 
 	for i := len(payload.Messages) - 1; i >= 0; i-- {
 		msg := payload.Messages[i]
-		if msg.Ts == "" || slackTSLessOrEqual(msg.Ts, a.latestTS) || msg.BotID != "" {
+		if msg.Ts == "" || msg.Ts == a.latestTS || msg.BotID != "" {
 			continue
 		}
+		a.latestTS = msg.Ts
 
 		if strings.TrimSpace(msg.Text) == "" {
-			a.latestTS = msg.Ts
 			continue
 		}
-		channelType, isGroup := slackConversationMetadata(a.config.DefaultChannel)
 
 		meta := map[string]string{
 			"channel":      "slack",
@@ -448,22 +377,20 @@ func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle inputlayer.Str
 			"message_id":   msg.Ts,
 			"sender":       msg.User,
 			"thread_id":    msg.ThreadTS,
-			"channel_type": channelType,
-			"is_group":     boolString(isGroup),
 		}
 
 		sessionID := ""
-		err := a.sendStreamingMessage(ctx, msg.ThreadTS, func(onChunk func(chunk string) error) error {
+		err := a.sendStreamingMessage(ctx, func(onChunk func(chunk string)) error {
 			var err error
 			sessionID, err = handle(ctx, sessionID, msg.Text, meta, func(chunk string) error {
-				return onChunk(chunk)
+				onChunk(chunk)
+				return nil
 			})
 			return err
 		})
 		if err != nil {
 			return err
 		}
-		a.latestTS = msg.Ts
 		a.base.MarkActivity()
 		a.append("channel.slack.message", sessionID, map[string]any{
 			"channel":   a.config.DefaultChannel,
@@ -473,23 +400,4 @@ func (a *SlackAdapter) pollOnceStream(ctx context.Context, handle inputlayer.Str
 		})
 	}
 	return nil
-}
-
-func slackConversationMetadata(channelID string) (string, bool) {
-	channelID = strings.ToUpper(strings.TrimSpace(channelID))
-	switch {
-	case strings.HasPrefix(channelID, "D"):
-		return "dm", false
-	case channelID != "":
-		return "group", true
-	default:
-		return "", false
-	}
-}
-
-func boolString(value bool) string {
-	if value {
-		return "true"
-	}
-	return "false"
 }

@@ -133,17 +133,9 @@ func (cc *ChannelCommands) Wrap(handler InboundHandler) InboundHandler {
 
 func (cc *ChannelCommands) WrapStream(handler StreamChunkHandler) StreamChunkHandler {
 	return func(ctx context.Context, sessionID string, message string, meta map[string]string, onChunk func(chunk string) error) (string, error) {
-		result, handled, err := cc.Handle(ctx, message, meta)
+		_, handled, err := cc.Handle(ctx, message, meta)
 		if handled {
-			if err != nil {
-				return sessionID, err
-			}
-			if strings.TrimSpace(result) != "" {
-				if chunkErr := onChunk(result); chunkErr != nil {
-					return sessionID, chunkErr
-				}
-			}
-			return sessionID, nil
+			return sessionID, err
 		}
 		return handler(ctx, sessionID, message, meta, onChunk)
 	}
@@ -178,16 +170,19 @@ func (mg *MentionGate) ShouldProcess(text string, meta map[string]string) bool {
 		return true
 	}
 
-	channelType, isGroup, _ := inferChannelPolicyContext(meta)
-	if isDirectChannelPolicyType(channelType) {
+	channelType := meta["channel_type"]
+	isGroup := meta["is_group"] == "true"
+	isGuild := meta["guild_id"] != ""
+
+	if channelType == "dm" || channelType == "private" {
 		return true
 	}
 
-	if isGroup {
-		return false
+	if !isGroup && !isGuild {
+		return true
 	}
 
-	return true
+	return false
 }
 
 func (mg *MentionGate) StripMention(text string) string {
@@ -222,8 +217,11 @@ func (mg *MentionGate) Wrap(handler InboundHandler) InboundHandler {
 			return handler(ctx, sessionID, message, meta)
 		}
 
-		channelType, isGroup, _ := inferChannelPolicyContext(meta)
-		if isDirectChannelPolicyType(channelType) || !isGroup {
+		channelType := meta["channel_type"]
+		isGroup := meta["is_group"] == "true"
+		isGuild := meta["guild_id"] != ""
+
+		if channelType == "dm" || channelType == "private" || (!isGroup && !isGuild) {
 			return handler(ctx, sessionID, message, meta)
 		}
 
@@ -236,7 +234,6 @@ func (mg *MentionGate) Wrap(handler InboundHandler) InboundHandler {
 			cleanMessage = message
 		}
 		meta["bot_user_id"] = botUserID
-		meta["bot_mention_ids"] = strings.Join(mentionIDs, ",")
 		return handler(ctx, sessionID, cleanMessage, meta)
 	}
 }
@@ -253,8 +250,11 @@ func (mg *MentionGate) WrapStream(handler StreamChunkHandler) StreamChunkHandler
 			return handler(ctx, sessionID, message, meta, onChunk)
 		}
 
-		channelType, isGroup, _ := inferChannelPolicyContext(meta)
-		if isDirectChannelPolicyType(channelType) || !isGroup {
+		channelType := meta["channel_type"]
+		isGroup := meta["is_group"] == "true"
+		isGuild := meta["guild_id"] != ""
+
+		if channelType == "dm" || channelType == "private" || (!isGroup && !isGuild) {
 			return handler(ctx, sessionID, message, meta, onChunk)
 		}
 
@@ -267,7 +267,6 @@ func (mg *MentionGate) WrapStream(handler StreamChunkHandler) StreamChunkHandler
 			cleanMessage = message
 		}
 		meta["bot_user_id"] = botUserID
-		meta["bot_mention_ids"] = strings.Join(mentionIDs, ",")
 		return handler(ctx, sessionID, cleanMessage, meta, onChunk)
 	}
 }
@@ -321,7 +320,6 @@ func stripMentions(text string, mentionIDs []string) string {
 type GroupSecurity struct {
 	mu              sync.RWMutex
 	allowedGroups   map[string]map[string]bool
-	deniedGroups    map[string]bool
 	deniedUsers     map[string]bool
 	allowedUsers    map[string]bool
 	requireApproval bool
@@ -330,7 +328,6 @@ type GroupSecurity struct {
 func NewGroupSecurity() *GroupSecurity {
 	return &GroupSecurity{
 		allowedGroups: make(map[string]map[string]bool),
-		deniedGroups:  make(map[string]bool),
 		deniedUsers:   make(map[string]bool),
 		allowedUsers:  make(map[string]bool),
 	}
@@ -343,14 +340,12 @@ func (gs *GroupSecurity) AllowGroup(groupID string) {
 		gs.allowedGroups[groupID] = make(map[string]bool)
 	}
 	gs.allowedGroups[groupID]["allowed"] = true
-	delete(gs.deniedGroups, groupID)
 }
 
 func (gs *GroupSecurity) DenyGroup(groupID string) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	delete(gs.allowedGroups, groupID)
-	gs.deniedGroups[groupID] = true
 }
 
 func (gs *GroupSecurity) AllowUser(userID string) {
@@ -380,9 +375,6 @@ func (gs *GroupSecurity) ShouldProcess(userID string, groupID string) bool {
 	}
 
 	if groupID != "" {
-		if gs.deniedGroups[groupID] {
-			return false
-		}
 		if gs.allowedGroups[groupID] == nil {
 			return !gs.requireApproval
 		}
@@ -616,8 +608,11 @@ func (pm *PresenceManager) SetPresence(channel, userID string, status string, ac
 		LastUpdate: now,
 	}
 
-	if existing, ok := pm.presences[key]; ok && existing.Status == status {
+	if existing, ok := pm.presences[key]; ok {
 		info.Since = existing.Since
+		if existing.Status == status {
+			info.Since = existing.Since
+		}
 	}
 
 	pm.presences[key] = info
@@ -664,35 +659,12 @@ func (pm *PresenceManager) CleanupStale(timeout time.Duration) {
 	defer pm.mu.Unlock()
 	now := time.Now().UTC()
 	for key, info := range pm.presences {
-		if now.Sub(info.LastUpdate) <= timeout {
-			continue
-		}
-		if info.Status == "offline" {
-			delete(pm.presences, key)
-			continue
-		}
-		if pm.onUpdate != nil {
-			channel, userID := splitPresenceKey(key)
+		if now.Sub(info.LastUpdate) > timeout && info.Status != "offline" {
 			info.Status = "offline"
-			info.Activity = ""
 			info.LastUpdate = now
 			pm.presences[key] = info
-			pm.onUpdate(channel, userID, info)
-			continue
 		}
-		info.Status = "offline"
-		info.Activity = ""
-		info.LastUpdate = now
-		pm.presences[key] = info
 	}
-}
-
-func splitPresenceKey(key string) (string, string) {
-	parts := strings.SplitN(key, ":", 2)
-	if len(parts) != 2 {
-		return "", ""
-	}
-	return parts[0], parts[1]
 }
 
 func (pm *PresenceManager) Wrap(handler InboundHandler) InboundHandler {
@@ -730,10 +702,8 @@ func (pm *PresenceManager) WrapStream(handler StreamChunkHandler) StreamChunkHan
 }
 
 type ContactDirectory struct {
-	mu         sync.RWMutex
-	contacts   map[string]ContactInfo
-	maxEntries int
-	staleAfter time.Duration
+	mu       sync.RWMutex
+	contacts map[string]ContactInfo
 }
 
 type ContactInfo struct {
@@ -751,9 +721,7 @@ type ContactInfo struct {
 
 func NewContactDirectory() *ContactDirectory {
 	return &ContactDirectory{
-		contacts:   make(map[string]ContactInfo),
-		maxEntries: 4096,
-		staleAfter: 30 * 24 * time.Hour,
+		contacts: make(map[string]ContactInfo),
 	}
 }
 
@@ -779,8 +747,6 @@ func (cd *ContactDirectory) AddOrUpdate(contact ContactInfo) {
 	}
 
 	cd.contacts[key] = contact
-	cd.cleanupStaleLocked(now, cd.staleAfter)
-	cd.evictOverflowLocked()
 }
 
 func (cd *ContactDirectory) Get(channel, userID string) (ContactInfo, bool) {
@@ -831,67 +797,6 @@ func (cd *ContactDirectory) Count() int {
 	cd.mu.RLock()
 	defer cd.mu.RUnlock()
 	return len(cd.contacts)
-}
-
-func (cd *ContactDirectory) SetMaxEntries(maxEntries int) {
-	cd.mu.Lock()
-	defer cd.mu.Unlock()
-	cd.maxEntries = maxEntries
-	cd.evictOverflowLocked()
-}
-
-func (cd *ContactDirectory) SetStaleAfter(staleAfter time.Duration) {
-	cd.mu.Lock()
-	defer cd.mu.Unlock()
-	cd.staleAfter = staleAfter
-	cd.cleanupStaleLocked(time.Now().UTC(), cd.staleAfter)
-}
-
-func (cd *ContactDirectory) CleanupStale(maxAge time.Duration) int {
-	cd.mu.Lock()
-	defer cd.mu.Unlock()
-	return cd.cleanupStaleLocked(time.Now().UTC(), maxAge)
-}
-
-func (cd *ContactDirectory) cleanupStaleLocked(now time.Time, maxAge time.Duration) int {
-	if maxAge <= 0 {
-		return 0
-	}
-
-	removed := 0
-	for key, contact := range cd.contacts {
-		if now.Sub(contact.LastSeen) > maxAge {
-			delete(cd.contacts, key)
-			removed++
-		}
-	}
-	return removed
-}
-
-func (cd *ContactDirectory) evictOverflowLocked() int {
-	if cd.maxEntries <= 0 || len(cd.contacts) <= cd.maxEntries {
-		return 0
-	}
-
-	removed := 0
-	for len(cd.contacts) > cd.maxEntries {
-		var oldestKey string
-		var oldestSeen time.Time
-		first := true
-		for key, contact := range cd.contacts {
-			if first || contact.LastSeen.Before(oldestSeen) {
-				oldestKey = key
-				oldestSeen = contact.LastSeen
-				first = false
-			}
-		}
-		if first {
-			return removed
-		}
-		delete(cd.contacts, oldestKey)
-		removed++
-	}
-	return removed
 }
 
 func (cd *ContactDirectory) Wrap(handler InboundHandler) InboundHandler {

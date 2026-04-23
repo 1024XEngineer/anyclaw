@@ -155,7 +155,7 @@ func (r *Registry) RegisterTool(name string, desc string, schema map[string]any,
 		Category:    ToolCategoryCustom,
 		AccessLevel: ToolAccessPublic,
 		Visibility:  ToolVisibilityAll,
-		CachePolicy: ToolCachePolicyNever,
+		CachePolicy: ToolCachePolicyDefault,
 	}
 }
 
@@ -168,7 +168,7 @@ func (r *Registry) Register(t *Tool) {
 		t.Visibility = ToolVisibilityAll
 	}
 	if t.CachePolicy == "" {
-		t.CachePolicy = ToolCachePolicyNever
+		t.CachePolicy = ToolCachePolicyDefault
 	}
 	r.tools[t.Name] = t
 	if t.Category != "" {

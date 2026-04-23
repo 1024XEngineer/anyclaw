@@ -426,6 +426,9 @@ func (p *PolicyEngine) checkPathAccess(path string, allowed []string, action str
 	if target == "" {
 		return fmt.Errorf("failed to resolve %s path: %s", action, path)
 	}
+	if p.workingDir != "" && pathWithin(target, p.workingDir) {
+		return nil
+	}
 	for _, candidate := range allowed {
 		if candidate != "" && pathWithin(target, candidate) {
 			return nil
@@ -435,9 +438,6 @@ func (p *PolicyEngine) checkPathAccess(path string, allowed []string, action str
 		if protected != "" && pathWithin(target, protected) {
 			return fmt.Errorf("%s denied: protected path %s", action, path)
 		}
-	}
-	if p.workingDir != "" && pathWithin(target, p.workingDir) {
-		return nil
 	}
 	return fmt.Errorf("%s denied outside working directory: %s", action, path)
 }

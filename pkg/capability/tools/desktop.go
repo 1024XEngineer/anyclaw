@@ -11,9 +11,6 @@ import (
 	"strings"
 )
 
-var desktopHostOS = runtime.GOOS
-var desktopScriptRunner = runDesktopPowerShell
-
 func DesktopOpenTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
 	target, ok := input["target"].(string)
 	if !ok || strings.TrimSpace(target) == "" {
@@ -29,7 +26,7 @@ func DesktopOpenTool(ctx context.Context, input map[string]any, opts BuiltinOpti
 		}
 	}
 	command := desktopOpenCommand(strings.TrimSpace(target), strings.TrimSpace(kind))
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopTypeTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -41,7 +38,7 @@ func DesktopTypeTool(ctx context.Context, input map[string]any, opts BuiltinOpti
 		return "", err
 	}
 	command := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(%s); "typed"`, powerShellString(sendKeysEscape(text)))
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopTypeHumanTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -105,7 +102,7 @@ if ($submit) {
 }
 "typed human"
 `, powerShellString(string(payload)), delayMS, jitterMS, pauseEvery, pauseMS, powerShellBool(submit))
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopHotkeyTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -129,7 +126,7 @@ func DesktopHotkeyTool(ctx context.Context, input map[string]any, opts BuiltinOp
 		parts = append(parts, fmt.Sprint(item))
 	}
 	command := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(%s); "hotkey sent"`, powerShellString(hotkeyToSendKeys(parts)))
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopClipboardSetTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -144,7 +141,7 @@ func DesktopClipboardSetTool(ctx context.Context, input map[string]any, opts Bui
 Set-Clipboard -Value %s;
 "clipboard set"
 `, powerShellString(text))
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopClipboardGetTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -164,7 +161,7 @@ try {
 }
 $text
 `
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopPasteTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -194,7 +191,7 @@ if (%s) {
 }
 "pasted"
 `, setClipboard, waitMS, waitMS, powerShellBool(submit))
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopClickTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -225,7 +222,7 @@ func DesktopClickTool(ctx context.Context, input map[string]any, opts BuiltinOpt
 		if err != nil {
 			return "", err
 		}
-		return desktopScriptRunner(ctx, command)
+		return runDesktopPowerShell(ctx, command)
 	}
 	downFlag, upFlag, err := mouseFlags(button)
 	if err != nil {
@@ -245,7 +242,7 @@ public static class DesktopNative {
 [DesktopNative]::mouse_event(%d, 0, 0, 0, [UIntPtr]::Zero);
 "clicked"
 `, x, y, downFlag, upFlag)
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopMoveTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -268,7 +265,7 @@ public static class DesktopNative {
 [DesktopNative]::SetCursorPos(%d, %d) | Out-Null;
 "moved"
 `, x, y)
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopDoubleClickTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -303,7 +300,7 @@ func DesktopDoubleClickTool(ctx context.Context, input map[string]any, opts Buil
 		if err != nil {
 			return "", err
 		}
-		return desktopScriptRunner(ctx, command)
+		return runDesktopPowerShell(ctx, command)
 	}
 	downFlag, upFlag, err := mouseFlags(button)
 	if err != nil {
@@ -326,7 +323,7 @@ Start-Sleep -Milliseconds %d;
 [DesktopNative]::mouse_event(%d, 0, 0, 0, [UIntPtr]::Zero);
 "double-clicked"
 `, x, y, downFlag, upFlag, intervalMS, downFlag, upFlag)
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopScrollTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -370,7 +367,7 @@ public static class DesktopNative {
 [DesktopNative]::mouse_event(0x0800, 0, 0, %d, [UIntPtr]::Zero);
 "scrolled"
 `, moveCursor, delta)
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopDragTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -424,7 +421,7 @@ for ($i = 1; $i -le %d; $i++) {
 [DesktopNative]::mouse_event(%d, 0, 0, 0, [UIntPtr]::Zero);
 "dragged"
 `, x1, y1, downFlag, steps, x1, x2, x1, steps, y1, y2, y1, steps, delay, upFlag)
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopWaitTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -436,7 +433,7 @@ func DesktopWaitTool(ctx context.Context, input map[string]any, opts BuiltinOpti
 		return "", err
 	}
 	command := fmt.Sprintf(`Start-Sleep -Milliseconds %d; "waited"`, waitMS)
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopFocusWindowTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -490,7 +487,7 @@ if (-not [DesktopNative]::SetForegroundWindow($target.MainWindowHandle)) {
 }
 "focused"
 `, powerShellString(strings.TrimSpace(title)), powerShellString(strings.TrimSpace(processName)), powerShellString(match))
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func DesktopScreenshotTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -518,6 +515,66 @@ func DesktopScreenshotTool(ctx context.Context, input map[string]any, opts Built
 	return fmt.Sprintf("%s to %s", strings.TrimSpace(output), resolved), nil
 }
 
+func DesktopScreenshotWindowTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	path, ok := input["path"].(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if err := ensureDesktopAllowed("desktop_screenshot_window", opts, true); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(fmt.Sprint(input["title"])) == "" &&
+		strings.TrimSpace(fmt.Sprint(input["process_name"])) == "" {
+		if handle, ok := numberInput(input["handle"]); !ok || handle <= 0 {
+			return "", fmt.Errorf("title, process_name, or handle is required")
+		}
+	}
+	resolved := resolvePath(path, opts.WorkingDir)
+	if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return "", err
+	}
+	if err := ensureWriteAllowed(resolved, opts.WorkingDir, opts.PermissionLevel); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+		return "", fmt.Errorf("failed to create screenshot dir: %w", err)
+	}
+
+	windows, err := runDesktopWindowQuery(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	if len(windows) == 0 {
+		return "", fmt.Errorf("window not found")
+	}
+	window := windows[0]
+
+	fullFile, err := os.CreateTemp("", "anyclaw-desktop-window-full-*.png")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp screenshot file: %w", err)
+	}
+	fullPath := fullFile.Name()
+	_ = fullFile.Close()
+	defer func() { _ = os.Remove(fullPath) }()
+
+	if _, err := captureDesktopScreenshotToPath(ctx, fullPath); err != nil {
+		return "", err
+	}
+	croppedPath, _, _, cleanup, err := cropDesktopTargetImageToWindow(fullPath, window)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	data, err := os.ReadFile(croppedPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read cropped screenshot: %w", err)
+	}
+	if err := os.WriteFile(resolved, data, 0o644); err != nil {
+		return "", fmt.Errorf("failed to write window screenshot: %w", err)
+	}
+	return fmt.Sprintf("saved window screenshot to %s", resolved), nil
+}
+
 func captureDesktopScreenshotToPath(ctx context.Context, resolved string) (string, error) {
 	command := fmt.Sprintf(`
 Add-Type -AssemblyName System.Windows.Forms;
@@ -531,11 +588,11 @@ $graphics.Dispose();
 $bitmap.Dispose();
 "saved"
 `, powerShellString(resolved))
-	return desktopScriptRunner(ctx, command)
+	return runDesktopPowerShell(ctx, command)
 }
 
 func ensureDesktopAllowed(toolName string, opts BuiltinOptions, allowReadOnly bool) error {
-	if desktopHostOS != "windows" {
+	if runtime.GOOS != "windows" {
 		return fmt.Errorf("%s is currently supported on Windows host mode only", toolName)
 	}
 	mode := strings.TrimSpace(strings.ToLower(opts.ExecutionMode))
@@ -736,24 +793,6 @@ func intNumberWithDefault(value any, fallback int) int {
 		return fallback
 	}
 	return n
-}
-
-func powerShellBool(value bool) string {
-	if value {
-		return "$true"
-	}
-	return "$false"
-}
-
-func boolValue(value any) bool {
-	switch v := value.(type) {
-	case bool:
-		return v
-	case string:
-		return strings.EqualFold(strings.TrimSpace(v), "true")
-	default:
-		return false
-	}
 }
 
 func numberInput(value any) (int, bool) {

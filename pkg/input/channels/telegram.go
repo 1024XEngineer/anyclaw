@@ -3,24 +3,19 @@ package channels
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
-	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
 )
 
 type TelegramAdapter struct {
-	base        inputlayer.BaseAdapter
+	base        BaseAdapter
 	config      config.TelegramChannelConfig
 	baseURL     string
 	client      *http.Client
@@ -30,7 +25,7 @@ type TelegramAdapter struct {
 
 func NewTelegramAdapter(cfg config.TelegramChannelConfig, appendEvent func(eventType string, sessionID string, payload map[string]any)) *TelegramAdapter {
 	return &TelegramAdapter{
-		base:        inputlayer.NewBaseAdapter("telegram", cfg.Enabled && cfg.BotToken != ""),
+		base:        NewBaseAdapter("telegram", cfg.Enabled && cfg.BotToken != ""),
 		config:      cfg,
 		baseURL:     "https://api.telegram.org/bot" + cfg.BotToken,
 		client:      &http.Client{Timeout: 20 * time.Second},
@@ -43,16 +38,16 @@ func (a *TelegramAdapter) Name() string {
 }
 
 func (a *TelegramAdapter) Enabled() bool {
-	return a.config.Enabled && strings.TrimSpace(a.config.BotToken) != ""
+	return a.config.Enabled && a.config.BotToken != "" && (strings.TrimSpace(a.config.ChatID) != "" || true)
 }
 
-func (a *TelegramAdapter) Status() inputlayer.Status {
+func (a *TelegramAdapter) Status() Status {
 	status := a.base.Status()
 	status.Enabled = a.Enabled()
 	return status
 }
 
-func (a *TelegramAdapter) Run(ctx context.Context, runMessage inputlayer.InboundHandler) error {
+func (a *TelegramAdapter) Run(ctx context.Context, runMessage InboundHandler) error {
 	a.base.SetRunning(true)
 	defer a.base.SetRunning(false)
 	interval := time.Duration(a.config.PollEvery) * time.Second
@@ -78,7 +73,7 @@ func (a *TelegramAdapter) Run(ctx context.Context, runMessage inputlayer.Inbound
 	}
 }
 
-func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage inputlayer.InboundHandler) error {
+func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage InboundHandler) error {
 	u := fmt.Sprintf("%s/getUpdates?timeout=1&offset=%d", a.baseURL, a.offset)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -91,16 +86,14 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage inputlayer.In
 	defer resp.Body.Close()
 
 	var payload struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-		Result      []struct {
+		OK     bool `json:"ok"`
+		Result []struct {
 			UpdateID int64 `json:"update_id"`
 			Message  struct {
 				Text    string `json:"text"`
 				Caption string `json:"caption"`
 				Chat    struct {
-					ID   int64  `json:"id"`
-					Type string `json:"type"`
+					ID int64 `json:"id"`
 				} `json:"chat"`
 				From struct {
 					Username string `json:"username"`
@@ -131,38 +124,22 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage inputlayer.In
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return err
 	}
-	if !payload.OK {
-		if strings.TrimSpace(payload.Description) == "" {
-			return fmt.Errorf("telegram getUpdates failed: api returned ok=false")
-		}
-		return fmt.Errorf("telegram getUpdates failed: %s", payload.Description)
-	}
 
 	for _, update := range payload.Result {
-		nextOffset := update.UpdateID + 1
+		a.offset = update.UpdateID + 1
 		chatID := strconv.FormatInt(update.Message.Chat.ID, 10)
 		if strings.TrimSpace(a.config.ChatID) != "" && chatID != strings.TrimSpace(a.config.ChatID) {
-			a.offset = nextOffset
 			continue
 		}
 
 		text := strings.TrimSpace(update.Message.Text)
 		caption := strings.TrimSpace(update.Message.Caption)
-		if text == "" {
-			text = caption
-		}
 		username := update.Message.From.Username
-		userID := strconv.FormatInt(update.Message.From.ID, 10)
 		messageID := strconv.FormatInt(update.UpdateID, 10)
-		channelType, isGroup := telegramConversationMetadata(update.Message.Chat.Type, update.Message.Chat.ID, update.Message.From.ID)
 
 		meta := map[string]string{
 			"channel":      "telegram",
 			"chat_id":      chatID,
-			"chat_type":    update.Message.Chat.Type,
-			"channel_type": channelType,
-			"is_group":     boolString(isGroup),
-			"user_id":      userID,
 			"username":     username,
 			"reply_target": chatID,
 			"message_id":   messageID,
@@ -171,85 +148,66 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage inputlayer.In
 
 		var messageType string
 		var audioURL string
-		var audioRef string
-		var audioFileID string
 		var audioMIME string
-		var cleanupAudio func()
 
 		if update.Message.Voice != nil {
 			messageType = "voice_note"
-			audioFileID = strings.TrimSpace(update.Message.Voice.FileID)
 			audioMIME = update.Message.Voice.MimeType
 			if audioMIME == "" {
 				audioMIME = "audio/ogg"
 			}
-			audioRef = telegramFileRef(audioFileID)
-			localPath, cleanup, err := a.downloadFile(ctx, audioFileID)
+			fileURL, err := a.getFileURL(ctx, update.Message.Voice.FileID)
 			if err != nil {
-				return err
+				a.append("channel.telegram.error", "", map[string]any{"error": err.Error(), "type": "voice_download_failed"})
+				continue
 			}
-			audioURL = localPath
-			cleanupAudio = cleanup
+			audioURL = fileURL
 		} else if update.Message.Audio != nil {
 			messageType = "audio_file"
-			audioFileID = strings.TrimSpace(update.Message.Audio.FileID)
 			audioMIME = update.Message.Audio.MimeType
-			audioRef = telegramFileRef(audioFileID)
-			localPath, cleanup, err := a.downloadFile(ctx, audioFileID)
+			fileURL, err := a.getFileURL(ctx, update.Message.Audio.FileID)
 			if err != nil {
-				return err
+				a.append("channel.telegram.error", "", map[string]any{"error": err.Error(), "type": "audio_download_failed"})
+				continue
 			}
-			audioURL = localPath
-			cleanupAudio = cleanup
+			audioURL = fileURL
 		} else if update.Message.Document != nil && strings.HasPrefix(update.Message.Document.MimeType, "audio/") {
 			messageType = "audio_file"
-			audioFileID = strings.TrimSpace(update.Message.Document.FileID)
 			audioMIME = update.Message.Document.MimeType
-			audioRef = telegramFileRef(audioFileID)
-			localPath, cleanup, err := a.downloadFile(ctx, audioFileID)
+			fileURL, err := a.getFileURL(ctx, update.Message.Document.FileID)
 			if err != nil {
-				return err
+				a.append("channel.telegram.error", "", map[string]any{"error": err.Error(), "type": "document_audio_download_failed"})
+				continue
 			}
-			audioURL = localPath
-			cleanupAudio = cleanup
+			audioURL = fileURL
 		}
 
 		if messageType != "" {
 			meta["message_type"] = messageType
 			meta["audio_url"] = audioURL
-			meta["audio_ref"] = audioRef
-			meta["audio_file_id"] = audioFileID
 			meta["audio_mime"] = audioMIME
 			if caption != "" {
 				meta["caption"] = caption
 			}
 
-			sessionID, response, err := func() (string, string, error) {
-				if cleanupAudio != nil {
-					defer cleanupAudio()
-				}
-				return runMessage(ctx, "", audioURL, meta)
-			}()
+			sessionID, response, err := runMessage(ctx, "", audioURL, meta)
 			if err != nil {
 				return err
 			}
 			if err := a.sendMessage(ctx, chatID, response); err != nil {
 				return err
 			}
-			a.offset = nextOffset
 			a.base.MarkActivity()
 			a.append("channel.telegram.voice", sessionID, map[string]any{
-				"chat_id":       chatID,
-				"message_type":  messageType,
-				"audio_ref":     audioRef,
-				"audio_file_id": audioFileID,
-				"audio_mime":    audioMIME,
+				"chat_id":      chatID,
+				"message_type": messageType,
+				"audio_url":    audioURL,
+				"audio_mime":   audioMIME,
 			})
 			continue
 		}
 
 		if text == "" {
-			a.offset = nextOffset
 			continue
 		}
 
@@ -260,7 +218,6 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage inputlayer.In
 		if err := a.sendMessage(ctx, chatID, response); err != nil {
 			return err
 		}
-		a.offset = nextOffset
 		a.base.MarkActivity()
 		a.append("channel.telegram.message", sessionID, map[string]any{
 			"chat_id": chatID,
@@ -270,20 +227,7 @@ func (a *TelegramAdapter) pollOnce(ctx context.Context, runMessage inputlayer.In
 	return nil
 }
 
-func telegramFileRef(fileID string) string {
-	fileID = strings.TrimSpace(fileID)
-	if fileID == "" {
-		return ""
-	}
-	return "telegram-file:" + fileID
-}
-
-func (a *TelegramAdapter) resolveFileDownloadURL(ctx context.Context, fileID string) (string, error) {
-	fileID = strings.TrimSpace(fileID)
-	if fileID == "" {
-		return "", fmt.Errorf("telegram: missing file id")
-	}
-
+func (a *TelegramAdapter) getFileURL(ctx context.Context, fileID string) (string, error) {
 	u := fmt.Sprintf("%s/getFile?file_id=%s", a.baseURL, url.QueryEscape(fileID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -296,63 +240,21 @@ func (a *TelegramAdapter) resolveFileDownloadURL(ctx context.Context, fileID str
 	defer resp.Body.Close()
 
 	var result struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-		Result      struct {
+		OK     bool `json:"ok"`
+		Result struct {
 			FileID   string `json:"file_id"`
+			FileSize int    `json:"file_size"`
 			FilePath string `json:"file_path"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", err
 	}
-	if !result.OK || strings.TrimSpace(result.Result.FilePath) == "" {
-		if strings.TrimSpace(result.Description) == "" {
-			return "", fmt.Errorf("telegram: failed to resolve file path for %s", fileID)
-		}
-		return "", fmt.Errorf("telegram: %s", result.Description)
-	}
-	return fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", a.config.BotToken, strings.TrimPrefix(result.Result.FilePath, "/")), nil
-}
-
-func (a *TelegramAdapter) downloadFile(ctx context.Context, fileID string) (string, func(), error) {
-	remoteURL, err := a.resolveFileDownloadURL(ctx, fileID)
-	if err != nil {
-		return "", nil, err
+	if !result.OK || result.Result.FilePath == "" {
+		return "", fmt.Errorf("telegram: failed to get file URL for %s", fileID)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, remoteURL, nil)
-	if err != nil {
-		return "", nil, err
-	}
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return "", nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return "", nil, fmt.Errorf("telegram file download failed: %s", resp.Status)
-	}
-
-	suffix := path.Ext(req.URL.Path)
-	tmpFile, err := os.CreateTemp("", "anyclaw-telegram-*"+suffix)
-	if err != nil {
-		return "", nil, err
-	}
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		tmpFile.Close()
-		_ = os.Remove(tmpFile.Name())
-		return "", nil, err
-	}
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpFile.Name())
-		return "", nil, err
-	}
-
-	cleanup := func() {
-		_ = os.Remove(tmpFile.Name())
-	}
-	return tmpFile.Name(), cleanup, nil
+	return fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", a.config.BotToken, result.Result.FilePath), nil
 }
 
 func (a *TelegramAdapter) append(eventType string, sessionID string, payload map[string]any) {
@@ -378,24 +280,10 @@ func (a *TelegramAdapter) sendMessage(ctx context.Context, chatID string, text s
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("telegram send failed: %s", resp.Status)
 	}
-
-	var result struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-	if !result.OK {
-		if strings.TrimSpace(result.Description) == "" {
-			return fmt.Errorf("telegram send failed: api returned ok=false")
-		}
-		return fmt.Errorf("telegram send failed: %s", result.Description)
-	}
 	return nil
 }
 
-func (a *TelegramAdapter) sendStreamingMessage(ctx context.Context, chatID string, streamFn func(onChunk func(chunk string) error) error) error {
+func (a *TelegramAdapter) sendStreamingMessage(ctx context.Context, chatID string, streamFn func(onChunk func(chunk string)) error) error {
 	streamInterval := time.Duration(a.config.StreamInterval) * time.Millisecond
 	if streamInterval <= 0 {
 		streamInterval = 500 * time.Millisecond
@@ -406,21 +294,14 @@ func (a *TelegramAdapter) sendStreamingMessage(ctx context.Context, chatID strin
 		return err
 	}
 	if initialMsgID == "" {
-		return streamWithMessageFallback(func(onChunk func(chunk string)) error {
-			return streamFn(func(chunk string) error {
-				onChunk(chunk)
-				return nil
-			})
-		}, func(final string) error {
-			return a.sendMessage(ctx, chatID, final)
-		})
+		return streamFn(func(chunk string) {})
 	}
 
 	var accumulated strings.Builder
 	var mu sync.Mutex
 	lastEdit := time.Now()
 
-	onChunk := func(chunk string) error {
+	onChunk := func(chunk string) {
 		mu.Lock()
 		accumulated.WriteString(chunk)
 		shouldEdit := time.Since(lastEdit) >= streamInterval
@@ -433,36 +314,23 @@ func (a *TelegramAdapter) sendStreamingMessage(ctx context.Context, chatID strin
 			mu.Lock()
 			text := accumulated.String()
 			mu.Unlock()
-			if err := a.editMessage(ctx, chatID, initialMsgID, text); err != nil {
-				return err
-			}
+			a.editMessage(ctx, chatID, initialMsgID, text)
 		}
-		return nil
 	}
 
 	if err := streamFn(onChunk); err != nil {
 		mu.Lock()
 		final := accumulated.String()
 		mu.Unlock()
-		if strings.TrimSpace(final) == "" {
-			if deleteErr := a.deleteMessage(ctx, chatID, initialMsgID); deleteErr != nil {
-				return errors.Join(err, deleteErr)
-			}
-			return err
-		}
-		if editErr := a.editMessage(ctx, chatID, initialMsgID, final+"\n\n[Error: "+err.Error()+"]"); editErr != nil {
-			return errors.Join(err, editErr)
-		}
+		a.editMessage(ctx, chatID, initialMsgID, final+"\n\n[Error: "+err.Error()+"]")
 		return err
 	}
 
 	mu.Lock()
 	final := accumulated.String()
 	mu.Unlock()
-	if strings.TrimSpace(final) == "" {
-		return a.deleteMessage(ctx, chatID, initialMsgID)
-	}
-	return a.editMessage(ctx, chatID, initialMsgID, final)
+	a.editMessage(ctx, chatID, initialMsgID, final)
+	return nil
 }
 
 func (a *TelegramAdapter) sendMessageWithResult(ctx context.Context, chatID string, text string) (string, error) {
@@ -484,9 +352,8 @@ func (a *TelegramAdapter) sendMessageWithResult(ctx context.Context, chatID stri
 	}
 
 	var result struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-		Result      struct {
+		OK     bool `json:"ok"`
+		Result struct {
 			MessageID int `json:"message_id"`
 		} `json:"result"`
 	}
@@ -494,10 +361,7 @@ func (a *TelegramAdapter) sendMessageWithResult(ctx context.Context, chatID stri
 		return "", err
 	}
 	if !result.OK {
-		if strings.TrimSpace(result.Description) == "" {
-			return "", fmt.Errorf("telegram send failed: api returned ok=false")
-		}
-		return "", fmt.Errorf("telegram send failed: %s", result.Description)
+		return "", nil
 	}
 	return strconv.Itoa(result.Result.MessageID), nil
 }
@@ -521,65 +385,13 @@ func (a *TelegramAdapter) editMessage(ctx context.Context, chatID string, messag
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("telegram edit failed: %s", resp.Status)
-	}
-	var result struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-	if !result.OK {
-		if strings.TrimSpace(result.Description) == "" {
-			return fmt.Errorf("telegram edit failed: api returned ok=false")
-		}
-		return fmt.Errorf("telegram edit failed: %s", result.Description)
-	}
-	return nil
-}
-
-func (a *TelegramAdapter) deleteMessage(ctx context.Context, chatID string, messageID string) error {
-	if strings.TrimSpace(messageID) == "" {
 		return nil
 	}
-	values := url.Values{}
-	values.Set("chat_id", chatID)
-	values.Set("message_id", messageID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/deleteMessage", strings.NewReader(values.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return err
-	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("telegram delete failed: %s", resp.Status)
-	}
-	var result struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return err
-	}
-	if !result.OK {
-		if strings.TrimSpace(result.Description) == "" {
-			return fmt.Errorf("telegram delete failed: api returned ok=false")
-		}
-		return fmt.Errorf("telegram delete failed: %s", result.Description)
-	}
 	return nil
 }
 
-func (a *TelegramAdapter) RunStream(ctx context.Context, handle inputlayer.StreamChunkHandler) error {
+func (a *TelegramAdapter) RunStream(ctx context.Context, handle StreamChunkHandler) error {
 	a.base.SetRunning(true)
 	defer a.base.SetRunning(false)
 	interval := time.Duration(a.config.PollEvery) * time.Second
@@ -605,7 +417,7 @@ func (a *TelegramAdapter) RunStream(ctx context.Context, handle inputlayer.Strea
 	}
 }
 
-func (a *TelegramAdapter) pollOnceStream(ctx context.Context, handle inputlayer.StreamChunkHandler) error {
+func (a *TelegramAdapter) pollOnceStream(ctx context.Context, handle StreamChunkHandler) error {
 	u := fmt.Sprintf("%s/getUpdates?timeout=1&offset=%d", a.baseURL, a.offset)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -618,185 +430,64 @@ func (a *TelegramAdapter) pollOnceStream(ctx context.Context, handle inputlayer.
 	defer resp.Body.Close()
 
 	var payload struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-		Result      []struct {
+		OK     bool `json:"ok"`
+		Result []struct {
 			UpdateID int64 `json:"update_id"`
 			Message  struct {
-				Text    string `json:"text"`
-				Caption string `json:"caption"`
-				Chat    struct {
-					ID   int64  `json:"id"`
-					Type string `json:"type"`
+				Text string `json:"text"`
+				Chat struct {
+					ID int64 `json:"id"`
 				} `json:"chat"`
 				From struct {
 					Username string `json:"username"`
 					ID       int64  `json:"id"`
 				} `json:"from"`
-				Voice *struct {
-					FileID   string `json:"file_id"`
-					Duration int    `json:"duration"`
-					MimeType string `json:"mime_type"`
-					FileSize int    `json:"file_size"`
-				} `json:"voice"`
-				Audio *struct {
-					FileID   string `json:"file_id"`
-					Duration int    `json:"duration"`
-					MimeType string `json:"mime_type"`
-					FileSize int    `json:"file_size"`
-					FileName string `json:"file_name"`
-				} `json:"audio"`
-				Document *struct {
-					FileID   string `json:"file_id"`
-					MimeType string `json:"mime_type"`
-					FileSize int    `json:"file_size"`
-					FileName string `json:"file_name"`
-				} `json:"document"`
 			} `json:"message"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return err
 	}
-	if !payload.OK {
-		if strings.TrimSpace(payload.Description) == "" {
-			return fmt.Errorf("telegram getUpdates failed: api returned ok=false")
-		}
-		return fmt.Errorf("telegram getUpdates failed: %s", payload.Description)
-	}
 
 	for _, update := range payload.Result {
-		nextOffset := update.UpdateID + 1
+		a.offset = update.UpdateID + 1
 		chatID := strconv.FormatInt(update.Message.Chat.ID, 10)
 		if strings.TrimSpace(a.config.ChatID) != "" && chatID != strings.TrimSpace(a.config.ChatID) {
-			a.offset = nextOffset
 			continue
 		}
 
 		text := strings.TrimSpace(update.Message.Text)
-		caption := strings.TrimSpace(update.Message.Caption)
 		if text == "" {
-			text = caption
+			continue
 		}
 
 		username := update.Message.From.Username
-		userID := strconv.FormatInt(update.Message.From.ID, 10)
 		messageID := strconv.FormatInt(update.UpdateID, 10)
-		channelType, isGroup := telegramConversationMetadata(update.Message.Chat.Type, update.Message.Chat.ID, update.Message.From.ID)
 
 		meta := map[string]string{
 			"channel":      "telegram",
 			"chat_id":      chatID,
-			"chat_type":    update.Message.Chat.Type,
-			"channel_type": channelType,
-			"is_group":     boolString(isGroup),
-			"user_id":      userID,
 			"username":     username,
 			"reply_target": chatID,
 			"message_id":   messageID,
 			"sender":       username,
 		}
 
-		var messageType string
-		var audioURL string
-		var audioRef string
-		var audioFileID string
-		var audioMIME string
-		var cleanupAudio func()
-		if update.Message.Voice != nil {
-			messageType = "voice_note"
-			audioFileID = strings.TrimSpace(update.Message.Voice.FileID)
-			audioMIME = update.Message.Voice.MimeType
-			if audioMIME == "" {
-				audioMIME = "audio/ogg"
-			}
-			audioRef = telegramFileRef(audioFileID)
-			localPath, cleanup, err := a.downloadFile(ctx, audioFileID)
-			if err != nil {
-				return err
-			}
-			audioURL = localPath
-			cleanupAudio = cleanup
-		} else if update.Message.Audio != nil {
-			messageType = "audio_file"
-			audioFileID = strings.TrimSpace(update.Message.Audio.FileID)
-			audioMIME = update.Message.Audio.MimeType
-			audioRef = telegramFileRef(audioFileID)
-			localPath, cleanup, err := a.downloadFile(ctx, audioFileID)
-			if err != nil {
-				return err
-			}
-			audioURL = localPath
-			cleanupAudio = cleanup
-		} else if update.Message.Document != nil && strings.HasPrefix(update.Message.Document.MimeType, "audio/") {
-			messageType = "audio_file"
-			audioFileID = strings.TrimSpace(update.Message.Document.FileID)
-			audioMIME = update.Message.Document.MimeType
-			audioRef = telegramFileRef(audioFileID)
-			localPath, cleanup, err := a.downloadFile(ctx, audioFileID)
-			if err != nil {
-				return err
-			}
-			audioURL = localPath
-			cleanupAudio = cleanup
-		}
-
-		if messageType != "" {
-			meta["message_type"] = messageType
-			meta["audio_url"] = audioURL
-			meta["audio_ref"] = audioRef
-			meta["audio_file_id"] = audioFileID
-			meta["audio_mime"] = audioMIME
-			if caption != "" {
-				meta["caption"] = caption
-			}
-
-			var response strings.Builder
-			sessionID, err := func() (string, error) {
-				if cleanupAudio != nil {
-					defer cleanupAudio()
-				}
-				return handle(ctx, "", audioURL, meta, func(chunk string) error {
-					response.WriteString(chunk)
-					return nil
-				})
-			}()
-			if err != nil {
-				return err
-			}
-			if err := a.sendMessage(ctx, chatID, response.String()); err != nil {
-				return err
-			}
-			a.offset = nextOffset
-			a.base.MarkActivity()
-			a.append("channel.telegram.voice", sessionID, map[string]any{
-				"chat_id":       chatID,
-				"message_type":  messageType,
-				"audio_ref":     audioRef,
-				"audio_file_id": audioFileID,
-				"audio_mime":    audioMIME,
-				"streaming":     true,
-			})
-			continue
-		}
-
-		if text == "" {
-			a.offset = nextOffset
-			continue
-		}
-
 		sessionID := ""
-		err := a.sendStreamingMessage(ctx, chatID, func(onChunk func(chunk string) error) error {
+		var responseText string
+		err := a.sendStreamingMessage(ctx, chatID, func(onChunk func(chunk string)) error {
 			var err error
 			sessionID, err = handle(ctx, sessionID, text, meta, func(chunk string) error {
-				return onChunk(chunk)
+				onChunk(chunk)
+				responseText += chunk
+				return nil
 			})
 			return err
 		})
 		if err != nil {
 			return err
 		}
-		a.offset = nextOffset
+		_ = responseText
 		a.base.MarkActivity()
 		a.append("channel.telegram.message", sessionID, map[string]any{
 			"chat_id":   chatID,
@@ -805,21 +496,4 @@ func (a *TelegramAdapter) pollOnceStream(ctx context.Context, handle inputlayer.
 		})
 	}
 	return nil
-}
-
-func telegramConversationMetadata(chatType string, chatID int64, userID int64) (string, bool) {
-	normalized := strings.ToLower(strings.TrimSpace(chatType))
-	switch normalized {
-	case "private":
-		return "private", false
-	case "group", "supergroup", "channel":
-		return normalized, true
-	}
-	if chatID < 0 {
-		return "group", true
-	}
-	if userID != 0 && chatID == userID {
-		return "private", false
-	}
-	return "", false
 }

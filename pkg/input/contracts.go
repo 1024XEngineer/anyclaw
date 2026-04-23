@@ -2,7 +2,6 @@ package input
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 )
@@ -50,9 +49,6 @@ func (b *BaseAdapter) Status() Status {
 func (b *BaseAdapter) SetRunning(running bool) {
 	b.mu.Lock()
 	b.status.Running = running
-	if running && b.status.LastError == "" {
-		b.status.Healthy = true
-	}
 	b.mu.Unlock()
 }
 
@@ -90,20 +86,14 @@ func NewManager(adapters ...Adapter) *Manager {
 }
 
 func (m *Manager) Run(ctx context.Context, handle InboundHandler) {
-	var wg sync.WaitGroup
 	for _, adapter := range m.adapters {
 		if !adapter.Enabled() {
 			continue
 		}
-		wg.Add(1)
 		go func(adapter Adapter) {
-			defer wg.Done()
-			if err := adapter.Run(ctx, handle); err != nil && ctx.Err() == nil {
-				log.Printf("input adapter %q exited with error: %v", adapter.Name(), err)
-			}
+			_ = adapter.Run(ctx, handle)
 		}(adapter)
 	}
-	wg.Wait()
 }
 
 func (m *Manager) Statuses() []Status {
