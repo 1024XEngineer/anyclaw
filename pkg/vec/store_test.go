@@ -3,6 +3,7 @@ package vec
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -189,6 +190,28 @@ func TestVecStoreSearchWithMetadataFilter(t *testing.T) {
 
 	if got := results[0].Metadata["category"]; got != "keep" {
 		t.Fatalf("expected category keep, got %v", got)
+	}
+}
+
+func TestVecStoreSearchWithUnknownMetadataFilterFails(t *testing.T) {
+	vs := setupVecStore(t)
+	ctx := context.Background()
+
+	if err := vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{
+		"category": "keep",
+		"source":   "unit",
+	}); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	_, err := vs.SearchWithFilter(ctx, []float32{0.1, 0.2, 0.3, 0.4}, 10, 0, map[string]string{
+		"typo": "keep",
+	})
+	if err == nil {
+		t.Fatal("expected unknown metadata filter to fail")
+	}
+	if !strings.Contains(err.Error(), `unknown metadata filter column "typo"`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -500,5 +523,92 @@ func TestVecStoreInsertBatchPersistsAuxColumns(t *testing.T) {
 
 	if got.Aux["tag"] != "second" {
 		t.Fatalf("expected aux tag second, got %s", got.Aux["tag"])
+	}
+}
+
+func TestVecStoreRejectsInvalidIdentifiers(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Close()
+	})
+
+	tests := []struct {
+		name string
+		cfg  VecStoreConfig
+		want string
+	}{
+		{
+			name: "invalid table name",
+			cfg: VecStoreConfig{
+				DB:         db,
+				TableName:  "bad-name",
+				Dimensions: 4,
+				Distance:   DistanceCosine,
+			},
+			want: `invalid table name "bad-name"`,
+		},
+		{
+			name: "invalid metadata column",
+			cfg: VecStoreConfig{
+				DB:         db,
+				TableName:  "vectors",
+				Dimensions: 4,
+				Distance:   DistanceCosine,
+				Metadata:   []string{"bad-name"},
+			},
+			want: `invalid metadata column "bad-name"`,
+		},
+		{
+			name: "invalid aux column",
+			cfg: VecStoreConfig{
+				DB:         db,
+				TableName:  "vectors",
+				Dimensions: 4,
+				Distance:   DistanceCosine,
+				AuxColumns: []string{"bad-name"},
+			},
+			want: `invalid aux column "bad-name"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vs := NewVecStore(tt.cfg)
+			_, err := vs.Count(context.Background())
+			if err == nil {
+				t.Fatal("expected invalid identifier to fail")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestVecStoreRejectsUnsupportedDistanceMetric(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Close()
+	})
+
+	vs := NewVecStore(VecStoreConfig{
+		DB:         db,
+		TableName:  "vectors",
+		Dimensions: 4,
+		Distance:   DistanceMetric("dot"),
+	})
+
+	_, err = vs.Count(context.Background())
+	if err == nil {
+		t.Fatal("expected unsupported distance metric to fail")
+	}
+	if !strings.Contains(err.Error(), `unsupported distance metric "dot"`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
