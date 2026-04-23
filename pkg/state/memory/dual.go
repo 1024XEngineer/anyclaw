@@ -50,18 +50,6 @@ func (d *DualMemory) Add(entry MemoryEntry) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if entry.ID == "" {
-		suffix, err := randomID(8)
-		if err != nil {
-			return fmt.Errorf("generate memory id: %w", err)
-		}
-		entry.ID = fmt.Sprintf("%d-%s", time.Now().UnixMilli(), suffix)
-	}
-	if entry.Timestamp.IsZero() {
-		entry.Timestamp = time.Now()
-	}
-	entry.Timestamp = entry.Timestamp.UTC().Truncate(time.Second)
-
 	sqliteErr := d.sqlite.Add(entry)
 	if sqliteErr != nil {
 		return fmt.Errorf("sqlite add failed: %w", sqliteErr)
@@ -97,17 +85,11 @@ func (d *DualMemory) Delete(id string) error {
 	defer d.mu.Unlock()
 
 	sqliteErr := d.sqlite.Delete(id)
-	if sqliteErr != nil {
-		return sqliteErr
+	if sqliteErr != nil && d.syncOnWrite {
+		d.file.Delete(id)
 	}
 
-	if d.syncOnWrite {
-		if err := d.file.Delete(id); err != nil {
-			return fmt.Errorf("file delete failed: %w", err)
-		}
-	}
-
-	return nil
+	return sqliteErr
 }
 
 func (d *DualMemory) List() ([]MemoryEntry, error) {
@@ -140,6 +122,54 @@ func (d *DualMemory) Search(query string, limit int) ([]MemoryEntry, error) {
 	}
 
 	return d.sqlite.Search(query, limit)
+}
+
+func (d *DualMemory) GetConversationHistory(limit int) ([]MemoryEntry, error) {
+	if d.syncOnRead {
+		d.mu.RLock()
+		defer d.mu.RUnlock()
+
+		entries, err := d.sqlite.GetConversationHistory(limit)
+		if err == nil {
+			return entries, nil
+		}
+
+		return d.file.GetConversationHistory(limit)
+	}
+
+	return d.sqlite.GetConversationHistory(limit)
+}
+
+func (d *DualMemory) AddReflection(content string, metadata map[string]string) error {
+	return d.Add(MemoryEntry{Type: TypeReflection, Content: content, Metadata: metadata})
+}
+
+func (d *DualMemory) AddFact(content string, metadata map[string]string) error {
+	return d.Add(MemoryEntry{Type: TypeFact, Content: content, Metadata: metadata})
+}
+
+func (d *DualMemory) FormatAsMarkdown() (string, error) {
+	if d.syncOnRead {
+		d.mu.RLock()
+		defer d.mu.RUnlock()
+
+		md, err := d.sqlite.FormatAsMarkdown()
+		if err == nil {
+			return md, nil
+		}
+
+		return d.file.FormatAsMarkdown()
+	}
+
+	return d.sqlite.FormatAsMarkdown()
+}
+
+func (d *DualMemory) GetStats() (map[string]int, error) {
+	stats, err := d.sqlite.GetStats()
+	if err != nil {
+		return d.file.GetStats()
+	}
+	return stats, nil
 }
 
 func (d *DualMemory) Close() error {

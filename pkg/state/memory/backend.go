@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"path/filepath"
 	"time"
 )
 
@@ -30,6 +29,11 @@ type MemoryBackend interface {
 	Delete(id string) error
 	List() ([]MemoryEntry, error)
 	Search(query string, limit int) ([]MemoryEntry, error)
+	GetConversationHistory(limit int) ([]MemoryEntry, error)
+	AddReflection(content string, metadata map[string]string) error
+	AddFact(content string, metadata map[string]string) error
+	FormatAsMarkdown() (string, error)
+	GetStats() (map[string]int, error)
 	Close() error
 }
 
@@ -46,36 +50,26 @@ type DailyBackend interface {
 	DailyDir() string
 }
 
-type WarmupBackend interface {
-	Warmup(queries []string, concurrency int) WarmupProgress
-}
-
-type CacheStatsBackend interface {
-	CacheStats() CacheStats
-}
-
-type AutoBackupBackend interface {
-	StartAutoBackup(backupDir string, interval time.Duration, maxBackups int) error
-}
-
 type Config struct {
-	Backend BackendType
-	WorkDir string
-	SQLite  SQLiteConfig
-}
-
-type SQLiteConfig struct {
+	Backend     BackendType
 	DSN         string
+	WorkDir     string
 	MaxOpen     int
 	BusyTimeout time.Duration
 	Embedder    EmbeddingProvider
-	Cache       SQLiteCacheConfig
+	Cache       BackendCacheConfig
+	Warmup      BackendWarmupConfig
 }
 
-type SQLiteCacheConfig struct {
+type BackendCacheConfig struct {
 	Enabled bool
 	MaxSize int
 	TTL     time.Duration
+}
+
+type BackendWarmupConfig struct {
+	Enabled bool
+	Queries []string
 }
 
 type BackendType string
@@ -88,21 +82,25 @@ const (
 
 func DefaultConfig(workDir string) Config {
 	return Config{
-		Backend: BackendSQLite,
-		WorkDir: workDir,
-		SQLite:  DefaultSQLiteConfig(workDir),
-	}
-}
-
-func DefaultSQLiteConfig(workDir string) SQLiteConfig {
-	return SQLiteConfig{
-		DSN:         filepath.Join(workDir, "memory.db"),
+		Backend:     BackendDual,
+		DSN:         workDir + "/memory.db",
+		WorkDir:     workDir,
 		MaxOpen:     1,
-		BusyTimeout: 30 * time.Second,
-		Cache: SQLiteCacheConfig{
+		BusyTimeout: 30,
+		Cache: BackendCacheConfig{
 			Enabled: true,
 			MaxSize: 5000,
 			TTL:     5 * time.Minute,
+		},
+		Warmup: BackendWarmupConfig{
+			Enabled: true,
+			Queries: []string{
+				"task",
+				"project",
+				"config",
+				"error",
+				"setup",
+			},
 		},
 	}
 }

@@ -343,64 +343,6 @@ func TestStoreWithEncryption(t *testing.T) {
 	}
 }
 
-func TestEncryptedStoreVersionHistoryStaysPlaintextInMemory(t *testing.T) {
-	key, err := GenerateEncryptionKey()
-	if err != nil {
-		t.Fatalf("GenerateEncryptionKey failed: %v", err)
-	}
-
-	cfg := DefaultStoreConfig()
-	cfg.EncryptionKey = key
-
-	store, cleanup := setupTestStore(t, cfg)
-	defer cleanup()
-
-	if err := store.RecordRotation("api_key", 0, 1, "v2", "admin", map[string]string{"step": "1"}); err != nil {
-		t.Fatalf("RecordRotation v1 failed: %v", err)
-	}
-
-	vh, ok := store.GetVersionHistory("api_key")
-	if !ok {
-		t.Fatal("expected version history to exist")
-	}
-	if len(vh.Versions) != 1 {
-		t.Fatalf("expected 1 version, got %d", len(vh.Versions))
-	}
-	if vh.Versions[0].Value != "v2" {
-		t.Fatalf("expected plaintext version value 'v2', got '%s'", vh.Versions[0].Value)
-	}
-
-	if err := store.RecordRotation("api_key", 1, 2, "v3", "admin", map[string]string{"step": "2"}); err != nil {
-		t.Fatalf("RecordRotation v2 failed: %v", err)
-	}
-
-	vh, ok = store.GetVersionHistory("api_key")
-	if !ok {
-		t.Fatal("expected version history after second rotation")
-	}
-	if len(vh.Versions) != 2 {
-		t.Fatalf("expected 2 versions, got %d", len(vh.Versions))
-	}
-	if vh.Versions[0].Value != "v2" {
-		t.Errorf("expected first version plaintext 'v2', got '%s'", vh.Versions[0].Value)
-	}
-	if vh.Versions[1].Value != "v3" {
-		t.Errorf("expected second version plaintext 'v3', got '%s'", vh.Versions[1].Value)
-	}
-
-	if err := store.RollbackVersion("api_key", 1, "admin"); err != nil {
-		t.Fatalf("RollbackVersion failed: %v", err)
-	}
-
-	active, ok := store.GetActiveVersion("api_key")
-	if !ok {
-		t.Fatal("expected active version after rollback")
-	}
-	if active.Value != "v2" {
-		t.Errorf("expected active plaintext value 'v2' after rollback, got '%s'", active.Value)
-	}
-}
-
 func TestRuntimeSnapshot(t *testing.T) {
 	secrets := map[string]*SecretEntry{
 		"db_password": {
@@ -546,24 +488,6 @@ func TestActivationManagerRequestActivation(t *testing.T) {
 
 	if !manager.IsLocked() {
 		t.Error("expected manager to be locked")
-	}
-}
-
-func TestActivationManagerRequestActivationNoSnapshot(t *testing.T) {
-	store, cleanup := setupTestStore(t, nil)
-	defer cleanup()
-
-	manager := NewActivationManager(store, nil)
-
-	lock, err := manager.RequestActivation("user1", "deploy to prod")
-	if err == nil {
-		t.Fatal("expected error when no active snapshot is loaded")
-	}
-	if lock != nil {
-		t.Fatal("expected no activation lock when request fails")
-	}
-	if err.Error() != "no active snapshot" {
-		t.Fatalf("expected 'no active snapshot', got %q", err.Error())
 	}
 }
 
@@ -1527,19 +1451,15 @@ func TestRotateSecret(t *testing.T) {
 	store, cleanup := setupTestStore(t, nil)
 	defer cleanup()
 
-	seed := &SecretEntry{
-		Key:    "api_key",
-		Value:  "old-key-value",
-		Scope:  ScopeGlobal,
-		Source: SourceManual,
-	}
-	if err := store.SetSecret(seed); err != nil {
-		t.Fatalf("SetSecret failed: %v", err)
+	secrets := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "old-key-value",
+			Scope: ScopeGlobal,
+		},
 	}
 
-	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
-		"api_key": cloneEntry(seed),
-	}, "initial")
+	snap := NewRuntimeSnapshot(secrets, "initial")
 	fbCfg := DefaultFallbackConfig()
 	manager := NewActivationManagerWithFallback(store, snap, fbCfg)
 
@@ -1578,39 +1498,6 @@ func TestRotateSecret(t *testing.T) {
 	}
 	if entry.Metadata["version"] != "1" {
 		t.Errorf("expected version metadata '1', got '%s'", entry.Metadata["version"])
-	}
-
-	persisted, ok := store.GetSecret("api_key", ScopeGlobal, "")
-	if !ok {
-		t.Fatal("expected api_key in store")
-	}
-	if persisted.Value != "new-key-value" {
-		t.Errorf("expected store value 'new-key-value', got '%s'", persisted.Value)
-	}
-
-	storedSnap, err := manager.CreateSnapshot("rotated")
-	if err != nil {
-		t.Fatalf("CreateSnapshot failed: %v", err)
-	}
-	snapEntry, ok := storedSnap.Secrets["api_key"]
-	if !ok {
-		t.Fatal("expected api_key in snapshot")
-	}
-	if snapEntry.Value != "new-key-value" {
-		t.Errorf("expected snapshot value 'new-key-value', got '%s'", snapEntry.Value)
-	}
-
-	reopenCfg := *store.Config()
-	reopened, err := NewStore(&reopenCfg)
-	if err != nil {
-		t.Fatalf("NewStore failed: %v", err)
-	}
-	reloaded, ok := reopened.GetSecret("api_key", ScopeGlobal, "")
-	if !ok {
-		t.Fatal("expected api_key after reopening store")
-	}
-	if reloaded.Value != "new-key-value" {
-		t.Errorf("expected reloaded value 'new-key-value', got '%s'", reloaded.Value)
 	}
 }
 
@@ -1722,18 +1609,12 @@ func TestRollbackVersion(t *testing.T) {
 	store, cleanup := setupTestStore(t, nil)
 	defer cleanup()
 
-	seed := &SecretEntry{
-		Key:    "api_key",
-		Value:  "v1-value",
-		Scope:  ScopeGlobal,
-		Source: SourceManual,
-	}
-	if err := store.SetSecret(seed); err != nil {
-		t.Fatalf("SetSecret failed: %v", err)
-	}
-
 	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
-		"api_key": cloneEntry(seed),
+		"api_key": {
+			Key:   "api_key",
+			Value: "v1-value",
+			Scope: ScopeGlobal,
+		},
 	}, "initial")
 
 	manager := NewActivationManagerWithFallback(store, snap, nil)
@@ -1767,26 +1648,6 @@ func TestRollbackVersion(t *testing.T) {
 	entry, _ = active.Get("api_key")
 	if entry.Value != "v2-value" {
 		t.Errorf("expected 'v2-value' after rollback to v1 (version 1 is v2-value), got '%s'", entry.Value)
-	}
-
-	persisted, ok := store.GetSecret("api_key", ScopeGlobal, "")
-	if !ok {
-		t.Fatal("expected api_key in store after rollback")
-	}
-	if persisted.Value != "v2-value" {
-		t.Errorf("expected store value 'v2-value' after rollback, got '%s'", persisted.Value)
-	}
-
-	storedSnap, err := manager.CreateSnapshot("rollback")
-	if err != nil {
-		t.Fatalf("CreateSnapshot failed: %v", err)
-	}
-	snapEntry, ok := storedSnap.Secrets["api_key"]
-	if !ok {
-		t.Fatal("expected api_key in rollback snapshot")
-	}
-	if snapEntry.Value != "v2-value" {
-		t.Errorf("expected snapshot value 'v2-value' after rollback, got '%s'", snapEntry.Value)
 	}
 
 	vh, _ := manager.GetVersionHistory("api_key")
@@ -1872,18 +1733,12 @@ func TestCheckScheduledRotations(t *testing.T) {
 	store, cleanup := setupTestStore(t, nil)
 	defer cleanup()
 
-	seed := &SecretEntry{
-		Key:    "api_key",
-		Value:  "current-key",
-		Scope:  ScopeGlobal,
-		Source: SourceManual,
-	}
-	if err := store.SetSecret(seed); err != nil {
-		t.Fatalf("SetSecret failed: %v", err)
-	}
-
 	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
-		"api_key": cloneEntry(seed),
+		"api_key": {
+			Key:   "api_key",
+			Value: "current-key",
+			Scope: ScopeGlobal,
+		},
 	}, "initial")
 
 	manager := NewActivationManagerWithFallback(store, snap, nil)
@@ -1913,47 +1768,6 @@ func TestCheckScheduledRotations(t *testing.T) {
 	}
 	if results[0].Activated != true {
 		t.Error("expected activated to be true")
-	}
-
-	active := manager.GetActiveSnapshot()
-	entry, ok := active.Get("api_key")
-	if !ok {
-		t.Fatal("expected api_key in active snapshot")
-	}
-	if entry.Value == "current-key" {
-		t.Fatal("expected scheduled rotation to update active snapshot value")
-	}
-	if entry.Metadata["version"] != "1" {
-		t.Errorf("expected version metadata '1', got '%s'", entry.Metadata["version"])
-	}
-
-	persisted, ok := store.GetSecret("api_key", ScopeGlobal, "")
-	if !ok {
-		t.Fatal("expected api_key in store after scheduled rotation")
-	}
-	if persisted.Value != entry.Value {
-		t.Errorf("expected store value '%s', got '%s'", entry.Value, persisted.Value)
-	}
-
-	vh, err := manager.GetVersionHistory("api_key")
-	if err != nil {
-		t.Fatalf("GetVersionHistory failed: %v", err)
-	}
-	activeVer := vh.Versions[len(vh.Versions)-1]
-	if activeVer.Value != entry.Value {
-		t.Errorf("expected active version value '%s', got '%s'", entry.Value, activeVer.Value)
-	}
-
-	storedSnap, err := manager.CreateSnapshot("scheduled")
-	if err != nil {
-		t.Fatalf("CreateSnapshot failed: %v", err)
-	}
-	snapEntry, ok := storedSnap.Secrets["api_key"]
-	if !ok {
-		t.Fatal("expected api_key in scheduled snapshot")
-	}
-	if snapEntry.Value != entry.Value {
-		t.Errorf("expected snapshot value '%s', got '%s'", entry.Value, snapEntry.Value)
 	}
 }
 

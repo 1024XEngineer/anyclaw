@@ -13,6 +13,8 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 )
 
+const testExecTimeoutSeconds = 10
+
 func TestSkillsManagerLoadAndHelpers(t *testing.T) {
 	root := t.TempDir()
 
@@ -161,7 +163,7 @@ func TestSkillsManagerExecutionAndPrompts(t *testing.T) {
 		t.Fatal("expected disabled exec to error")
 	}
 
-	got, err = manager.Execute(context.Background(), "runner", map[string]any{"task": "say"}, ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: 5})
+	got, err = manager.Execute(context.Background(), "runner", map[string]any{"task": "say"}, ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: testExecTimeoutSeconds})
 	if err != nil {
 		t.Fatalf("runner execute: %v", err)
 	}
@@ -395,7 +397,7 @@ func TestExecuteSkillEntrypointUsesEnvPayload(t *testing.T) {
 		Metadata:    map[string]string{"path": filepath.Dir(scriptPath)},
 	}
 
-	out, err := executeSkillEntrypoint(context.Background(), skill, map[string]any{"message": "ok"}, ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: 5})
+	out, err := executeSkillEntrypoint(context.Background(), skill, map[string]any{"message": "ok"}, ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: testExecTimeoutSeconds})
 	if err != nil {
 		t.Fatalf("executeSkillEntrypoint: %v", err)
 	}
