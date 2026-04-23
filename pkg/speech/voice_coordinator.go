@@ -507,9 +507,10 @@ func (c *VoiceWakeCoordinator) startWakeEventListener() error {
 
 	c.wakeConn = conn
 	c.wakePort = port
-	c.wakeListenDone = make(chan struct{})
+	done := make(chan struct{})
+	c.wakeListenDone = done
 
-	go c.wakeEventListenLoop()
+	go c.wakeEventListenLoop(conn, done)
 
 	return nil
 }
@@ -518,8 +519,6 @@ func (c *VoiceWakeCoordinator) stopWakeEventListener() {
 	c.mu.Lock()
 	conn := c.wakeConn
 	done := c.wakeListenDone
-	c.wakeConn = nil
-	c.wakeListenDone = nil
 	c.mu.Unlock()
 
 	if conn != nil {
@@ -529,16 +528,24 @@ func (c *VoiceWakeCoordinator) stopWakeEventListener() {
 	if done != nil {
 		<-done
 	}
+
+	c.mu.Lock()
+	if c.wakeConn == conn {
+		c.wakeConn = nil
+	}
+	if c.wakeListenDone == done {
+		c.wakeListenDone = nil
+	}
+	c.mu.Unlock()
 }
 
-func (c *VoiceWakeCoordinator) wakeEventListenLoop() {
-	defer close(c.wakeListenDone)
+func (c *VoiceWakeCoordinator) wakeEventListenLoop(conn *net.UDPConn, done chan struct{}) {
+	defer close(done)
 
 	buf := make([]byte, 8192)
 
 	for {
 		c.mu.Lock()
-		conn := c.wakeConn
 		isRunning := c.isRunning
 		c.mu.Unlock()
 
