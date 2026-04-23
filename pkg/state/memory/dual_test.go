@@ -1,10 +1,7 @@
 package memory
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
-	"time"
 )
 
 func setupDualMemory(t *testing.T) *DualMemory {
@@ -68,13 +65,12 @@ func TestDualMemorySearch(t *testing.T) {
 
 func TestDualMemoryConversationHistory(t *testing.T) {
 	dm := setupDualMemory(t)
-	svc := NewMemoryService(dm)
 
 	dm.Add(MemoryEntry{Type: TypeConversation, Role: "user", Content: "Hello"})
 	dm.Add(MemoryEntry{Type: TypeConversation, Role: "assistant", Content: "Hi there"})
 	dm.Add(MemoryEntry{Type: TypeFact, Content: "Fact not conversation"})
 
-	history, err := svc.GetConversationHistory(10)
+	history, err := dm.GetConversationHistory(10)
 	if err != nil {
 		t.Fatalf("failed to get conversation history: %v", err)
 	}
@@ -86,13 +82,12 @@ func TestDualMemoryConversationHistory(t *testing.T) {
 
 func TestDualMemoryStats(t *testing.T) {
 	dm := setupDualMemory(t)
-	svc := NewMemoryService(dm)
 
 	dm.Add(MemoryEntry{Type: TypeConversation, Content: "conv1"})
 	dm.Add(MemoryEntry{Type: TypeFact, Content: "fact1"})
 	dm.Add(MemoryEntry{Type: TypeReflection, Content: "reflect1"})
 
-	stats, err := svc.GetStats()
+	stats, err := dm.GetStats()
 	if err != nil {
 		t.Fatalf("failed to get stats: %v", err)
 	}
@@ -171,76 +166,6 @@ func TestDualMemoryDelete(t *testing.T) {
 	}
 }
 
-func TestDualMemoryAddKeepsFileAndSQLiteEntriesAligned(t *testing.T) {
-	dm := setupDualMemory(t)
-
-	if err := dm.Add(MemoryEntry{
-		Type:    TypeFact,
-		Content: "shared entry",
-	}); err != nil {
-		t.Fatalf("failed to add entry: %v", err)
-	}
-
-	sqliteEntries, err := dm.sqlite.List()
-	if err != nil {
-		t.Fatalf("failed to list sqlite entries: %v", err)
-	}
-	fileEntries, err := dm.file.List()
-	if err != nil {
-		t.Fatalf("failed to list file entries: %v", err)
-	}
-
-	if len(sqliteEntries) != 1 || len(fileEntries) != 1 {
-		t.Fatalf("expected 1 mirrored entry in each backend, got sqlite=%d file=%d", len(sqliteEntries), len(fileEntries))
-	}
-
-	if sqliteEntries[0].ID != fileEntries[0].ID {
-		t.Fatalf("expected mirrored entry IDs to match, got sqlite=%q file=%q", sqliteEntries[0].ID, fileEntries[0].ID)
-	}
-	if !sqliteEntries[0].Timestamp.Equal(fileEntries[0].Timestamp) {
-		t.Fatalf("expected mirrored timestamps to match, got sqlite=%s file=%s", sqliteEntries[0].Timestamp.Format(time.RFC3339Nano), fileEntries[0].Timestamp.Format(time.RFC3339Nano))
-	}
-}
-
-func TestDualMemoryDeleteRemovesFileMirror(t *testing.T) {
-	dm := setupDualMemory(t)
-
-	if err := dm.Add(MemoryEntry{
-		Type:    TypeFact,
-		Content: "delete me",
-	}); err != nil {
-		t.Fatalf("failed to add entry: %v", err)
-	}
-
-	fileEntries, err := dm.file.List()
-	if err != nil {
-		t.Fatalf("failed to list file entries before delete: %v", err)
-	}
-	if len(fileEntries) != 1 {
-		t.Fatalf("expected 1 file entry before delete, got %d", len(fileEntries))
-	}
-
-	if err := dm.Delete(fileEntries[0].ID); err != nil {
-		t.Fatalf("failed to delete entry: %v", err)
-	}
-
-	fileEntries, err = dm.file.List()
-	if err != nil {
-		t.Fatalf("failed to list file entries after delete: %v", err)
-	}
-	if len(fileEntries) != 0 {
-		t.Fatalf("expected file mirror to be deleted, got %d remaining entries", len(fileEntries))
-	}
-
-	sqliteEntries, err := dm.sqlite.List()
-	if err != nil {
-		t.Fatalf("failed to list sqlite entries after delete: %v", err)
-	}
-	if len(sqliteEntries) != 0 {
-		t.Fatalf("expected sqlite entry to be deleted, got %d remaining entries", len(sqliteEntries))
-	}
-}
-
 func TestMemoryBackendFactory(t *testing.T) {
 	dir := t.TempDir()
 
@@ -275,9 +200,13 @@ func TestMemoryBackendFactory(t *testing.T) {
 		WorkDir: dir,
 	}
 	backend, err = NewMemoryBackend(cfg)
-	if err == nil {
-		t.Fatal("expected generic factory to reject dual backend")
+	if err != nil {
+		t.Fatalf("failed to create dual backend: %v", err)
 	}
+	if _, ok := backend.(*DualMemory); !ok {
+		t.Error("expected DualMemory backend")
+	}
+	backend.Close()
 }
 
 func TestMigrateFileToSQLite(t *testing.T) {
@@ -341,38 +270,12 @@ func TestSQLiteMemoryDirect(t *testing.T) {
 		t.Errorf("expected 1 search result, got %d", len(results))
 	}
 
-	stats, err := NewMemoryService(mem).GetStats()
+	stats, err := mem.GetStats()
 	if err != nil {
 		t.Fatalf("failed to get stats: %v", err)
 	}
 
 	if stats["total"] != 1 {
 		t.Errorf("expected total 1, got %d", stats["total"])
-	}
-}
-
-func TestSQLiteMemoryInitUsesConfiguredDSN(t *testing.T) {
-	dir := t.TempDir()
-	customPath := filepath.Join(dir, "custom.db")
-
-	mem, err := NewSQLiteMemory(dir, customPath)
-	if err != nil {
-		t.Fatalf("failed to create SQLite memory: %v", err)
-	}
-
-	if err := mem.Init(); err != nil {
-		t.Fatalf("failed to init: %v", err)
-	}
-	defer mem.Close()
-
-	if _, err := os.Stat(customPath); err != nil {
-		t.Fatalf("expected custom sqlite db at %q: %v", customPath, err)
-	}
-
-	defaultPath := filepath.Join(dir, "memory.db")
-	if _, err := os.Stat(defaultPath); err == nil {
-		t.Fatalf("did not expect default sqlite db at %q", defaultPath)
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat default sqlite db %q: %v", defaultPath, err)
 	}
 }

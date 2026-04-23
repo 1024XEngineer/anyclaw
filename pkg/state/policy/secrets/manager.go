@@ -383,9 +383,6 @@ func (am *ActivationManager) RequestActivation(requestedBy, reason string) (*Act
 		(am.activeLock.ExpiresAt == nil || time.Now().Before(*am.activeLock.ExpiresAt)) {
 		return nil, fmt.Errorf("activation already pending")
 	}
-	if am.activeSnap == nil {
-		return nil, fmt.Errorf("no active snapshot")
-	}
 
 	snap := am.activeSnap.ToSnapshot()
 
@@ -872,30 +869,12 @@ func (am *ActivationManager) ResetRecovery() {
 	}
 }
 
-func (am *ActivationManager) syncActiveSecretToStore(entry *SecretEntry) error {
-	if am.activeSnap == nil {
-		return fmt.Errorf("no active snapshot")
-	}
-	if entry == nil {
-		return fmt.Errorf("secret entry is required")
-	}
-	if err := am.store.SetSecret(entry); err != nil {
-		return err
-	}
-
-	am.activeSnap.Update(am.activeSnap.GetAll())
-	return nil
-}
-
 func (am *ActivationManager) RotateSecret(req *RotationRequest) (*RotationResult, error) {
 	am.mu.Lock()
 	defer am.mu.Unlock()
 
 	if req == nil || req.Key == "" || req.NewValue == "" {
 		return nil, fmt.Errorf("key and new_value are required")
-	}
-	if am.activeSnap == nil {
-		return nil, fmt.Errorf("no active snapshot")
 	}
 
 	entry, ok := am.activeSnap.Get(req.Key)
@@ -922,8 +901,10 @@ func (am *ActivationManager) RotateSecret(req *RotationRequest) (*RotationResult
 	entry.Metadata["last_rotation_reason"] = req.Reason
 	entry.Metadata["version"] = fmt.Sprintf("%d", newVersion)
 
-	if err := am.syncActiveSecretToStore(entry); err != nil {
-		return nil, fmt.Errorf("persist rotated secret: %w", err)
+	am.activeSnap.Update(am.activeSnap.GetAll())
+
+	if req.ActivateNow {
+		am.activeSnap.Update(am.activeSnap.GetAll())
 	}
 
 	result := &RotationResult{
@@ -975,10 +956,6 @@ func (am *ActivationManager) RollbackVersion(key string, targetVersion uint64, a
 	am.mu.Lock()
 	defer am.mu.Unlock()
 
-	if am.activeSnap == nil {
-		return fmt.Errorf("no active snapshot")
-	}
-
 	if err := am.store.RollbackVersion(key, targetVersion, actor); err != nil {
 		return err
 	}
@@ -1001,9 +978,7 @@ func (am *ActivationManager) RollbackVersion(key string, targetVersion uint64, a
 	entry.Metadata["rolled_back_from"] = fmt.Sprintf("v%d", targetVersion)
 	entry.Metadata["rolled_back_by"] = actor
 
-	if err := am.syncActiveSecretToStore(entry); err != nil {
-		return fmt.Errorf("persist rolled back secret: %w", err)
-	}
+	am.activeSnap.Update(am.activeSnap.GetAll())
 
 	am.store.AddAuditEntry(&AuditEntry{
 		Operation: OpRotate,
@@ -1036,12 +1011,8 @@ func (am *ActivationManager) DeleteRotationPolicy(key string) error {
 }
 
 func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationResult, error) {
-	am.mu.Lock()
-	defer am.mu.Unlock()
-
-	if am.activeSnap == nil {
-		return nil, fmt.Errorf("no active snapshot")
-	}
+	am.mu.RLock()
+	defer am.mu.RUnlock()
 
 	policies := am.store.ListRotationPolicies()
 	var results []*RotationResult
@@ -1075,22 +1046,6 @@ func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationR
 			map[string]string{"auto": "true", "strategy": "scheduled"})
 		if err != nil {
 			continue
-		}
-
-		if policy.AutoActivate {
-			entry.Value = newValue
-			entry.UpdatedAt = now
-			if entry.Metadata == nil {
-				entry.Metadata = make(map[string]string)
-			}
-			entry.Metadata["last_rotated_by"] = actor
-			entry.Metadata["last_rotation_reason"] = "scheduled rotation"
-			entry.Metadata["rotation_strategy"] = "scheduled"
-			entry.Metadata["version"] = fmt.Sprintf("%d", newVersion)
-
-			if err := am.syncActiveSecretToStore(entry); err != nil {
-				continue
-			}
 		}
 
 		results = append(results, &RotationResult{
