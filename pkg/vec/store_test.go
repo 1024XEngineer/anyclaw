@@ -87,6 +87,37 @@ func TestVecStoreInitRejectsCollectionMismatch(t *testing.T) {
 	}
 }
 
+func TestVecStoreEnsurePayloadIndexes(t *testing.T) {
+	vs, client := setupVecStore(t, DistanceCosine)
+
+	if err := vs.EnsurePayloadIndexes(context.Background()); err != nil {
+		t.Fatalf("ensure payload indexes failed: %v", err)
+	}
+
+	collection := client.collections["test_vectors"]
+	for _, field := range []string{"category", "source", "tag"} {
+		fieldType, ok := collection.fieldIndexes[field]
+		if !ok {
+			t.Fatalf("expected payload index for %q", field)
+		}
+		if fieldType != qdrant.FieldType_FieldTypeKeyword {
+			t.Fatalf("expected keyword index for %q, got %v", field, fieldType)
+		}
+	}
+}
+
+func TestVecStoreDropDeletesCollection(t *testing.T) {
+	vs, client := setupVecStore(t, DistanceCosine)
+
+	if err := vs.Drop(context.Background()); err != nil {
+		t.Fatalf("drop collection failed: %v", err)
+	}
+
+	if _, ok := client.collections["test_vectors"]; ok {
+		t.Fatal("expected collection to be deleted")
+	}
+}
+
 func TestVecStoreInsertGetUpdateDeleteAndCount(t *testing.T) {
 	vs, _ := setupVecStore(t, DistanceCosine)
 	ctx := context.Background()
@@ -528,10 +559,11 @@ type fakeQdrantClient struct {
 }
 
 type fakeCollection struct {
-	name     string
-	size     uint64
-	distance qdrant.Distance
-	points   map[int64]*fakePoint
+	name         string
+	size         uint64
+	distance     qdrant.Distance
+	points       map[int64]*fakePoint
+	fieldIndexes map[string]qdrant.FieldType
 }
 
 type fakePoint struct {
@@ -549,10 +581,11 @@ func newFakeQdrantClient(version string) *fakeQdrantClient {
 
 func newFakeCollection(name string, size uint64, distance qdrant.Distance) *fakeCollection {
 	return &fakeCollection{
-		name:     name,
-		size:     size,
-		distance: distance,
-		points:   make(map[int64]*fakePoint),
+		name:         name,
+		size:         size,
+		distance:     distance,
+		points:       make(map[int64]*fakePoint),
+		fieldIndexes: make(map[string]qdrant.FieldType),
 	}
 }
 
@@ -597,6 +630,24 @@ func (c *fakeQdrantClient) CreateCollection(_ context.Context, request *qdrant.C
 	)
 	c.createCollectionCalls++
 	return nil
+}
+
+func (c *fakeQdrantClient) DeleteCollection(_ context.Context, collectionName string) error {
+	if _, ok := c.collections[collectionName]; !ok {
+		return nil
+	}
+	delete(c.collections, collectionName)
+	return nil
+}
+
+func (c *fakeQdrantClient) CreateFieldIndex(_ context.Context, request *qdrant.CreateFieldIndexCollection) (*qdrant.UpdateResult, error) {
+	collection, err := c.collection(request.GetCollectionName())
+	if err != nil {
+		return nil, err
+	}
+
+	collection.fieldIndexes[request.GetFieldName()] = request.GetFieldType()
+	return &qdrant.UpdateResult{}, nil
 }
 
 func (c *fakeQdrantClient) Upsert(_ context.Context, request *qdrant.UpsertPoints) (*qdrant.UpdateResult, error) {

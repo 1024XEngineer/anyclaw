@@ -536,6 +536,8 @@ type qdrantClient interface {
 	CollectionExists(context.Context, string) (bool, error)
 	GetCollectionInfo(context.Context, string) (*qdrant.CollectionInfo, error)
 	CreateCollection(context.Context, *qdrant.CreateCollection) error
+	DeleteCollection(context.Context, string) error
+	CreateFieldIndex(context.Context, *qdrant.CreateFieldIndexCollection) (*qdrant.UpdateResult, error)
 	Upsert(context.Context, *qdrant.UpsertPoints) (*qdrant.UpdateResult, error)
 	Get(context.Context, *qdrant.GetPoints) ([]*qdrant.RetrievedPoint, error)
 	Scroll(context.Context, *qdrant.ScrollPoints) ([]*qdrant.RetrievedPoint, error)
@@ -584,6 +586,59 @@ func (vs *VecStore) createCollection(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
+	return nil
+}
+
+func (vs *VecStore) Drop(ctx context.Context) error {
+	if err := vs.validateConfig(); err != nil {
+		return err
+	}
+	if err := vs.ensureClient(); err != nil {
+		return err
+	}
+
+	exists, err := vs.client.CollectionExists(ctx, vs.tableName)
+	if err != nil {
+		return fmt.Errorf("check collection existence: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+
+	if err := vs.client.DeleteCollection(ctx, vs.tableName); err != nil {
+		return fmt.Errorf("delete collection: %w", err)
+	}
+	return nil
+}
+
+func (vs *VecStore) EnsurePayloadIndexes(ctx context.Context) error {
+	if err := vs.validateConfig(); err != nil {
+		return err
+	}
+	if err := vs.ensureClient(); err != nil {
+		return err
+	}
+
+	fields := make([]string, 0, len(vs.metadata)+len(vs.auxColumns))
+	fields = append(fields, vs.metadata...)
+	fields = append(fields, vs.auxColumns...)
+	if len(fields) == 0 {
+		return nil
+	}
+
+	wait := true
+	for _, field := range fields {
+		_, err := vs.client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
+			CollectionName: vs.tableName,
+			FieldName:      field,
+			FieldType:      qdrant.FieldType_FieldTypeKeyword.Enum(),
+			Wait:           &wait,
+		})
+		if err != nil {
+			return fmt.Errorf("create payload index for %q: %w", field, err)
+		}
+	}
+
 	return nil
 }
 
