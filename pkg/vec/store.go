@@ -45,8 +45,8 @@ func NewVecStore(cfg VecStoreConfig) *VecStore {
 		tableName:  cfg.TableName,
 		dimensions: cfg.Dimensions,
 		distance:   cfg.Distance,
-		metadata:   cfg.Metadata,
-		auxColumns: cfg.AuxColumns,
+		metadata:   slices.Clone(cfg.Metadata),
+		auxColumns: slices.Clone(cfg.AuxColumns),
 	}
 }
 
@@ -113,6 +113,12 @@ func (vs *VecStore) InsertWithAux(ctx context.Context, id any, vector []float32,
 	if err := vs.validateConfig(); err != nil {
 		return err
 	}
+	if err := validateColumnValues("metadata", metadata, vs.metadata); err != nil {
+		return err
+	}
+	if err := validateColumnValues("aux", aux, vs.auxColumns); err != nil {
+		return err
+	}
 	if len(vector) != vs.dimensions {
 		return fmt.Errorf("vector dimension mismatch: expected %d, got %d", vs.dimensions, len(vector))
 	}
@@ -156,6 +162,12 @@ func (vs *VecStore) InsertBatch(ctx context.Context, items []VecItem) error {
 	defer delStmt.Close()
 
 	for _, item := range items {
+		if err := validateColumnValues("metadata", item.Metadata, vs.metadata); err != nil {
+			return fmt.Errorf("item %v: %w", item.ID, err)
+		}
+		if err := validateColumnValues("aux", item.Aux, vs.auxColumns); err != nil {
+			return fmt.Errorf("item %v: %w", item.ID, err)
+		}
 		if len(item.Vector) != vs.dimensions {
 			return fmt.Errorf("vector dimension mismatch for id %v: expected %d, got %d",
 				item.ID, vs.dimensions, len(item.Vector))
@@ -374,6 +386,9 @@ func (vs *VecStore) UpdateMetadata(ctx context.Context, id any, metadata map[str
 	if len(metadata) == 0 {
 		return nil
 	}
+	if err := validateColumnValues("metadata", metadata, vs.metadata); err != nil {
+		return err
+	}
 
 	setClauses := make([]string, 0, len(metadata))
 	args := make([]any, 0, len(metadata)+1)
@@ -583,21 +598,41 @@ func (vs *VecStore) execInsert(ctx context.Context, execer sqlExecutor, id any, 
 }
 
 func (vs *VecStore) validateConfig() error {
+	if vs.db == nil {
+		return fmt.Errorf("db cannot be nil")
+	}
 	if err := validateIdentifier("table name", vs.tableName); err != nil {
 		return err
 	}
+	if vs.dimensions <= 0 {
+		return fmt.Errorf("dimensions must be greater than 0")
+	}
 	if err := validateDistanceMetric(vs.distance); err != nil {
 		return err
+	}
+	seen := map[string]string{
+		"rowid":  "reserved column",
+		"vector": "reserved column",
 	}
 	for _, column := range vs.metadata {
 		if err := validateIdentifier("metadata column", column); err != nil {
 			return err
 		}
+		lower := strings.ToLower(column)
+		if prev, ok := seen[lower]; ok {
+			return fmt.Errorf("duplicate column %q conflicts with %s", column, prev)
+		}
+		seen[lower] = "metadata column"
 	}
 	for _, column := range vs.auxColumns {
 		if err := validateIdentifier("aux column", column); err != nil {
 			return err
 		}
+		lower := strings.ToLower(column)
+		if prev, ok := seen[lower]; ok {
+			return fmt.Errorf("duplicate column %q conflicts with %s", column, prev)
+		}
+		seen[lower] = "aux column"
 	}
 	return nil
 }
@@ -633,6 +668,25 @@ func validateIdentifier(kind, value string) error {
 
 func quoteIdentifier(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+}
+
+func validateColumnValues(kind string, values map[string]string, allowed []string) error {
+	if len(values) == 0 {
+		return nil
+	}
+
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, key := range allowed {
+		allowedSet[key] = struct{}{}
+	}
+
+	for key := range values {
+		if _, ok := allowedSet[key]; !ok {
+			return fmt.Errorf("unknown %s column %q", kind, key)
+		}
+	}
+
+	return nil
 }
 
 func vectorToBlob(v []float32) []byte {

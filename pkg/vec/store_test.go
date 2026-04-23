@@ -612,3 +612,185 @@ func TestVecStoreRejectsUnsupportedDistanceMetric(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestVecStoreRejectsNilDB(t *testing.T) {
+	vs := NewVecStore(VecStoreConfig{
+		TableName:  "vectors",
+		Dimensions: 4,
+		Distance:   DistanceCosine,
+	})
+
+	_, err := vs.Count(context.Background())
+	if err == nil {
+		t.Fatal("expected nil db to fail")
+	}
+	if !strings.Contains(err.Error(), "db cannot be nil") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVecStoreRejectsNonPositiveDimensions(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Close()
+	})
+
+	tests := []struct {
+		name string
+		dims int
+	}{
+		{name: "zero", dims: 0},
+		{name: "negative", dims: -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vs := NewVecStore(VecStoreConfig{
+				DB:         db,
+				TableName:  "vectors",
+				Dimensions: tt.dims,
+				Distance:   DistanceCosine,
+			})
+
+			_, err := vs.Count(context.Background())
+			if err == nil {
+				t.Fatal("expected invalid dimensions to fail")
+			}
+			if !strings.Contains(err.Error(), "dimensions must be greater than 0") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestVecStoreRejectsDuplicateConfiguredColumns(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Close()
+	})
+
+	tests := []struct {
+		name string
+		cfg  VecStoreConfig
+		want string
+	}{
+		{
+			name: "duplicate metadata columns",
+			cfg: VecStoreConfig{
+				DB:         db,
+				TableName:  "vectors",
+				Dimensions: 4,
+				Distance:   DistanceCosine,
+				Metadata:   []string{"category", "category"},
+			},
+			want: `duplicate column "category" conflicts with metadata column`,
+		},
+		{
+			name: "metadata aux conflict",
+			cfg: VecStoreConfig{
+				DB:         db,
+				TableName:  "vectors",
+				Dimensions: 4,
+				Distance:   DistanceCosine,
+				Metadata:   []string{"shared"},
+				AuxColumns: []string{"shared"},
+			},
+			want: `duplicate column "shared" conflicts with metadata column`,
+		},
+		{
+			name: "reserved vector column",
+			cfg: VecStoreConfig{
+				DB:         db,
+				TableName:  "vectors",
+				Dimensions: 4,
+				Distance:   DistanceCosine,
+				Metadata:   []string{"vector"},
+			},
+			want: `duplicate column "vector" conflicts with reserved column`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vs := NewVecStore(tt.cfg)
+			_, err := vs.Count(context.Background())
+			if err == nil {
+				t.Fatal("expected duplicate or conflicting columns to fail")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestVecStoreRejectsUnknownInsertColumns(t *testing.T) {
+	vs := setupVecStore(t)
+	ctx := context.Background()
+
+	if err := vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{
+		"category": "keep",
+		"typo":     "drop",
+	}); err == nil {
+		t.Fatal("expected unknown metadata key to fail")
+	} else if !strings.Contains(err.Error(), `unknown metadata column "typo"`) {
+		t.Fatalf("unexpected metadata error: %v", err)
+	}
+
+	if err := vs.InsertWithAux(ctx, 2, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{
+		"category": "keep",
+	}, map[string]string{
+		"ghost": "drop",
+	}); err == nil {
+		t.Fatal("expected unknown aux key to fail")
+	} else if !strings.Contains(err.Error(), `unknown aux column "ghost"`) {
+		t.Fatalf("unexpected aux error: %v", err)
+	}
+}
+
+func TestVecStoreInsertBatchRejectsUnknownColumns(t *testing.T) {
+	vs := setupVecStore(t)
+	ctx := context.Background()
+
+	err := vs.InsertBatch(ctx, []VecItem{
+		{
+			ID:       int64(1),
+			Vector:   []float32{0.1, 0.2, 0.3, 0.4},
+			Metadata: map[string]string{"category": "a", "unknown": "bad"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected batch insert with unknown metadata key to fail")
+	}
+	if !strings.Contains(err.Error(), `item 1: unknown metadata column "unknown"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVecStoreUpdateMetadataRejectsUnknownKeys(t *testing.T) {
+	vs := setupVecStore(t)
+	ctx := context.Background()
+
+	if err := vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{
+		"category": "old",
+		"source":   "unit",
+	}); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	err := vs.UpdateMetadata(ctx, 1, map[string]string{
+		"category": "new",
+		"unknown":  "bad",
+	})
+	if err == nil {
+		t.Fatal("expected unknown update metadata key to fail")
+	}
+	if !strings.Contains(err.Error(), `unknown metadata column "unknown"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
