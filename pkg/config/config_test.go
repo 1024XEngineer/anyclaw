@@ -715,3 +715,42 @@ func TestResolveAgentProfileSupportsMainAgentAlias(t *testing.T) {
 		t.Fatalf("expected active profile Python Expert, got %q", cfg.Agent.ActiveProfile)
 	}
 }
+
+func TestChannelSecurityConfigUnmarshalTracksPresenceFlags(t *testing.T) {
+	var cfg ChannelSecurityConfig
+	if err := json.Unmarshal([]byte(`{
+  "pairing_enabled": false,
+  "mention_gate": false,
+  "default_deny_dm": true
+}`), &cfg); err != nil {
+		t.Fatalf("unmarshal channel security config: %v", err)
+	}
+
+	if !cfg.PairingEnabledSet() {
+		t.Fatal("expected pairing_enabled presence flag to be set")
+	}
+	if !cfg.MentionGateSet() {
+		t.Fatal("expected mention_gate presence flag to be set")
+	}
+	if !cfg.DefaultDenyDMSet() {
+		t.Fatal("expected default_deny_dm presence flag to be set")
+	}
+	if cfg.PairingEnabled {
+		t.Fatal("expected explicit pairing_enabled=false to be preserved")
+	}
+	if cfg.MentionGate {
+		t.Fatal("expected explicit mention_gate=false to be preserved")
+	}
+	if !cfg.DefaultDenyDM {
+		t.Fatal("expected explicit default_deny_dm=true to be preserved")
+	}
+
+	var empty ChannelSecurityConfig
+	if err := json.Unmarshal([]byte(`{}`), &empty); err != nil {
+		t.Fatalf("unmarshal empty channel security config: %v", err)
+	}
+	if empty.PairingEnabledSet() || empty.MentionGateSet() || empty.DefaultDenyDMSet() {
+		t.Fatalf("expected absent fields to keep presence flags false, got pairing=%v mention=%v deny=%v",
+			empty.PairingEnabledSet(), empty.MentionGateSet(), empty.DefaultDenyDMSet())
+	}
+}
