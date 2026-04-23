@@ -602,10 +602,6 @@ func GetTimeTool(ctx context.Context, input map[string]any) (string, error) {
 }
 
 func WebSearchTool(ctx context.Context, input map[string]any) (string, error) {
-	return WebSearchToolWithPolicy(ctx, input, BuiltinOptions{})
-}
-
-func WebSearchToolWithPolicy(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
 	query, ok := input["query"].(string)
 	if !ok {
 		return "", fmt.Errorf("query is required")
@@ -614,11 +610,6 @@ func WebSearchToolWithPolicy(ctx context.Context, input map[string]any, opts Bui
 	maxResults := 5
 	if n, ok := input["max_results"].(float64); ok && n > 0 {
 		maxResults = int(n)
-	}
-	if opts.Policy != nil {
-		if err := opts.Policy.CheckEgressURL(webtool.SearchEndpointURL()); err != nil {
-			return "", err
-		}
 	}
 
 	results, err := webtool.Search(ctx, query, maxResults)
@@ -639,18 +630,9 @@ func WebSearchToolWithPolicy(ctx context.Context, input map[string]any, opts Bui
 }
 
 func FetchURLTool(ctx context.Context, input map[string]any) (string, error) {
-	return FetchURLToolWithPolicy(ctx, input, BuiltinOptions{})
-}
-
-func FetchURLToolWithPolicy(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
 	urlStr, ok := input["url"].(string)
 	if !ok {
 		return "", fmt.Errorf("url is required")
-	}
-	if opts.Policy != nil {
-		if err := opts.Policy.CheckEgressURL(urlStr); err != nil {
-			return "", err
-		}
 	}
 
 	content, err := webtool.Fetch(ctx, urlStr)

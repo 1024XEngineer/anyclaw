@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"time"
 )
-
-var searchEndpoint = "https://ddg-api.vercel.app/search"
 
 type SearchResult struct {
 	Title       string
@@ -24,7 +21,7 @@ func Search(ctx context.Context, query string, maxResults int) ([]SearchResult, 
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", buildSearchURL(query), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://ddg-api.vercel.app/search?q="+query, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -63,14 +60,6 @@ func Search(ctx context.Context, query string, maxResults int) ([]SearchResult, 
 	}
 
 	return output, nil
-}
-
-func SearchEndpointURL() string {
-	return searchEndpoint
-}
-
-func buildSearchURL(query string) string {
-	return searchEndpoint + "?q=" + url.QueryEscape(query)
 }
 
 func Fetch(ctx context.Context, urlStr string) (string, error) {

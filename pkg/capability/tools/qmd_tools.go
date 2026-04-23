@@ -2,13 +2,10 @@ package tools
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 )
 
 func RegisterQMDTools(r *Registry, opts BuiltinOptions) {
@@ -159,7 +156,7 @@ func qmdInsert(ctx context.Context, client QMDClient, table string, input map[st
 	}
 	id, _ := input["id"].(string)
 	if strings.TrimSpace(id) == "" {
-		id = newQMDRecordID()
+		id = fmt.Sprintf("rec-%d", len(data))
 	}
 	record := map[string]any{"id": id}
 	for k, v := range data {
@@ -221,14 +218,6 @@ func qmdCount(ctx context.Context, client QMDClient, table string) (string, erro
 func formatRecord(table string, record map[string]any) string {
 	data, _ := json.MarshalIndent(record, "", "  ")
 	return fmt.Sprintf("Table: %s\n\n%s", table, string(data))
-}
-
-func newQMDRecordID() string {
-	var buf [8]byte
-	if _, err := rand.Read(buf[:]); err == nil {
-		return "rec-" + hex.EncodeToString(buf[:])
-	}
-	return fmt.Sprintf("rec-%d", time.Now().UnixNano())
 }
 
 func formatRecords(table string, records []map[string]any) string {
