@@ -86,6 +86,10 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	mux := http.NewServeMux()
+	s.initChannels()
+	s.initMCP(ctx)
+	s.initMarketStore()
+	s.initDiscovery(ctx)
 	if err := s.ensureDefaultWorkspace(); err != nil {
 		return err
 	}
@@ -100,6 +104,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	errCh := make(chan error, 1)
+	go s.runChannels(ctx)
 	go func() {
 		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
