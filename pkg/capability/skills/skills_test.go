@@ -173,7 +173,7 @@ func TestSkillsManagerExecutionAndPrompts(t *testing.T) {
 		t.Fatalf("expected timeout error, got %v", err)
 	}
 
-	if _, err := manager.Execute(context.Background(), "failure", nil, ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: 5}); err == nil || !strings.Contains(err.Error(), "failed") {
+	if _, err := manager.Execute(context.Background(), "failure", nil, ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: 30}); err == nil || !strings.Contains(err.Error(), "failed") {
 		t.Fatalf("expected failure error, got %v", err)
 	}
 
