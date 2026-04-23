@@ -4,45 +4,101 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"time"
+
+	openaicompat "github.com/1024XEngineer/anyclaw/pkg/api/openai"
+	agentstore "github.com/1024XEngineer/anyclaw/pkg/capability/catalogs"
+	webhookext "github.com/1024XEngineer/anyclaw/pkg/extensions/adapters/webhook"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/mcp"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
+	appsecurity "github.com/1024XEngineer/anyclaw/pkg/gateway/auth/security"
+	"github.com/1024XEngineer/anyclaw/pkg/gateway/intake/chat"
+	gatewaymiddleware "github.com/1024XEngineer/anyclaw/pkg/gateway/middleware"
+	"github.com/1024XEngineer/anyclaw/pkg/gateway/resources/discovery"
+	nodepkg "github.com/1024XEngineer/anyclaw/pkg/gateway/resources/nodes"
+	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
+	inputchannels "github.com/1024XEngineer/anyclaw/pkg/input/channels"
+	routeingress "github.com/1024XEngineer/anyclaw/pkg/route/ingress"
+	"github.com/1024XEngineer/anyclaw/pkg/runtime"
+	sessionrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/sessionrunner"
+	taskrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
+	"github.com/1024XEngineer/anyclaw/pkg/speech"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
-const defaultGatewayAddress = "127.0.0.1:18789"
-
-// Server is the gateway runtime shell. It intentionally keeps this PR's
-// contract small so runtime packages can depend on gateway.New without pulling
-// in the full gateway wiring layer.
 type Server struct {
-	mainRuntime any
-	httpServer  *http.Server
-	startedAt   time.Time
-	addr        string
+	mainRuntime    *runtime.MainRuntime
+	httpServer     *http.Server
+	startedAt      time.Time
+	store          *state.Store
+	sessions       *state.SessionManager
+	bus            *state.EventBus
+	channels       *inputlayer.Manager
+	telegram       *inputchannels.TelegramAdapter
+	slack          *inputchannels.SlackAdapter
+	discord        *inputchannels.DiscordAdapter
+	whatsapp       *inputchannels.WhatsAppAdapter
+	signal         *inputchannels.SignalAdapter
+	ingress        *routeingress.Service
+	runtimePool    *runtime.RuntimePool
+	sessionRunner  *sessionrunner.Manager
+	tasks          *taskrunner.Manager
+	chatModule     chat.ChatManager
+	storeModule    agentstore.StoreManager
+	approvals      *state.ApprovalManager
+	auth           *authMiddleware
+	rateLimit      *gatewaymiddleware.RateLimiter
+	plugins        *plugin.Registry
+	ingressPlugins []plugin.IngressRunner
+	jobQueue       chan func()
+	jobCancel      map[string]bool
+	jobMaxAttempts int
+	webhooks       *webhookext.Handler
+	nodes          *nodepkg.DeviceManager
+	openAICompat   *openaicompat.Handler
+	sttPipeline    *speech.STTPipeline
+	sttIntegration *speech.STTIntegration
+	sttManager     *speech.STTManager
+	ttsPipeline    *speech.TTSPipeline
+	ttsIntegration *speech.Integration
+	ttsManager     *speech.Manager
+	mcpRegistry    *mcp.Registry
+	mcpServer      *mcp.Server
+	marketStore    *plugin.Store
+	discoverySvc   *discovery.Service
+	mentionGate    *inputlayer.MentionGate
+	groupSecurity  *inputlayer.GroupSecurity
+	channelCmds    *inputlayer.ChannelCommands
+	channelPairing *inputlayer.ChannelPairing
+	channelPolicy  *inputlayer.ChannelPolicy
+	presenceMgr    *inputlayer.PresenceManager
+	contactDir     *inputlayer.ContactDirectory
+	devicePairing  *appsecurity.DevicePairing
 }
 
-// Run starts the minimal gateway HTTP shell.
 func (s *Server) Run(ctx context.Context) error {
-	if s == nil {
-		return fmt.Errorf("gateway server is nil")
-	}
-
+	addr := runtime.GatewayAddress(s.mainRuntime.Config)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":         true,
-			"started_at": s.startedAt,
-		})
-	})
+	s.initChannels()
+	s.initMCP(ctx)
+	s.initMarketStore()
+	s.initDiscovery(ctx)
+	if err := s.ensureDefaultWorkspace(); err != nil {
+		return err
+	}
+	s.startWorkers(ctx)
+	s.registerGatewayRoutes(mux)
 
 	s.startedAt = time.Now().UTC()
 	s.httpServer = &http.Server{
-		Addr:              s.address(),
+		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
+	go s.runChannels(ctx)
 	go func() {
 		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -57,14 +113,4 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return fmt.Errorf("gateway server failed: %w", err)
 	}
-}
-
-func (s *Server) address() string {
-	if s == nil || s.addr == "" {
-		return defaultGatewayAddress
-	}
-	if _, _, err := net.SplitHostPort(s.addr); err != nil {
-		return defaultGatewayAddress
-	}
-	return s.addr
 }
