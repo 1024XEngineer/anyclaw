@@ -26,12 +26,9 @@ type RuntimeSnapshot struct {
 
 func NewRuntimeSnapshot(secrets map[string]*SecretEntry, source string) *RuntimeSnapshot {
 	rs := &RuntimeSnapshot{
-		secrets:   make(map[string]*SecretEntry),
+		secrets:   cloneEntryMap(secrets),
 		createdAt: time.Now().UTC(),
 		source:    source,
-	}
-	for k, v := range secrets {
-		rs.secrets[k] = v
 	}
 	rs.version = 1
 	rs.checksum = computeRuntimeChecksum(rs.secrets)
@@ -52,7 +49,7 @@ func (rs *RuntimeSnapshot) Get(key string) (*SecretEntry, bool) {
 	if entry.ExpiresAt != nil && time.Now().After(*entry.ExpiresAt) {
 		return nil, false
 	}
-	return entry, true
+	return cloneEntry(entry), true
 }
 
 func (rs *RuntimeSnapshot) GetAll() map[string]*SecretEntry {
@@ -61,7 +58,7 @@ func (rs *RuntimeSnapshot) GetAll() map[string]*SecretEntry {
 	result := make(map[string]*SecretEntry)
 	for k, v := range rs.secrets {
 		if v.ExpiresAt == nil || time.Now().Before(*v.ExpiresAt) {
-			result[k] = v
+			result[k] = cloneEntry(v)
 		}
 	}
 	return result
@@ -108,10 +105,7 @@ func (rs *RuntimeSnapshot) Update(secrets map[string]*SecretEntry) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
-	rs.secrets = make(map[string]*SecretEntry)
-	for k, v := range secrets {
-		rs.secrets[k] = v
-	}
+	rs.secrets = cloneEntryMap(secrets)
 	atomic.AddUint64(&rs.version, 1)
 	rs.createdAt = time.Now().UTC()
 	rs.checksum = computeRuntimeChecksum(rs.secrets)
@@ -241,7 +235,7 @@ func (rs *RuntimeSnapshot) ToSnapshot() *Snapshot {
 
 	secrets := make(map[string]*SecretEntry)
 	for k, v := range rs.secrets {
-		secrets[k] = v
+		secrets[k] = cloneEntry(v)
 	}
 
 	return &Snapshot{
@@ -251,6 +245,23 @@ func (rs *RuntimeSnapshot) ToSnapshot() *Snapshot {
 		CreatedAt: rs.createdAt,
 		Source:    rs.source,
 		Checksum:  rs.checksum,
+	}
+}
+
+func (rs *RuntimeSnapshot) Clone() *RuntimeSnapshot {
+	if rs == nil {
+		return nil
+	}
+
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+
+	return &RuntimeSnapshot{
+		version:   atomic.LoadUint64(&rs.version),
+		secrets:   cloneEntryMap(rs.secrets),
+		createdAt: rs.createdAt,
+		source:    rs.source,
+		checksum:  rs.checksum,
 	}
 }
 
@@ -267,9 +278,13 @@ type ActivationManager struct {
 }
 
 func NewActivationManager(store *Store, initialSnap *RuntimeSnapshot) *ActivationManager {
+	var activeSnap *RuntimeSnapshot
+	if initialSnap != nil {
+		activeSnap = initialSnap.Clone()
+	}
 	return &ActivationManager{
 		store:      store,
-		activeSnap: initialSnap,
+		activeSnap: activeSnap,
 		approvals:  make(map[string]bool),
 		config:     store.Config(),
 		recovery: &RecoveryStatus{
@@ -282,9 +297,13 @@ func NewActivationManagerWithFallback(store *Store, initialSnap *RuntimeSnapshot
 	if fbCfg == nil {
 		fbCfg = DefaultFallbackConfig()
 	}
+	var activeSnap *RuntimeSnapshot
+	if initialSnap != nil {
+		activeSnap = initialSnap.Clone()
+	}
 	am := &ActivationManager{
 		store:       store,
-		activeSnap:  initialSnap,
+		activeSnap:  activeSnap,
 		approvals:   make(map[string]bool),
 		config:      store.Config(),
 		fallbackCfg: fbCfg,
@@ -292,9 +311,9 @@ func NewActivationManagerWithFallback(store *Store, initialSnap *RuntimeSnapshot
 			State: RecoveryNormal,
 		},
 	}
-	if initialSnap != nil {
-		am.fallbackSnap = NewRuntimeSnapshot(initialSnap.GetAll(), "fallback_copy")
-		am.recovery.CurrentSnapID = initialSnap.ToSnapshot().ID
+	if activeSnap != nil {
+		am.fallbackSnap = NewRuntimeSnapshot(activeSnap.GetAll(), "fallback_copy")
+		am.recovery.CurrentSnapID = activeSnap.ToSnapshot().ID
 	}
 	return am
 }
@@ -344,7 +363,10 @@ func (am *ActivationManager) ValidateStartup(cfg *StartupConfig) error {
 func (am *ActivationManager) GetActiveSnapshot() *RuntimeSnapshot {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
-	return am.activeSnap
+	if am.activeSnap == nil {
+		return nil
+	}
+	return am.activeSnap.Clone()
 }
 
 func (am *ActivationManager) CreateSnapshot(source string) (*Snapshot, error) {
@@ -354,7 +376,7 @@ func (am *ActivationManager) CreateSnapshot(source string) (*Snapshot, error) {
 	if snap == nil {
 		return nil, fmt.Errorf("no active snapshot")
 	}
-	return am.store.CreateSnapshot(source)
+	return am.store.CreateSnapshotFromSecrets(source, snap.GetAll())
 }
 
 func (am *ActivationManager) GetActiveLock() *ActivationLock {
@@ -382,6 +404,10 @@ func (am *ActivationManager) RequestActivation(requestedBy, reason string) (*Act
 		(am.activeLock.State == LockPending || am.activeLock.State == LockActivated) &&
 		(am.activeLock.ExpiresAt == nil || time.Now().Before(*am.activeLock.ExpiresAt)) {
 		return nil, fmt.Errorf("activation already pending")
+	}
+
+	if am.activeSnap == nil {
+		return nil, fmt.Errorf("no active snapshot")
 	}
 
 	snap := am.activeSnap.ToSnapshot()
@@ -511,6 +537,10 @@ func (am *ActivationManager) ApplySnapshot(newSnap *RuntimeSnapshot, actor strin
 	am.mu.Lock()
 	defer am.mu.Unlock()
 
+	if newSnap == nil {
+		return fmt.Errorf("snapshot is required")
+	}
+
 	if am.config.RequireApproval && am.activeLock != nil && am.activeLock.State != LockActivated {
 		return fmt.Errorf("activation lock must be approved before applying new snapshot")
 	}
@@ -520,7 +550,7 @@ func (am *ActivationManager) ApplySnapshot(newSnap *RuntimeSnapshot, actor strin
 		oldChecksum = am.activeSnap.Checksum()
 	}
 
-	am.activeSnap = newSnap
+	am.activeSnap = newSnap.Clone()
 
 	if am.activeLock != nil && am.activeLock.State == LockActivated {
 		now := time.Now().UTC()
@@ -562,9 +592,11 @@ func (am *ActivationManager) AccessSecret(key string, actor string) (*SecretEntr
 
 		am.mu.Lock()
 		if rs := am.activeSnap; rs != nil {
+			rs.mu.Lock()
 			if e, ok := rs.secrets[key]; ok {
 				e.LastUsedAt = entry.LastUsedAt
 			}
+			rs.mu.Unlock()
 		}
 		am.mu.Unlock()
 	}
@@ -576,7 +608,7 @@ func (am *ActivationManager) AccessSecret(key string, actor string) (*SecretEntr
 		Success:   true,
 	})
 
-	return entry, nil
+	return cloneEntry(entry), nil
 }
 
 func (am *ActivationManager) Status() map[string]interface{} {
@@ -741,12 +773,7 @@ func (am *ActivationManager) fallbackFromLastSnapshot(event *FallbackEvent) (*Ru
 	event.Details["snapshot_id"] = latest.ID
 	event.Details["version"] = fmt.Sprintf("%d", latest.Version)
 
-	secrets := make(map[string]*SecretEntry)
-	for k, v := range latest.Secrets {
-		secrets[k] = v
-	}
-
-	return NewRuntimeSnapshot(secrets, "fallback_restore"), nil
+	return NewRuntimeSnapshot(buildRuntimeSecretsFromSnapshot(latest.Secrets), "fallback_restore"), nil
 }
 
 func (am *ActivationManager) fallbackFromEnvVars(event *FallbackEvent) (*RuntimeSnapshot, error) {
@@ -876,8 +903,12 @@ func (am *ActivationManager) RotateSecret(req *RotationRequest) (*RotationResult
 	if req == nil || req.Key == "" || req.NewValue == "" {
 		return nil, fmt.Errorf("key and new_value are required")
 	}
+	if am.activeSnap == nil {
+		return nil, fmt.Errorf("no active snapshot")
+	}
 
-	entry, ok := am.activeSnap.Get(req.Key)
+	secrets := am.activeSnap.GetAll()
+	entry, ok := secrets[req.Key]
 	if !ok {
 		return nil, fmt.Errorf("secret %q not found in active snapshot", req.Key)
 	}
@@ -901,10 +932,9 @@ func (am *ActivationManager) RotateSecret(req *RotationRequest) (*RotationResult
 	entry.Metadata["last_rotation_reason"] = req.Reason
 	entry.Metadata["version"] = fmt.Sprintf("%d", newVersion)
 
-	am.activeSnap.Update(am.activeSnap.GetAll())
-
-	if req.ActivateNow {
-		am.activeSnap.Update(am.activeSnap.GetAll())
+	am.activeSnap.Update(secrets)
+	if err := am.store.SetSecret(cloneEntry(entry)); err != nil {
+		return nil, fmt.Errorf("persist rotated secret: %w", err)
 	}
 
 	result := &RotationResult{
@@ -956,6 +986,10 @@ func (am *ActivationManager) RollbackVersion(key string, targetVersion uint64, a
 	am.mu.Lock()
 	defer am.mu.Unlock()
 
+	if am.activeSnap == nil {
+		return fmt.Errorf("no active snapshot")
+	}
+
 	if err := am.store.RollbackVersion(key, targetVersion, actor); err != nil {
 		return err
 	}
@@ -965,7 +999,8 @@ func (am *ActivationManager) RollbackVersion(key string, targetVersion uint64, a
 		return fmt.Errorf("active version not found after rollback")
 	}
 
-	entry, ok := am.activeSnap.Get(key)
+	secrets := am.activeSnap.GetAll()
+	entry, ok := secrets[key]
 	if !ok {
 		return fmt.Errorf("secret %q not found in active snapshot", key)
 	}
@@ -978,7 +1013,10 @@ func (am *ActivationManager) RollbackVersion(key string, targetVersion uint64, a
 	entry.Metadata["rolled_back_from"] = fmt.Sprintf("v%d", targetVersion)
 	entry.Metadata["rolled_back_by"] = actor
 
-	am.activeSnap.Update(am.activeSnap.GetAll())
+	am.activeSnap.Update(secrets)
+	if err := am.store.SetSecret(cloneEntry(entry)); err != nil {
+		return fmt.Errorf("persist rolled back secret: %w", err)
+	}
 
 	am.store.AddAuditEntry(&AuditEntry{
 		Operation: OpRotate,
@@ -1011,9 +1049,6 @@ func (am *ActivationManager) DeleteRotationPolicy(key string) error {
 }
 
 func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationResult, error) {
-	am.mu.RLock()
-	defer am.mu.RUnlock()
-
 	policies := am.store.ListRotationPolicies()
 	var results []*RotationResult
 	now := time.Now().UTC()
@@ -1026,7 +1061,12 @@ func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationR
 			continue
 		}
 
-		entry, ok := am.activeSnap.Get(policy.Key)
+		snap := am.GetActiveSnapshot()
+		if snap == nil {
+			continue
+		}
+
+		entry, ok := snap.Get(policy.Key)
 		if !ok {
 			continue
 		}
@@ -1036,25 +1076,23 @@ func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationR
 			continue
 		}
 
-		oldVersion := uint64(0)
-		if vh, exists := am.store.GetVersionHistory(policy.Key); exists {
-			oldVersion = vh.Current
-		}
-		newVersion := oldVersion + 1
-
-		err := am.store.RecordRotation(policy.Key, oldVersion, newVersion, newValue, actor,
-			map[string]string{"auto": "true", "strategy": "scheduled"})
+		result, err := am.RotateSecret(&RotationRequest{
+			Key:         policy.Key,
+			NewValue:    newValue,
+			RequestedBy: actor,
+			Reason:      "scheduled rotation",
+			ActivateNow: policy.AutoActivate,
+			Metadata: map[string]string{
+				"auto":     "true",
+				"strategy": "scheduled",
+			},
+		})
 		if err != nil {
 			continue
 		}
 
-		results = append(results, &RotationResult{
-			Key:        policy.Key,
-			OldVersion: oldVersion,
-			NewVersion: newVersion,
-			Activated:  policy.AutoActivate,
-			RotatedAt:  now,
-		})
+		result.RotatedAt = now
+		results = append(results, result)
 	}
 
 	if len(results) > 0 {
