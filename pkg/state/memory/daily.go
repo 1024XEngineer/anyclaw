@@ -52,12 +52,20 @@ func (m *FileMemory) GetDaily(dayRef string) (*DailyMemoryFile, error) {
 }
 
 func SearchDailyMarkdown(memoryDir string, query string, limit int, dayRef string) ([]DailyMemoryMatch, error) {
+	return searchDailyMarkdownAt(memoryDir, query, limit, dayRef, time.Now())
+}
+
+func GetDailyMarkdown(memoryDir string, dayRef string) (*DailyMemoryFile, error) {
+	return getDailyMarkdownAt(memoryDir, dayRef, time.Now())
+}
+
+func searchDailyMarkdownAt(memoryDir string, query string, limit int, dayRef string, now time.Time) ([]DailyMemoryMatch, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("query is required")
 	}
 
-	files, err := selectDailyFiles(memoryDir, dayRef, time.Now())
+	files, err := selectDailyFiles(memoryDir, dayRef, now)
 	if err != nil {
 		return nil, err
 	}
@@ -89,8 +97,8 @@ func SearchDailyMarkdown(memoryDir string, query string, limit int, dayRef strin
 	return results, nil
 }
 
-func GetDailyMarkdown(memoryDir string, dayRef string) (*DailyMemoryFile, error) {
-	files, err := selectDailyFiles(memoryDir, dayRef, time.Now())
+func getDailyMarkdownAt(memoryDir string, dayRef string, now time.Time) (*DailyMemoryFile, error) {
+	files, err := selectDailyFiles(memoryDir, dayRef, now)
 	if err != nil {
 		return nil, err
 	}

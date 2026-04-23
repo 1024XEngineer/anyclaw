@@ -4,29 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 )
 
 type Task struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name"`
-	Schedule     string         `json:"schedule"`
-	Command      string         `json:"command"`
-	Input        map[string]any `json:"input,omitempty"`
-	Agent        string         `json:"agent,omitempty"`
-	Workspace    string         `json:"workspace,omitempty"`
-	Enabled      bool           `json:"enabled"`
-	Timezone     string         `json:"timezone,omitempty"`
-	MaxRetries   int            `json:"max_retries"`
-	RetryBackoff string         `json:"retry_backoff,omitempty"`
-	Timeout      int            `json:"timeout_seconds"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	LastRun      *time.Time     `json:"last_run,omitempty"`
-	NextRun      *time.Time     `json:"next_run,omitempty"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Schedule     string                 `json:"schedule"`
+	Command      string                 `json:"command"`
+	Input        map[string]interface{} `json:"input,omitempty"`
+	Agent        string                 `json:"agent,omitempty"`
+	Workspace    string                 `json:"workspace,omitempty"`
+	Enabled      bool                   `json:"enabled"`
+	Timezone     string                 `json:"timezone,omitempty"`
+	MaxRetries   int                    `json:"max_retries"`
+	RetryBackoff string                 `json:"retry_backoff,omitempty"` // "fixed", "exponential", "linear"
+	Timeout      int                    `json:"timeout_seconds"`
+	CreatedAt    time.Time              `json:"created_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
+	LastRun      *time.Time             `json:"last_run,omitempty"`
+	NextRun      *time.Time             `json:"next_run,omitempty"`
 }
 
 type TaskRun struct {
@@ -43,7 +41,19 @@ type TaskRun struct {
 }
 
 type Executor interface {
-	Execute(ctx context.Context, cmd string, input map[string]any) (string, error)
+	Execute(ctx context.Context, cmd string, input map[string]interface{}) (string, error)
+}
+
+type Scheduler struct {
+	tasks          map[string]*Task
+	taskRuns       map[string][]*TaskRun
+	executor       Executor
+	mu             sync.RWMutex
+	running        bool
+	stopCh         chan struct{}
+	runHistorySize int
+	cancelFuncs    map[string]context.CancelFunc
+	persister      TaskPersister
 }
 
 type TaskPersister interface {
@@ -53,89 +63,45 @@ type TaskPersister interface {
 	LoadRuns() ([]*TaskRun, error)
 }
 
-type Scheduler struct {
-	mu             sync.RWMutex
-	tasks          map[string]*Task
-	taskRuns       map[string][]*TaskRun
-	activeTaskRuns map[string]string
-	runDone        map[string]chan struct{}
-	executor       Executor
-	running        bool
-	stopCh         chan struct{}
-	doneCh         chan struct{}
-	runHistorySize int
-	cancelFuncs    map[string]context.CancelFunc
-	persister      TaskPersister
-	lastPersistErr error
-}
-
-func New() *Scheduler {
-	return NewScheduler(nil)
-}
-
 func NewScheduler(executor Executor) *Scheduler {
 	return &Scheduler{
 		tasks:          make(map[string]*Task),
 		taskRuns:       make(map[string][]*TaskRun),
-		activeTaskRuns: make(map[string]string),
-		runDone:        make(map[string]chan struct{}),
 		executor:       executor,
 		runHistorySize: 100,
+		stopCh:         make(chan struct{}),
 		cancelFuncs:    make(map[string]context.CancelFunc),
 	}
 }
 
 func (s *Scheduler) SetPersister(p TaskPersister) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.persister = p
 }
 
 func (s *Scheduler) LoadPersisted() error {
-	s.mu.RLock()
-	persister := s.persister
-	s.mu.RUnlock()
-	if persister == nil {
+	if s.persister == nil {
 		return nil
 	}
-
-	tasks, err := persister.LoadTasks()
+	tasks, err := s.persister.LoadTasks()
 	if err != nil {
 		return err
 	}
-	runs, err := persister.LoadRuns()
+	for _, t := range tasks {
+		s.tasks[t.ID] = t
+	}
+
+	runs, err := s.persister.LoadRuns()
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.tasks = make(map[string]*Task, len(tasks))
-	for _, task := range tasks {
-		cloned := cloneTask(task)
-		if cloned == nil {
-			continue
-		}
-		if cloned.NextRun == nil && cloned.Enabled {
-			next := calculateNextRun(cloned.Schedule, time.Now().UTC(), cloned.Timezone)
-			if !next.IsZero() {
-				cloned.NextRun = &next
-			}
-		}
-		s.tasks[cloned.ID] = cloned
+	for _, r := range runs {
+		s.taskRuns[r.TaskID] = append(s.taskRuns[r.TaskID], r)
 	}
-
-	s.taskRuns = make(map[string][]*TaskRun)
-	for _, run := range runs {
-		cloned := cloneTaskRun(run)
-		if cloned == nil {
-			continue
-		}
-		s.taskRuns[cloned.TaskID] = append(s.taskRuns[cloned.TaskID], cloned)
-	}
-
 	return nil
+}
+
+func New() *Scheduler {
+	return NewScheduler(nil)
 }
 
 func (s *Scheduler) Start() error {
@@ -145,41 +111,30 @@ func (s *Scheduler) Start() error {
 		return fmt.Errorf("scheduler already running")
 	}
 	s.running = true
-	s.stopCh = make(chan struct{})
-	s.doneCh = make(chan struct{})
-	stopCh := s.stopCh
-	doneCh := s.doneCh
 	s.mu.Unlock()
 
-	go s.runLoop(stopCh, doneCh)
+	go s.runLoop()
 	return nil
 }
 
 func (s *Scheduler) Stop() {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if !s.running {
-		s.mu.Unlock()
 		return
 	}
 	s.running = false
-	stopCh := s.stopCh
-	doneCh := s.doneCh
-	s.stopCh = nil
-	s.doneCh = nil
-	s.mu.Unlock()
-
-	close(stopCh)
-	<-doneCh
+	close(s.stopCh)
 }
 
-func (s *Scheduler) runLoop(stopCh <-chan struct{}, doneCh chan<- struct{}) {
-	defer close(doneCh)
+func (s *Scheduler) runLoop() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-stopCh:
+		case <-s.stopCh:
 			return
 		case <-ticker.C:
 			s.checkAndRunTasks()
@@ -187,637 +142,385 @@ func (s *Scheduler) runLoop(stopCh <-chan struct{}, doneCh chan<- struct{}) {
 	}
 }
 
+func (s *Scheduler) checkAndRunTasks() {
+	s.mu.RLock()
+	var tasksToRun []*Task
+	now := time.Now()
+
+	for _, task := range s.tasks {
+		if !task.Enabled {
+			continue
+		}
+
+		if task.NextRun == nil {
+			next := calculateNextRun(task.Schedule, now)
+			task.NextRun = &next
+		}
+
+		if now.After(*task.NextRun) || now.Equal(*task.NextRun) {
+			tasksToRun = append(tasksToRun, task)
+		}
+	}
+	s.mu.RUnlock()
+
+	for _, task := range tasksToRun {
+		go s.runTask(task.ID)
+	}
+}
+
+func calculateNextRun(schedule string, from time.Time) time.Time {
+	expr, err := ParseCronExpr(schedule)
+	if err != nil {
+		return from.Add(time.Hour)
+	}
+
+	return expr.Next(from)
+}
+
+type CronExpr struct {
+	Minute     int
+	Hour       int
+	DayOfMonth int
+	Month      int
+	DayOfWeek  int
+}
+
+func ParseCronExpr(expr string) (*CronExpr, error) {
+	var minute, hour, dayOfMonth, month, dayOfWeek int
+
+	_, err := fmt.Sscanf(expr, "%d %d %d %d %d",
+		&minute, &hour, &dayOfMonth, &month, &dayOfWeek)
+
+	if err != nil {
+		if expr == "@hourly" {
+			return &CronExpr{0, -1, -1, -1, -1}, nil
+		}
+		if expr == "@daily" || expr == "@midnight" {
+			return &CronExpr{0, 0, -1, -1, -1}, nil
+		}
+		if expr == "@weekly" {
+			return &CronExpr{0, 0, -1, -1, 0}, nil
+		}
+		if expr == "@monthly" {
+			return &CronExpr{0, 0, 1, -1, -1}, nil
+		}
+		if expr == "@yearly" || expr == "@annually" {
+			return &CronExpr{0, 0, 1, 1, -1}, nil
+		}
+		return nil, fmt.Errorf("invalid cron expression: %s", expr)
+	}
+
+	return &CronExpr{
+		Minute:     minute,
+		Hour:       hour,
+		DayOfMonth: dayOfMonth,
+		Month:      month,
+		DayOfWeek:  dayOfWeek,
+	}, nil
+}
+
+func (e *CronExpr) Next(t time.Time) time.Time {
+	next := t.Add(time.Second)
+
+	for {
+		if !e.matchMonth(next) {
+			next = time.Date(next.Year(), next.Month()+1, 1, 0, 0, 0, 0, next.Location())
+			continue
+		}
+
+		if !e.matchDayOfMonth(next) || !e.matchDayOfWeek(next) {
+			next = next.Add(24 * time.Hour)
+			next = time.Date(next.Year(), next.Month(), next.Day(), e.Hour, e.Minute, 0, 0, next.Location())
+			continue
+		}
+
+		if next.Hour() < e.Hour || (next.Hour() == e.Hour && next.Minute() < e.Minute) {
+			next = time.Date(next.Year(), next.Month(), next.Day(), e.Hour, e.Minute, 0, 0, next.Location())
+		}
+
+		if next.After(t) {
+			return next
+		}
+
+		next = next.Add(24 * time.Hour)
+	}
+}
+
+func (e *CronExpr) matchMonth(t time.Time) bool {
+	if e.Month == -1 {
+		return true
+	}
+	return int(t.Month()) == e.Month
+}
+
+func (e *CronExpr) matchDayOfMonth(t time.Time) bool {
+	if e.DayOfMonth == -1 {
+		return true
+	}
+	return t.Day() == e.DayOfMonth
+}
+
+func (e *CronExpr) matchDayOfWeek(t time.Time) bool {
+	if e.DayOfWeek == -1 {
+		return true
+	}
+	return int(t.Weekday()) == e.DayOfWeek
+}
+
 func (s *Scheduler) AddTask(task *Task) (string, error) {
-	if task == nil {
-		return "", fmt.Errorf("task is required")
-	}
-
-	cloned := cloneTask(task)
-	if cloned.ID == "" {
-		cloned.ID = fmt.Sprintf("task-%d", time.Now().UnixNano())
-	}
-	if cloned.Name == "" {
-		cloned.Name = cloned.ID
-	}
-	if cloned.MaxRetries == 0 {
-		cloned.MaxRetries = 3
-	}
-	if cloned.Timeout == 0 {
-		cloned.Timeout = 300
-	}
-	if cloned.CreatedAt.IsZero() {
-		cloned.CreatedAt = time.Now().UTC()
-	}
-	cloned.UpdatedAt = time.Now().UTC()
-
-	if err := cloned.Validate(); err != nil {
-		return "", err
-	}
-	if cloned.Enabled {
-		next := calculateNextRun(cloned.Schedule, time.Now().UTC(), cloned.Timezone)
-		if next.IsZero() {
-			return "", fmt.Errorf("calculate next run for %q", cloned.Schedule)
-		}
-		cloned.NextRun = &next
-	} else {
-		cloned.NextRun = nil
-	}
-
 	s.mu.Lock()
-	if _, exists := s.tasks[cloned.ID]; exists {
-		s.mu.Unlock()
-		return "", fmt.Errorf("task already exists: %s", cloned.ID)
-	}
-	s.tasks[cloned.ID] = cloned
-	tasksSnapshot := cloneTasksFromMap(s.tasks)
-	persister := s.persister
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
-	if persister != nil {
-		if err := persister.SaveTasks(tasksSnapshot); err != nil {
-			s.recordPersistError(err)
-			return cloned.ID, err
-		}
-		s.recordPersistError(nil)
+	if task.ID == "" {
+		task.ID = fmt.Sprintf("task-%d", time.Now().UnixNano())
 	}
-	return cloned.ID, nil
+	if task.Name == "" {
+		task.Name = task.ID
+	}
+	if task.MaxRetries == 0 {
+		task.MaxRetries = 3
+	}
+	if task.Timeout == 0 {
+		task.Timeout = 300
+	}
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = time.Now()
+	}
+	task.UpdatedAt = time.Now()
+	task.Enabled = true
+
+	if _, err := ParseCronExpr(task.Schedule); err != nil {
+		return "", fmt.Errorf("invalid schedule: %w", err)
+	}
+
+	now := time.Now()
+	next := calculateNextRun(task.Schedule, now)
+	task.NextRun = &next
+
+	s.tasks[task.ID] = task
+
+	return task.ID, nil
 }
 
 func (s *Scheduler) UpdateTask(task *Task) error {
-	if task == nil {
-		return fmt.Errorf("task is required")
-	}
-
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	existing, ok := s.tasks[task.ID]
 	if !ok {
-		s.mu.Unlock()
 		return fmt.Errorf("task not found: %s", task.ID)
 	}
 
-	cloned := cloneTask(task)
-	cloned.CreatedAt = existing.CreatedAt
-	cloned.UpdatedAt = time.Now().UTC()
-	if cloned.MaxRetries == 0 {
-		cloned.MaxRetries = existing.MaxRetries
-	}
-	if cloned.Timeout == 0 {
-		cloned.Timeout = existing.Timeout
-	}
-	if cloned.Schedule == "" {
-		cloned.Schedule = existing.Schedule
-	}
-	if cloned.Command == "" {
-		cloned.Command = existing.Command
-	}
-	if cloned.Name == "" {
-		cloned.Name = existing.Name
-	}
-	if cloned.Timezone == "" {
-		cloned.Timezone = existing.Timezone
-	}
-	if cloned.Input == nil {
-		cloned.Input = cloneMap(existing.Input)
-	}
-	if err := cloned.Validate(); err != nil {
-		s.mu.Unlock()
-		return err
+	if task.Schedule != existing.Schedule {
+		return fmt.Errorf("cannot change schedule for existing task")
 	}
 
-	if cloned.Enabled {
-		next := calculateNextRun(cloned.Schedule, time.Now().UTC(), cloned.Timezone)
-		if !next.IsZero() {
-			cloned.NextRun = &next
-		}
-	} else {
-		cloned.NextRun = nil
-	}
-	s.tasks[cloned.ID] = cloned
-	tasksSnapshot := cloneTasksFromMap(s.tasks)
-	persister := s.persister
-	s.mu.Unlock()
+	task.UpdatedAt = time.Now()
+	task.CreatedAt = existing.CreatedAt
+	task.NextRun = existing.NextRun
+	s.tasks[task.ID] = task
 
-	if persister != nil {
-		if err := persister.SaveTasks(tasksSnapshot); err != nil {
-			s.recordPersistError(err)
-			return err
-		}
-		s.recordPersistError(nil)
-	}
 	return nil
 }
 
 func (s *Scheduler) DeleteTask(taskID string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, ok := s.tasks[taskID]; !ok {
-		s.mu.Unlock()
 		return fmt.Errorf("task not found: %s", taskID)
 	}
-	runID, active := s.activeTaskRuns[taskID]
-	cancel := s.cancelFuncs[runID]
-	done := s.runDone[runID]
-	s.mu.Unlock()
 
-	if active {
-		if cancel != nil {
-			cancel()
-		}
-		if done != nil {
-			<-done
-		}
-	}
-
-	s.mu.Lock()
-	if _, ok := s.tasks[taskID]; !ok {
-		s.mu.Unlock()
-		return nil
-	}
 	delete(s.tasks, taskID)
-	delete(s.taskRuns, taskID)
-	delete(s.activeTaskRuns, taskID)
-	tasksSnapshot := cloneTasksFromMap(s.tasks)
-	runsSnapshot := cloneRunsFromMap(s.taskRuns)
-	persister := s.persister
-	s.mu.Unlock()
-
-	if persister != nil {
-		if err := persister.SaveTasks(tasksSnapshot); err != nil {
-			s.recordPersistError(err)
-			return err
-		}
-		if err := persister.SaveRuns(runsSnapshot); err != nil {
-			s.recordPersistError(err)
-			return err
-		}
-		s.recordPersistError(nil)
-	}
 	return nil
 }
 
 func (s *Scheduler) GetTask(taskID string) (*Task, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	task, ok := s.tasks[taskID]
-	return cloneTask(task), ok
+	t, ok := s.tasks[taskID]
+	return t, ok
 }
 
 func (s *Scheduler) ListTasks() []*Task {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	tasks := cloneTasksFromMap(s.tasks)
-	sort.Slice(tasks, func(i int, j int) bool {
-		return tasks[i].CreatedAt.Before(tasks[j].CreatedAt)
-	})
+	tasks := make([]*Task, 0, len(s.tasks))
+	for _, t := range s.tasks {
+		tasks = append(tasks, t)
+	}
 	return tasks
 }
 
 func (s *Scheduler) EnableTask(taskID string) error {
-	return s.setTaskEnabled(taskID, true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+
+	task.Enabled = true
+	task.UpdatedAt = time.Now()
+	return nil
 }
 
 func (s *Scheduler) DisableTask(taskID string) error {
-	return s.setTaskEnabled(taskID, false)
-}
-
-func (s *Scheduler) setTaskEnabled(taskID string, enabled bool) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	task, ok := s.tasks[taskID]
 	if !ok {
-		s.mu.Unlock()
 		return fmt.Errorf("task not found: %s", taskID)
 	}
-	task.Enabled = enabled
-	task.UpdatedAt = time.Now().UTC()
-	if enabled {
-		next := calculateNextRun(task.Schedule, time.Now().UTC(), task.Timezone)
-		if !next.IsZero() {
-			task.NextRun = &next
-		}
-	} else {
-		task.NextRun = nil
-	}
-	tasksSnapshot := cloneTasksFromMap(s.tasks)
-	persister := s.persister
-	s.mu.Unlock()
 
-	if persister != nil {
-		if err := persister.SaveTasks(tasksSnapshot); err != nil {
-			s.recordPersistError(err)
-			return err
-		}
-		s.recordPersistError(nil)
-	}
+	task.Enabled = false
+	task.UpdatedAt = time.Now()
 	return nil
 }
 
 func (s *Scheduler) RunTaskNow(taskID string) error {
-	s.mu.Lock()
-	task, ok := s.tasks[taskID]
+	s.mu.RLock()
+	_, ok := s.tasks[taskID]
+	s.mu.RUnlock()
+
 	if !ok {
-		s.mu.Unlock()
 		return fmt.Errorf("task not found: %s", taskID)
 	}
-	if !task.Enabled {
-		s.mu.Unlock()
-		return fmt.Errorf("task disabled: %s", taskID)
-	}
-	if _, active := s.activeTaskRuns[taskID]; active {
-		s.mu.Unlock()
-		return fmt.Errorf("task already running: %s", taskID)
-	}
-	runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
-	s.activeTaskRuns[taskID] = runID
-	s.mu.Unlock()
 
-	go s.runTask(taskID, runID)
+	go s.runTask(taskID)
 	return nil
 }
 
-func (s *Scheduler) checkAndRunTasks() {
-	now := time.Now().UTC()
-	type candidate struct {
-		taskID string
-		runID  string
-	}
-
-	candidates := make([]candidate, 0)
-	s.mu.Lock()
-	for _, task := range s.tasks {
-		if !task.Enabled {
-			continue
-		}
-		if _, active := s.activeTaskRuns[task.ID]; active {
-			continue
-		}
-		if task.NextRun == nil {
-			next := calculateNextRun(task.Schedule, now, task.Timezone)
-			if !next.IsZero() {
-				task.NextRun = &next
-			}
-		}
-		if task.NextRun != nil && (now.After(*task.NextRun) || now.Equal(*task.NextRun)) {
-			runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
-			s.activeTaskRuns[task.ID] = runID
-			candidates = append(candidates, candidate{taskID: task.ID, runID: runID})
-		}
-	}
-	s.mu.Unlock()
-
-	for _, task := range candidates {
-		go s.runTask(task.taskID, task.runID)
-	}
-}
-
-func (s *Scheduler) runTask(taskID string, runID string) {
+func (s *Scheduler) runTask(taskID string) {
 	s.mu.Lock()
 	task, ok := s.tasks[taskID]
+	s.mu.Unlock()
+
 	if !ok || !task.Enabled {
-		delete(s.activeTaskRuns, taskID)
-		s.mu.Unlock()
 		return
 	}
 
 	run := &TaskRun{
-		ID:        runID,
+		ID:        fmt.Sprintf("run-%d", time.Now().UnixNano()),
 		TaskID:    taskID,
-		StartTime: time.Now().UTC(),
+		StartTime: time.Now(),
 		Status:    "running",
 	}
 
-	now := time.Now().UTC()
+	s.mu.Lock()
+	now := time.Now()
 	task.LastRun = &now
 	task.NextRun = nil
 	s.taskRuns[taskID] = append(s.taskRuns[taskID], run)
 	if len(s.taskRuns[taskID]) > s.runHistorySize {
 		s.taskRuns[taskID] = s.taskRuns[taskID][len(s.taskRuns[taskID])-s.runHistorySize:]
 	}
-	timeout := time.Duration(task.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 5 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	done := make(chan struct{})
-	s.cancelFuncs[run.ID] = cancel
-	s.runDone[run.ID] = done
-	tasksSnapshot := cloneTasksFromMap(s.tasks)
-	runsSnapshot := cloneRunsFromMap(s.taskRuns)
-	persister := s.persister
-	command := task.Command
-	input := cloneMap(task.Input)
-	maxRetries := task.MaxRetries
-	retryBackoff := task.RetryBackoff
 	s.mu.Unlock()
 
-	s.persistSnapshots(persister, tasksSnapshot, runsSnapshot)
+	timeout := time.Duration(task.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 300 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+
+	s.mu.Lock()
+	s.cancelFuncs[run.ID] = cancel
+	s.mu.Unlock()
 
 	defer func() {
 		cancel()
 		s.mu.Lock()
 		delete(s.cancelFuncs, run.ID)
-		if ch, ok := s.runDone[run.ID]; ok {
-			close(ch)
-			delete(s.runDone, run.ID)
-		}
-		delete(s.activeTaskRuns, taskID)
 		s.mu.Unlock()
 	}()
 
 	var result string
 	var err error
-	retries := 0
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	actualRetries := 0
+
+	for i := 0; i <= task.MaxRetries; i++ {
 		select {
 		case <-ctx.Done():
-			err = ctx.Err()
-		default:
-			if s.executor != nil {
-				result, err = s.executor.Execute(ctx, command, input)
-			} else {
-				result = "No executor configured"
-				err = nil
-			}
-		}
-
-		if err == nil {
-			break
-		}
-		if attempt == maxRetries {
-			break
-		}
-		retries++
-		select {
-		case <-time.After(calculateRetryDelay(attempt, retryBackoff)):
-		case <-ctx.Done():
-			err = ctx.Err()
-			attempt = maxRetries
-		}
-	}
-
-	end := time.Now().UTC()
-
-	s.mu.Lock()
-	task = s.tasks[taskID]
-	run = s.findRunLocked(taskID, runID)
-	if run != nil {
-		run.EndTime = &end
-		run.Retries = retries
-		run.Output = result
-		switch {
-		case err == nil:
-			run.Status = "success"
-		case ctx.Err() != nil:
 			run.Status = "cancelled"
 			run.Cancelled = true
-			run.Error = ctx.Err().Error()
-		default:
-			run.Status = "failed"
-			run.Error = err.Error()
-		}
-	}
-	if task != nil {
-		task.UpdatedAt = end
-		next := calculateNextRun(task.Schedule, end, task.Timezone)
-		if !next.IsZero() && task.Enabled {
+			run.Retries = actualRetries
+			endTime := time.Now()
+			run.EndTime = &endTime
+			s.mu.Lock()
+			task.UpdatedAt = time.Now()
+			next := calculateNextRun(task.Schedule, time.Now())
 			task.NextRun = &next
+			s.mu.Unlock()
+			return
+		default:
+		}
+
+		if s.executor != nil {
+			result, err = s.executor.Execute(ctx, task.Command, task.Input)
 		} else {
-			task.NextRun = nil
+			result = "No executor configured"
 		}
-	}
-	tasksSnapshot = cloneTasksFromMap(s.tasks)
-	runsSnapshot = cloneRunsFromMap(s.taskRuns)
-	persister = s.persister
-	s.mu.Unlock()
 
-	s.persistSnapshots(persister, tasksSnapshot, runsSnapshot)
-}
-
-func (s *Scheduler) GetTaskRuns(taskID string) []*TaskRun {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return cloneTaskRuns(s.taskRuns[taskID])
-}
-
-func (s *Scheduler) GetRunHistory(taskID string, limit int) []*TaskRun {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	runs := cloneTaskRuns(s.taskRuns[taskID])
-	if limit > 0 && len(runs) > limit {
-		runs = runs[len(runs)-limit:]
-	}
-	return runs
-}
-
-func (s *Scheduler) GetAllRuns(limit int) []*TaskRun {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	runs := cloneRunsFromMap(s.taskRuns)
-	sort.Slice(runs, func(i int, j int) bool {
-		return runs[i].StartTime.Before(runs[j].StartTime)
-	})
-	if limit > 0 && len(runs) > limit {
-		runs = runs[len(runs)-limit:]
-	}
-	return runs
-}
-
-func (s *Scheduler) CancelRun(runID string) error {
-	s.mu.RLock()
-	cancel, ok := s.cancelFuncs[runID]
-	s.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("run not found or not running: %s", runID)
-	}
-	cancel()
-	return nil
-}
-
-func (s *Scheduler) ClearHistory(taskID string) error {
-	s.mu.Lock()
-	if _, ok := s.tasks[taskID]; !ok {
-		s.mu.Unlock()
-		return fmt.Errorf("task not found: %s", taskID)
-	}
-	s.taskRuns[taskID] = nil
-	runsSnapshot := cloneRunsFromMap(s.taskRuns)
-	persister := s.persister
-	s.mu.Unlock()
-
-	if persister != nil {
-		if err := persister.SaveRuns(runsSnapshot); err != nil {
-			s.recordPersistError(err)
-			return err
+		if err == nil {
+			break
 		}
-		s.recordPersistError(nil)
-	}
-	return nil
-}
 
-func (s *Scheduler) NextRunTimes(count int) map[string][]time.Time {
-	s.mu.RLock()
-	tasks := cloneTasksFromMap(s.tasks)
-	s.mu.RUnlock()
-
-	result := make(map[string][]time.Time, len(tasks))
-	now := time.Now().UTC()
-	for _, task := range tasks {
-		if !task.Enabled {
-			continue
-		}
-		times, err := nextRunTimesForTask(task, now, count)
-		if err != nil {
-			continue
-		}
-		result[task.ID] = times
-	}
-	return result
-}
-
-func (s *Scheduler) Stats() map[string]any {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	totalTasks := len(s.tasks)
-	enabledTasks := 0
-	totalRuns := 0
-	failedRuns := 0
-	successRuns := 0
-	runningRuns := len(s.cancelFuncs)
-
-	for _, task := range s.tasks {
-		if task.Enabled {
-			enabledTasks++
-		}
-	}
-	for _, runs := range s.taskRuns {
-		totalRuns += len(runs)
-		for _, run := range runs {
-			switch run.Status {
-			case "failed":
-				failedRuns++
-			case "success":
-				successRuns++
+		if i < task.MaxRetries {
+			actualRetries++
+			delay := s.calculateRetryDelay(i, task)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				run.Status = "cancelled"
+				run.Cancelled = true
+				run.Retries = actualRetries
+				endTime := time.Now()
+				run.EndTime = &endTime
+				s.mu.Lock()
+				task.UpdatedAt = time.Now()
+				next := calculateNextRun(task.Schedule, time.Now())
+				task.NextRun = &next
+				s.mu.Unlock()
+				return
 			}
 		}
 	}
 
-	return map[string]any{
-		"total_tasks":   totalTasks,
-		"enabled_tasks": enabledTasks,
-		"total_runs":    totalRuns,
-		"success_runs":  successRuns,
-		"failed_runs":   failedRuns,
-		"running_runs":  runningRuns,
-	}
-}
+	endTime := time.Now()
+	run.EndTime = &endTime
 
-func (s *Scheduler) IsRunning() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.running
-}
-
-func (s *Scheduler) LastPersistenceError() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.lastPersistErr
-}
-
-func (s *Scheduler) MarshalJSON() ([]byte, error) {
-	s.mu.RLock()
-	payload := map[string]any{
-		"tasks": cloneTasksFromMap(s.tasks),
-		"stats": s.statsLocked(),
-	}
-	s.mu.RUnlock()
-	return json.Marshal(payload)
-}
-
-func (t *Task) Validate() error {
-	if t == nil {
-		return fmt.Errorf("task is required")
-	}
-	if strings.TrimSpace(t.Schedule) == "" {
-		return fmt.Errorf("schedule is required")
-	}
-	if strings.TrimSpace(t.Command) == "" {
-		return fmt.Errorf("command is required")
-	}
-	spec, err := ParseCronSpec(t.Schedule)
 	if err != nil {
-		return fmt.Errorf("invalid schedule: %w", err)
+		run.Status = "failed"
+		run.Error = err.Error()
+		run.Output = result
+	} else {
+		run.Status = "success"
+		run.Output = result
 	}
-	if err := spec.Validate(); err != nil {
-		return fmt.Errorf("invalid schedule: %w", err)
-	}
-	if t.Timezone != "" {
-		if _, err := time.LoadLocation(t.Timezone); err != nil {
-			return fmt.Errorf("invalid timezone %q: %w", t.Timezone, err)
+
+	run.Retries = actualRetries
+
+	s.mu.Lock()
+	task.UpdatedAt = time.Now()
+	next := calculateNextRun(task.Schedule, time.Now())
+	task.NextRun = &next
+	s.mu.Unlock()
+
+	// Persist if configured
+	if s.persister != nil {
+		allRuns := make([]*TaskRun, 0)
+		for _, runs := range s.taskRuns {
+			allRuns = append(allRuns, runs...)
 		}
+		_ = s.persister.SaveRuns(allRuns)
 	}
-	return nil
 }
 
-func ParseSchedule(expr string) (string, string, error) {
-	spec, err := ParseCronSpec(expr)
-	if err != nil {
-		return "", "", err
-	}
-	if spec.Every > 0 {
-		return spec.Format(), "interval", nil
-	}
-	return spec.Format(), "standard", nil
-}
-
-func nextRunTimesForTask(task *Task, from time.Time, count int) ([]time.Time, error) {
-	if count <= 0 {
-		return []time.Time{}, nil
-	}
-	loc := time.UTC
-	if task.Timezone != "" {
-		loaded, err := time.LoadLocation(task.Timezone)
-		if err != nil {
-			return nil, err
-		}
-		loc = loaded
-	}
-
-	spec, err := ParseCronSpec(task.Schedule)
-	if err != nil {
-		return nil, err
-	}
-	current := from.In(loc)
-	result := make([]time.Time, 0, count)
-	for len(result) < count {
-		next := spec.Next(current)
-		if next.IsZero() {
-			break
-		}
-		result = append(result, next)
-		current = next
-	}
-	return result, nil
-}
-
-func calculateNextRun(schedule string, from time.Time, timezone string) time.Time {
-	spec, err := ParseCronSpec(schedule)
-	if err != nil {
-		return time.Time{}
-	}
-	loc := from.Location()
-	if timezone != "" {
-		loaded, err := time.LoadLocation(timezone)
-		if err == nil {
-			loc = loaded
-		}
-	}
-	return spec.Next(from.In(loc))
-}
-
-func calculateRetryDelay(attempt int, strategy string) time.Duration {
-	switch strategy {
+func (s *Scheduler) calculateRetryDelay(attempt int, task *Task) time.Duration {
+	switch task.RetryBackoff {
 	case "exponential":
 		return time.Duration(1<<uint(attempt)) * time.Second
 	case "linear":
@@ -827,139 +530,185 @@ func calculateRetryDelay(attempt int, strategy string) time.Duration {
 	}
 }
 
-func (s *Scheduler) statsLocked() map[string]any {
+func (s *Scheduler) GetTaskRuns(taskID string) []*TaskRun {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.taskRuns[taskID]
+}
+
+func (s *Scheduler) GetRunHistory(taskID string, limit int) []*TaskRun {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	runs := s.taskRuns[taskID]
+	if limit > 0 && len(runs) > limit {
+		return runs[len(runs)-limit:]
+	}
+	return runs
+}
+
+func (s *Scheduler) GetAllRuns(limit int) []*TaskRun {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var allRuns []*TaskRun
+	for _, runs := range s.taskRuns {
+		allRuns = append(allRuns, runs...)
+	}
+
+	if len(allRuns) == 0 {
+		return allRuns
+	}
+
+	sortRunsByTime(allRuns)
+
+	if limit > 0 && len(allRuns) > limit {
+		return allRuns[len(allRuns)-limit:]
+	}
+	return allRuns
+}
+
+func sortRunsByTime(runs []*TaskRun) {
+	for i := 1; i < len(runs); i++ {
+		for j := i; j > 0 && runs[j].StartTime.Before(runs[j-1].StartTime); j-- {
+			runs[j], runs[j-1] = runs[j-1], runs[j]
+		}
+	}
+}
+
+func (s *Scheduler) CancelRun(runID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, runs := range s.taskRuns {
+		for _, run := range runs {
+			if run.ID == runID && run.Status == "running" {
+				run.Status = "cancelled"
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("run not found or not running: %s", runID)
+}
+
+func (s *Scheduler) ClearHistory(taskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.tasks[taskID]; !ok {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+
+	s.taskRuns[taskID] = nil
+	return nil
+}
+
+func (s *Scheduler) NextRunTimes(count int) map[string]time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nextTimes := make(map[string]time.Time)
+	for id, task := range s.tasks {
+		if task.Enabled && task.NextRun != nil {
+			nextTimes[id] = *task.NextRun
+		}
+	}
+
+	result := make(map[string]time.Time)
+	for k, v := range nextTimes {
+		result[k] = v
+	}
+
+	return result
+}
+
+func (s *Scheduler) Stats() map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	totalTasks := len(s.tasks)
 	enabledTasks := 0
 	totalRuns := 0
 	failedRuns := 0
 	successRuns := 0
-	runningRuns := len(s.cancelFuncs)
 
 	for _, task := range s.tasks {
 		if task.Enabled {
 			enabledTasks++
 		}
 	}
+
 	for _, runs := range s.taskRuns {
 		totalRuns += len(runs)
 		for _, run := range runs {
-			switch run.Status {
-			case "failed":
+			if run.Status == "failed" {
 				failedRuns++
-			case "success":
+			} else if run.Status == "success" {
 				successRuns++
 			}
 		}
 	}
 
-	return map[string]any{
+	return map[string]interface{}{
 		"total_tasks":   totalTasks,
 		"enabled_tasks": enabledTasks,
 		"total_runs":    totalRuns,
 		"success_runs":  successRuns,
 		"failed_runs":   failedRuns,
-		"running_runs":  runningRuns,
 	}
 }
 
-func (s *Scheduler) persistSnapshots(persister TaskPersister, tasks []*Task, runs []*TaskRun) {
-	if persister == nil {
-		return
-	}
-	if err := persister.SaveTasks(tasks); err != nil {
-		s.recordPersistError(err)
-		return
-	}
-	if err := persister.SaveRuns(runs); err != nil {
-		s.recordPersistError(err)
-		return
-	}
-	s.recordPersistError(nil)
+func (s *Scheduler) IsRunning() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.running
 }
 
-func (s *Scheduler) recordPersistError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.lastPersistErr = err
-}
-
-func (s *Scheduler) findRunLocked(taskID string, runID string) *TaskRun {
-	for _, run := range s.taskRuns[taskID] {
-		if run.ID == runID {
-			return run
-		}
+func (t *Task) Validate() error {
+	if t.Schedule == "" {
+		return fmt.Errorf("schedule is required")
 	}
+
+	if _, err := ParseCronExpr(t.Schedule); err != nil {
+		return fmt.Errorf("invalid schedule: %w", err)
+	}
+
+	if t.Command == "" {
+		return fmt.Errorf("command is required")
+	}
+
 	return nil
 }
 
-func cloneTasksFromMap(tasks map[string]*Task) []*Task {
-	cloned := make([]*Task, 0, len(tasks))
-	for _, task := range tasks {
-		cloned = append(cloned, cloneTask(task))
+func ParseSchedule(expr string) (string, string, error) {
+	specs := map[string]string{
+		"@yearly":   "0 0 1 1 *",
+		"@annually": "0 0 1 1 *",
+		"@monthly":  "0 0 1 * *",
+		"@weekly":   "0 0 * * 0",
+		"@daily":    "0 0 * * *",
+		"@midnight": "0 0 * * *",
+		"@hourly":   "0 * * * *",
 	}
-	return cloned
+
+	if spec, ok := specs[expr]; ok {
+		return spec, "standard", nil
+	}
+
+	if _, err := ParseCronExpr(expr); err == nil {
+		return expr, "standard", nil
+	}
+
+	return "", "", fmt.Errorf("invalid cron expression: %s", expr)
 }
 
-func cloneRunsFromMap(taskRuns map[string][]*TaskRun) []*TaskRun {
-	var cloned []*TaskRun
-	for _, runs := range taskRuns {
-		cloned = append(cloned, cloneTaskRuns(runs)...)
-	}
-	return cloned
-}
+func (s *Scheduler) MarshalJSON() ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-func cloneTasks(tasks []*Task) []*Task {
-	cloned := make([]*Task, 0, len(tasks))
-	for _, task := range tasks {
-		cloned = append(cloned, cloneTask(task))
-	}
-	return cloned
-}
-
-func cloneTaskRuns(runs []*TaskRun) []*TaskRun {
-	cloned := make([]*TaskRun, 0, len(runs))
-	for _, run := range runs {
-		cloned = append(cloned, cloneTaskRun(run))
-	}
-	return cloned
-}
-
-func cloneTask(task *Task) *Task {
-	if task == nil {
-		return nil
-	}
-	cloned := *task
-	cloned.Input = cloneMap(task.Input)
-	if task.LastRun != nil {
-		lastRun := *task.LastRun
-		cloned.LastRun = &lastRun
-	}
-	if task.NextRun != nil {
-		nextRun := *task.NextRun
-		cloned.NextRun = &nextRun
-	}
-	return &cloned
-}
-
-func cloneTaskRun(run *TaskRun) *TaskRun {
-	if run == nil {
-		return nil
-	}
-	cloned := *run
-	if run.EndTime != nil {
-		end := *run.EndTime
-		cloned.EndTime = &end
-	}
-	return &cloned
-}
-
-func cloneMap(input map[string]any) map[string]any {
-	if len(input) == 0 {
-		return nil
-	}
-	cloned := make(map[string]any, len(input))
-	for key, value := range input {
-		cloned[key] = value
-	}
-	return cloned
+	return json.Marshal(map[string]interface{}{
+		"tasks": s.tasks,
+		"stats": s.Stats(),
+	})
 }

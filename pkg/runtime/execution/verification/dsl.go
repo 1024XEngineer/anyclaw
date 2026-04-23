@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -339,12 +338,6 @@ func (e *VerificationExecutor) executeCondition(ctx context.Context, condition *
 	}
 	var lastResult *VerificationResult
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return NewVerificationResult(condition.Type, false).
-				WithError(err.Error()).
-				WithRetries(attempt).
-				WithMessage("verification canceled")
-		}
 		result := e.verify(ctx, condition.Type, condition.Parameters)
 		if result.Passed {
 			result.Retries = attempt
@@ -355,12 +348,7 @@ func (e *VerificationExecutor) executeCondition(ctx context.Context, condition *
 		if attempt < maxRetries-1 {
 			select {
 			case <-ctx.Done():
-				lastResult = NewVerificationResult(condition.Type, false).
-					WithError(ctx.Err().Error()).
-					WithRetries(attempt + 1).
-					WithMessage("verification canceled")
-				lastResult.Duration = time.Since(start)
-				return lastResult
+				break
 			case <-time.After(retryDelay):
 				retryDelay = time.Duration(float64(retryDelay) * 1.5)
 				if retryDelay > 30*time.Second {
@@ -418,8 +406,6 @@ func (e *VerificationExecutor) verify(ctx context.Context, vType VerificationTyp
 		return e.verifyElementVisible(params)
 	case VerificationTypeElementNotVisible:
 		return e.verifyElementNotVisible(params)
-	case VerificationTypeScreenshot:
-		return e.verifyScreenshot(params)
 	case VerificationTypeCustom:
 		return e.verifyCustom(params)
 	default:
@@ -685,21 +671,18 @@ func (e *VerificationExecutor) verifyNetwork(params map[string]any) *Verificatio
 
 func (e *VerificationExecutor) verifyNetworkStatus(params map[string]any) *VerificationResult {
 	url, _ := params["url"].(string)
+	expectedStatus, _ := params["status"].(float64)
 	if url == "" {
 		return NewVerificationResult(VerificationTypeNetworkStatus, false).WithError("missing url parameter")
-	}
-	expectedStatus, ok := intParam(params["status"])
-	if !ok {
-		return NewVerificationResult(VerificationTypeNetworkStatus, false).WithError("missing or invalid status parameter")
 	}
 	statusCode, err := e.context.NetworkRequest(url)
 	if err != nil {
 		return NewVerificationResult(VerificationTypeNetworkStatus, false).WithError(err.Error())
 	}
-	result := NewVerificationResult(VerificationTypeNetworkStatus, expectedStatus == statusCode)
+	result := NewVerificationResult(VerificationTypeNetworkStatus, int(expectedStatus) == statusCode)
 	result.WithActual("status_code", statusCode)
-	result.WithExpected("status", expectedStatus)
-	result.WithMessage(fmt.Sprintf("network status %d matches expected %d", statusCode, expectedStatus))
+	result.WithExpected("status", int(expectedStatus))
+	result.WithMessage(fmt.Sprintf("network status %d matches expected %d", statusCode, int(expectedStatus)))
 	return result
 }
 
@@ -840,21 +823,6 @@ func (e *VerificationExecutor) verifyElementNotVisible(params map[string]any) *V
 	return result
 }
 
-func (e *VerificationExecutor) verifyScreenshot(params map[string]any) *VerificationResult {
-	data, err := e.context.Screenshot()
-	if err != nil {
-		return NewVerificationResult(VerificationTypeScreenshot, false).WithError(err.Error())
-	}
-	result := NewVerificationResult(VerificationTypeScreenshot, len(data) > 0)
-	result.WithActual("bytes", len(data))
-	result.WithMessage(fmt.Sprintf("captured screenshot with %d bytes", len(data)))
-	if len(data) == 0 {
-		result.Passed = false
-		result.Error = "empty screenshot"
-	}
-	return result
-}
-
 func (e *VerificationExecutor) verifyCustom(params map[string]any) *VerificationResult {
 	name, _ := params["name"].(string)
 	if name == "" {
@@ -872,38 +840,4 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-func intParam(value any) (int, bool) {
-	switch v := value.(type) {
-	case int:
-		return v, true
-	case int8:
-		return int(v), true
-	case int16:
-		return int(v), true
-	case int32:
-		return int(v), true
-	case int64:
-		return int(v), true
-	case uint:
-		return int(v), true
-	case uint8:
-		return int(v), true
-	case uint16:
-		return int(v), true
-	case uint32:
-		return int(v), true
-	case uint64:
-		return int(v), true
-	case float32:
-		return int(v), true
-	case float64:
-		return int(v), true
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		return n, err == nil
-	default:
-		return 0, false
-	}
 }

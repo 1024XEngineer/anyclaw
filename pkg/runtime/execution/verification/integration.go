@@ -37,11 +37,10 @@ func (ie *IntegrationExecutor) initContext() {
 
 type IntegrationContext struct {
 	toolExec ToolExecutor
-	ctx      context.Context
 }
 
 func (ic *IntegrationContext) FileExists(path string) (bool, error) {
-	result, err := ic.toolExec(ic.execContext(), "file_exists", map[string]any{"path": path})
+	result, err := ic.toolExec(context.Background(), "file_exists", map[string]any{"path": path})
 	if err != nil {
 		return false, err
 	}
@@ -49,7 +48,7 @@ func (ic *IntegrationContext) FileExists(path string) (bool, error) {
 }
 
 func (ic *IntegrationContext) FileContains(path string, content string) (bool, error) {
-	result, err := ic.toolExec(ic.execContext(), "read_file", map[string]any{"path": path})
+	result, err := ic.toolExec(context.Background(), "read_file", map[string]any{"path": path})
 	if err != nil {
 		return false, err
 	}
@@ -57,7 +56,7 @@ func (ic *IntegrationContext) FileContains(path string, content string) (bool, e
 }
 
 func (ic *IntegrationContext) FileMatches(path string, pattern string) (bool, error) {
-	result, err := ic.toolExec(ic.execContext(), "read_file", map[string]any{"path": path})
+	result, err := ic.toolExec(context.Background(), "read_file", map[string]any{"path": path})
 	if err != nil {
 		return false, err
 	}
@@ -65,7 +64,7 @@ func (ic *IntegrationContext) FileMatches(path string, pattern string) (bool, er
 }
 
 func (ic *IntegrationContext) WindowAppears(title string) (bool, error) {
-	result, err := ic.toolExec(ic.execContext(), "desktop_list_windows", nil)
+	result, err := ic.toolExec(context.Background(), "desktop_list_windows", nil)
 	if err != nil {
 		return false, err
 	}
@@ -73,7 +72,7 @@ func (ic *IntegrationContext) WindowAppears(title string) (bool, error) {
 }
 
 func (ic *IntegrationContext) WindowFocused(title string) (bool, error) {
-	result, err := ic.toolExec(ic.execContext(), "desktop_get_foreground_window", nil)
+	result, err := ic.toolExec(context.Background(), "desktop_get_foreground_window", nil)
 	if err != nil {
 		return false, err
 	}
@@ -81,7 +80,7 @@ func (ic *IntegrationContext) WindowFocused(title string) (bool, error) {
 }
 
 func (ic *IntegrationContext) TextContains(x, y, width, height int, text string) (bool, error) {
-	result, err := ic.toolExec(ic.execContext(), "desktop_ocr", map[string]any{
+	result, err := ic.toolExec(context.Background(), "desktop_ocr", map[string]any{
 		"x": x, "y": y, "width": width, "height": height,
 	})
 	if err != nil {
@@ -91,13 +90,13 @@ func (ic *IntegrationContext) TextContains(x, y, width, height int, text string)
 }
 
 func (ic *IntegrationContext) OCRText(x, y, width, height int) (string, error) {
-	return ic.toolExec(ic.execContext(), "desktop_ocr", map[string]any{
+	return ic.toolExec(context.Background(), "desktop_ocr", map[string]any{
 		"x": x, "y": y, "width": width, "height": height,
 	})
 }
 
 func (ic *IntegrationContext) Clipboard() (string, error) {
-	return ic.toolExec(ic.execContext(), "clipboard_read", nil)
+	return ic.toolExec(context.Background(), "clipboard_read", nil)
 }
 
 func (ic *IntegrationContext) ClipboardContains(content string) (bool, bool) {
@@ -109,7 +108,7 @@ func (ic *IntegrationContext) ClipboardContains(content string) (bool, bool) {
 }
 
 func (ic *IntegrationContext) NetworkRequest(url string) (int, error) {
-	result, err := ic.toolExec(ic.execContext(), "http_request", map[string]any{
+	result, err := ic.toolExec(context.Background(), "http_request", map[string]any{
 		"url": url, "method": "GET",
 	})
 	if err != nil {
@@ -128,7 +127,7 @@ func (ic *IntegrationContext) NetworkRequest(url string) (int, error) {
 }
 
 func (ic *IntegrationContext) AppRunning(appName string) (bool, error) {
-	result, err := ic.toolExec(ic.execContext(), "desktop_list_windows", nil)
+	result, err := ic.toolExec(context.Background(), "desktop_list_windows", nil)
 	if err != nil {
 		return false, err
 	}
@@ -144,7 +143,7 @@ func (ic *IntegrationContext) AppState(appName string) (map[string]any, error) {
 }
 
 func (ic *IntegrationContext) ElementVisible(selector string) (bool, error) {
-	result, err := ic.toolExec(ic.execContext(), "desktop_find_element", map[string]any{
+	result, err := ic.toolExec(context.Background(), "desktop_find_element", map[string]any{
 		"selector": selector,
 	})
 	if err != nil {
@@ -154,7 +153,7 @@ func (ic *IntegrationContext) ElementVisible(selector string) (bool, error) {
 }
 
 func (ic *IntegrationContext) Screenshot() ([]byte, error) {
-	result, err := ic.toolExec(ic.execContext(), "desktop_screenshot", nil)
+	result, err := ic.toolExec(context.Background(), "desktop_screenshot", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -163,13 +162,6 @@ func (ic *IntegrationContext) Screenshot() ([]byte, error) {
 
 func (ic *IntegrationContext) CustomVerify(name string, params map[string]any) (*VerificationResult, error) {
 	return nil, fmt.Errorf("custom verify '%s' not implemented", name)
-}
-
-func (ic *IntegrationContext) execContext() context.Context {
-	if ic != nil && ic.ctx != nil {
-		return ic.ctx
-	}
-	return context.Background()
 }
 
 func (ie *IntegrationExecutor) ExecuteFromDesktopPlan(ctx context.Context, check *desktopexec.DesktopPlanCheck) (*Result, error) {
@@ -196,14 +188,7 @@ func (ie *IntegrationExecutor) ExecuteFromDesktopPlan(ctx context.Context, check
 			},
 		},
 	}
-	executor := &VerificationExecutor{
-		context: &IntegrationContext{
-			toolExec: ie.toolExec,
-			ctx:      ctx,
-		},
-		registry: ie.registry,
-	}
-	return executor.Execute(ctx, spec)
+	return ie.executor.Execute(ctx, spec)
 }
 
 func (ie *IntegrationExecutor) mapToolToVerificationType(toolName string) VerificationType {

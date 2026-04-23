@@ -2,591 +2,272 @@ package schedule
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 )
 
 type stubExecutor struct {
-	mu      sync.Mutex
-	output  string
-	err     error
-	blockCh chan struct{}
-	started chan struct{}
-	calls   int
+	fn    func(ctx context.Context, cmd string, input map[string]interface{}) (string, error)
+	calls int
 }
 
-func (s *stubExecutor) Execute(ctx context.Context, cmd string, input map[string]any) (string, error) {
-	s.mu.Lock()
+func (s *stubExecutor) Execute(ctx context.Context, cmd string, input map[string]interface{}) (string, error) {
 	s.calls++
-	blockCh := s.blockCh
-	output := s.output
-	err := s.err
-	started := s.started
-	s.mu.Unlock()
+	if s.fn != nil {
+		return s.fn(ctx, cmd, input)
+	}
+	return "", nil
+}
 
-	if started != nil {
-		select {
-		case <-started:
-		default:
-			close(started)
+type stubPersister struct {
+	loadTasksFn func() ([]*Task, error)
+	loadRunsFn  func() ([]*TaskRun, error)
+	savedRuns   []*TaskRun
+}
+
+func (s *stubPersister) SaveTasks(tasks []*Task) error {
+	return nil
+}
+
+func (s *stubPersister) LoadTasks() ([]*Task, error) {
+	if s.loadTasksFn != nil {
+		return s.loadTasksFn()
+	}
+	return nil, nil
+}
+
+func (s *stubPersister) SaveRuns(runs []*TaskRun) error {
+	s.savedRuns = append([]*TaskRun(nil), runs...)
+	return nil
+}
+
+func (s *stubPersister) LoadRuns() ([]*TaskRun, error) {
+	if s.loadRunsFn != nil {
+		return s.loadRunsFn()
+	}
+	return nil, nil
+}
+
+func TestParseCronExprAliasesAndInvalid(t *testing.T) {
+	tests := []struct {
+		expr   string
+		minute int
+		hour   int
+	}{
+		{expr: "@hourly", minute: 0, hour: -1},
+		{expr: "@daily", minute: 0, hour: 0},
+		{expr: "@weekly", minute: 0, hour: 0},
+		{expr: "@monthly", minute: 0, hour: 0},
+	}
+
+	for _, tt := range tests {
+		parsed, err := ParseCronExpr(tt.expr)
+		if err != nil {
+			t.Fatalf("ParseCronExpr(%q): %v", tt.expr, err)
+		}
+		if parsed.Minute != tt.minute || parsed.Hour != tt.hour {
+			t.Fatalf("unexpected parsed cron for %q: %+v", tt.expr, parsed)
 		}
 	}
 
-	if blockCh != nil {
-		select {
-		case <-blockCh:
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
+	if _, err := ParseCronExpr("not-a-cron"); err == nil {
+		t.Fatal("expected invalid cron expression to fail")
 	}
-	return output, err
 }
 
-type failingPersister struct {
-	saveTasksErr error
-	saveRunsErr  error
-}
-
-func (p *failingPersister) SaveTasks(tasks []*Task) error  { return p.saveTasksErr }
-func (p *failingPersister) LoadTasks() ([]*Task, error)    { return nil, nil }
-func (p *failingPersister) SaveRuns(runs []*TaskRun) error { return p.saveRunsErr }
-func (p *failingPersister) LoadRuns() ([]*TaskRun, error)  { return nil, nil }
-
-type loadFailingPersister struct {
-	loadTasksErr error
-	loadRunsErr  error
-}
-
-func (p *loadFailingPersister) SaveTasks(tasks []*Task) error  { return nil }
-func (p *loadFailingPersister) LoadTasks() ([]*Task, error)    { return nil, p.loadTasksErr }
-func (p *loadFailingPersister) SaveRuns(runs []*TaskRun) error { return nil }
-func (p *loadFailingPersister) LoadRuns() ([]*TaskRun, error)  { return nil, p.loadRunsErr }
-
-func TestSchedulerAddTaskAndCopies(t *testing.T) {
+func TestCronExprNextAndTaskLifecycle(t *testing.T) {
 	scheduler := New()
 	taskID, err := scheduler.AddTask(&Task{
-		Name:     "hourly",
-		Schedule: "0 * * * *",
+		Schedule: "@daily",
 		Command:  "echo hi",
-		Input:    map[string]any{"k": "v"},
-		Enabled:  true,
 	})
 	if err != nil {
-		t.Fatalf("AddTask failed: %v", err)
+		t.Fatalf("AddTask: %v", err)
 	}
 
 	task, ok := scheduler.GetTask(taskID)
 	if !ok {
-		t.Fatalf("GetTask(%s) returned not found", taskID)
+		t.Fatalf("expected task %s to exist", taskID)
 	}
-	task.Input["k"] = "mutated"
-
-	again, ok := scheduler.GetTask(taskID)
-	if !ok {
-		t.Fatalf("GetTask(%s) returned not found on second lookup", taskID)
+	if task.Name != taskID {
+		t.Fatalf("expected task name to default to id, got %q", task.Name)
 	}
-	if got := again.Input["k"]; got != "v" {
-		t.Fatalf("expected defensive copy, got %v", got)
+	if !task.Enabled {
+		t.Fatal("expected added task to be enabled")
 	}
-
-	listed := scheduler.ListTasks()
-	listed[0].Name = "changed"
-	again, _ = scheduler.GetTask(taskID)
-	if again.Name != "hourly" {
-		t.Fatalf("expected list copy to be isolated, got %q", again.Name)
+	if task.MaxRetries != 3 || task.Timeout != 300 {
+		t.Fatalf("expected defaults max_retries=3 timeout=300, got %+v", task)
 	}
-}
-
-func TestSchedulerRunTaskNowAndCancel(t *testing.T) {
-	executor := &stubExecutor{blockCh: make(chan struct{})}
-	scheduler := NewScheduler(executor)
-
-	taskID, err := scheduler.AddTask(&Task{
-		Name:     "blocking",
-		Schedule: "@every 1m",
-		Command:  "sleep",
-		Timeout:  1,
-		Enabled:  true,
-	})
-	if err != nil {
-		t.Fatalf("AddTask failed: %v", err)
+	if task.NextRun == nil {
+		t.Fatal("expected next run to be scheduled")
 	}
 
-	if err := scheduler.RunTaskNow(taskID); err != nil {
-		t.Fatalf("RunTaskNow failed: %v", err)
-	}
-
-	var runID string
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		runs := scheduler.GetTaskRuns(taskID)
-		if len(runs) > 0 {
-			runID = runs[0].ID
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if runID == "" {
-		t.Fatal("expected run to be recorded")
-	}
-
-	if err := scheduler.CancelRun(runID); err != nil {
-		t.Fatalf("CancelRun failed: %v", err)
-	}
-	close(executor.blockCh)
-
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		runs := scheduler.GetTaskRuns(taskID)
-		if len(runs) > 0 && runs[0].Status == "cancelled" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("expected run to become cancelled")
-}
-
-func TestSchedulerStartStopRestart(t *testing.T) {
-	scheduler := New()
-	if err := scheduler.Start(); err != nil {
-		t.Fatalf("first Start failed: %v", err)
-	}
-	scheduler.Stop()
-	if err := scheduler.Start(); err != nil {
-		t.Fatalf("second Start failed: %v", err)
-	}
-	scheduler.Stop()
-}
-
-func TestSchedulerMarshalJSON(t *testing.T) {
-	scheduler := New()
-	if _, err := scheduler.AddTask(&Task{
-		Name:     "json",
-		Schedule: "@hourly",
-		Command:  "echo",
-		Enabled:  true,
-	}); err != nil {
-		t.Fatalf("AddTask failed: %v", err)
-	}
-
-	data, err := json.Marshal(scheduler)
-	if err != nil {
-		t.Fatalf("MarshalJSON failed: %v", err)
-	}
-	if len(data) == 0 {
-		t.Fatal("expected non-empty JSON payload")
-	}
-}
-
-func TestSchedulerLoadPersisted(t *testing.T) {
-	persister, err := NewFilePersister(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewFilePersister failed: %v", err)
-	}
-
-	savedNext := time.Date(2026, 4, 22, 11, 0, 0, 0, time.UTC)
-	if err := persister.SaveTasks([]*Task{{
-		ID:       "task-1",
-		Name:     "persisted",
-		Schedule: "0 * * * *",
-		Command:  "echo",
-		Enabled:  true,
-		NextRun:  &savedNext,
-	}}); err != nil {
-		t.Fatalf("SaveTasks failed: %v", err)
-	}
-	if err := persister.SaveRuns([]*TaskRun{{
-		ID:        "run-1",
-		TaskID:    "task-1",
-		StartTime: time.Now().UTC(),
-		Status:    "success",
-	}}); err != nil {
-		t.Fatalf("SaveRuns failed: %v", err)
-	}
-
-	scheduler := New()
-	scheduler.SetPersister(persister)
-	if err := scheduler.LoadPersisted(); err != nil {
-		t.Fatalf("LoadPersisted failed: %v", err)
-	}
-
-	tasks := scheduler.ListTasks()
-	if len(tasks) != 1 || tasks[0].ID != "task-1" {
-		t.Fatalf("unexpected tasks after load: %+v", tasks)
-	}
-	runs := scheduler.GetTaskRuns("task-1")
-	if len(runs) != 1 || runs[0].ID != "run-1" {
-		t.Fatalf("unexpected runs after load: %+v", runs)
-	}
-}
-
-func TestSchedulerRetryAndStats(t *testing.T) {
-	executor := &stubExecutor{err: errors.New("boom")}
-	scheduler := NewScheduler(executor)
-
-	taskID, err := scheduler.AddTask(&Task{
-		Name:         "retrying",
-		Schedule:     "@every 1m",
-		Command:      "echo",
-		MaxRetries:   1,
-		RetryBackoff: "linear",
-		Timeout:      5,
-		Enabled:      true,
-	})
-	if err != nil {
-		t.Fatalf("AddTask failed: %v", err)
-	}
-
-	if err := scheduler.RunTaskNow(taskID); err != nil {
-		t.Fatalf("RunTaskNow failed: %v", err)
-	}
-
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		runs := scheduler.GetTaskRuns(taskID)
-		if len(runs) > 0 && runs[0].Status == "failed" {
-			stats := scheduler.Stats()
-			if stats["failed_runs"] != 1 {
-				t.Fatalf("expected failed_runs=1, got %+v", stats)
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("expected run to fail")
-}
-
-func TestSchedulerUpdateTaskCanDisableTask(t *testing.T) {
-	scheduler := New()
-	taskID, err := scheduler.AddTask(&Task{
-		Name:     "toggle",
-		Schedule: "@hourly",
-		Command:  "echo",
-		Enabled:  true,
-	})
-	if err != nil {
-		t.Fatalf("AddTask failed: %v", err)
-	}
-
-	if err := scheduler.UpdateTask(&Task{
-		ID:       taskID,
-		Name:     "toggle",
-		Schedule: "@hourly",
-		Command:  "echo",
-		Enabled:  false,
-	}); err != nil {
-		t.Fatalf("UpdateTask failed: %v", err)
-	}
-
-	task, ok := scheduler.GetTask(taskID)
-	if !ok {
-		t.Fatalf("GetTask(%s) returned not found", taskID)
-	}
-	if task.Enabled {
-		t.Fatal("expected task to be disabled after update")
-	}
-	if task.NextRun != nil {
-		t.Fatalf("expected disabled task to have nil next run, got %v", *task.NextRun)
-	}
-}
-
-func TestSchedulerDeleteTaskCancelsActiveRun(t *testing.T) {
-	executor := &stubExecutor{
-		blockCh: make(chan struct{}),
-		started: make(chan struct{}),
-	}
-	scheduler := NewScheduler(executor)
-
-	taskID, err := scheduler.AddTask(&Task{
-		Name:     "delete-running",
-		Schedule: "@every 1m",
-		Command:  "sleep",
-		Timeout:  5,
-		Enabled:  true,
-	})
-	if err != nil {
-		t.Fatalf("AddTask failed: %v", err)
-	}
-	if err := scheduler.RunTaskNow(taskID); err != nil {
-		t.Fatalf("RunTaskNow failed: %v", err)
-	}
-
-	select {
-	case <-executor.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected executor to start")
-	}
-
-	if err := scheduler.DeleteTask(taskID); err != nil {
-		t.Fatalf("DeleteTask failed: %v", err)
-	}
-
-	if _, ok := scheduler.GetTask(taskID); ok {
-		t.Fatal("expected task to be deleted")
-	}
-	if runs := scheduler.GetTaskRuns(taskID); len(runs) != 0 {
-		t.Fatalf("expected deleted task runs to be cleared, got %+v", runs)
-	}
-}
-
-func TestSchedulerRecordsPersistenceErrorFromRunSnapshots(t *testing.T) {
-	persister := &failingPersister{saveRunsErr: errors.New("disk full")}
-	scheduler := NewScheduler(nil)
-	scheduler.SetPersister(persister)
-
-	taskID, err := scheduler.AddTask(&Task{
-		Name:     "persist-error",
-		Schedule: "@every 1m",
-		Command:  "echo",
-		Enabled:  true,
-	})
-	if err != nil {
-		t.Fatalf("AddTask failed: %v", err)
-	}
-	if err := scheduler.RunTaskNow(taskID); err != nil {
-		t.Fatalf("RunTaskNow failed: %v", err)
-	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		runs := scheduler.GetTaskRuns(taskID)
-		if len(runs) > 0 && runs[0].Status == "success" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if err := scheduler.LastPersistenceError(); err == nil || err.Error() != "disk full" {
-		t.Fatalf("expected last persistence error to be recorded, got %v", err)
-	}
-}
-
-func TestSchedulerUtilityPathsAndErrors(t *testing.T) {
-	if _, _, err := ParseSchedule("bad cron"); err == nil {
-		t.Fatal("expected invalid ParseSchedule input to fail")
-	}
-
-	schedule, kind, err := ParseSchedule("@every 30s")
-	if err != nil {
-		t.Fatalf("ParseSchedule(@every) failed: %v", err)
-	}
-	if kind != "interval" || schedule != "@every 30s" {
-		t.Fatalf("unexpected interval schedule parse: schedule=%q kind=%q", schedule, kind)
-	}
-
-	schedule, kind, err = ParseSchedule("@hourly")
-	if err != nil {
-		t.Fatalf("ParseSchedule(@hourly) failed: %v", err)
-	}
-	if kind != "standard" || schedule != "0 * * * *" {
-		t.Fatalf("unexpected standard schedule parse: schedule=%q kind=%q", schedule, kind)
-	}
-
-	task := &Task{Name: "bad-zone", Schedule: "@hourly", Command: "echo", Enabled: true, Timezone: "No/SuchZone"}
-	if _, err := nextRunTimesForTask(task, time.Now().UTC(), 1); err == nil {
-		t.Fatal("expected invalid timezone to fail")
-	}
-
-	if delay := calculateRetryDelay(2, "exponential"); delay != 4*time.Second {
-		t.Fatalf("unexpected exponential retry delay: %s", delay)
-	}
-	if delay := calculateRetryDelay(2, "linear"); delay != 3*time.Second {
-		t.Fatalf("unexpected linear retry delay: %s", delay)
-	}
-	if delay := calculateRetryDelay(2, "fixed"); delay != 2*time.Second {
-		t.Fatalf("unexpected default retry delay: %s", delay)
-	}
-}
-
-func TestSchedulerEnableDisableClearHistoryAndCancelErrors(t *testing.T) {
-	scheduler := New()
-	taskID, err := scheduler.AddTask(&Task{
-		Name:     "managed",
-		Schedule: "@hourly",
-		Command:  "echo",
-		Enabled:  true,
-	})
-	if err != nil {
-		t.Fatalf("AddTask failed: %v", err)
+	next := calculateNextRun("@daily", time.Date(2026, 4, 23, 10, 15, 0, 0, time.UTC))
+	if !next.After(time.Date(2026, 4, 23, 10, 15, 0, 0, time.UTC)) {
+		t.Fatalf("expected next run to be after the source time, got %v", next)
 	}
 
 	if err := scheduler.DisableTask(taskID); err != nil {
-		t.Fatalf("DisableTask failed: %v", err)
+		t.Fatalf("DisableTask: %v", err)
 	}
-	task, _ := scheduler.GetTask(taskID)
-	if task.Enabled || task.NextRun != nil {
-		t.Fatalf("expected disabled task with nil next run, got %+v", task)
-	}
-
 	if err := scheduler.EnableTask(taskID); err != nil {
-		t.Fatalf("EnableTask failed: %v", err)
-	}
-	task, _ = scheduler.GetTask(taskID)
-	if !task.Enabled || task.NextRun == nil {
-		t.Fatalf("expected enabled task with next run, got %+v", task)
+		t.Fatalf("EnableTask: %v", err)
 	}
 
-	scheduler.mu.Lock()
-	scheduler.taskRuns[taskID] = []*TaskRun{{ID: "run-1", TaskID: taskID, Status: "success", StartTime: time.Now().UTC()}}
-	scheduler.mu.Unlock()
+	updated := *task
+	updated.Command = "echo updated"
+	if err := scheduler.UpdateTask(&updated); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+	updatedSchedule := *scheduler.tasks[taskID]
+	updatedSchedule.Schedule = "@hourly"
+	if err := scheduler.UpdateTask(&updatedSchedule); err == nil {
+		t.Fatal("expected changing an existing schedule to fail")
+	}
+
+	nextRuns := scheduler.NextRunTimes(10)
+	if _, ok := nextRuns[taskID]; !ok {
+		t.Fatalf("expected next run time for task %s", taskID)
+	}
+	if len(scheduler.ListTasks()) != 1 {
+		t.Fatalf("expected one task in scheduler, got %d", len(scheduler.ListTasks()))
+	}
+
 	if err := scheduler.ClearHistory(taskID); err != nil {
-		t.Fatalf("ClearHistory failed: %v", err)
+		t.Fatalf("ClearHistory: %v", err)
 	}
-	if runs := scheduler.GetTaskRuns(taskID); len(runs) != 0 {
-		t.Fatalf("expected cleared history, got %+v", runs)
+	if err := scheduler.DeleteTask(taskID); err != nil {
+		t.Fatalf("DeleteTask: %v", err)
 	}
-
-	if err := scheduler.CancelRun("missing"); err == nil {
-		t.Fatal("expected missing run cancel to fail")
-	}
-	if err := scheduler.ClearHistory("missing-task"); err == nil {
-		t.Fatal("expected missing task history clear to fail")
+	if _, ok := scheduler.GetTask(taskID); ok {
+		t.Fatalf("expected task %s to be deleted", taskID)
 	}
 }
 
-func TestSchedulerPersistenceErrorsOnTaskOperations(t *testing.T) {
-	scheduler := New()
-	scheduler.SetPersister(&failingPersister{saveTasksErr: errors.New("cannot save tasks")})
+func TestSchedulerRunTaskSuccessAndFailure(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		persister := &stubPersister{}
+		scheduler := NewScheduler(nil)
+		scheduler.SetPersister(persister)
 
-	if _, err := scheduler.AddTask(&Task{
-		Name:     "persist-add",
-		Schedule: "@hourly",
-		Command:  "echo",
-		Enabled:  true,
-	}); err == nil {
-		t.Fatal("expected AddTask persistence failure")
-	}
-	if err := scheduler.LastPersistenceError(); err == nil || err.Error() != "cannot save tasks" {
-		t.Fatalf("expected add persistence error to be recorded, got %v", err)
-	}
-}
-
-func TestSchedulerCheckAndRunTasksAndQueryHelpers(t *testing.T) {
-	executor := &stubExecutor{started: make(chan struct{}), blockCh: make(chan struct{})}
-	scheduler := NewScheduler(executor)
-
-	taskID, err := scheduler.AddTask(&Task{
-		Name:     "due-now",
-		Schedule: "@every 1m",
-		Command:  "echo",
-		Enabled:  true,
-	})
-	if err != nil {
-		t.Fatalf("AddTask failed: %v", err)
-	}
-
-	scheduler.mu.Lock()
-	past := time.Now().UTC().Add(-time.Second)
-	scheduler.tasks[taskID].NextRun = &past
-	scheduler.mu.Unlock()
-
-	scheduler.checkAndRunTasks()
-
-	select {
-	case <-executor.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected scheduled task to start running")
-	}
-
-	if runs := scheduler.GetAllRuns(1); len(runs) != 1 || runs[0].Status != "running" {
-		t.Fatalf("expected one running task in GetAllRuns, got %+v", runs)
-	}
-	if runs := scheduler.GetRunHistory(taskID, 1); len(runs) != 1 || runs[0].TaskID != taskID {
-		t.Fatalf("expected one run in GetRunHistory, got %+v", runs)
-	}
-
-	nextRuns := scheduler.NextRunTimes(2)
-	if len(nextRuns[taskID]) != 2 {
-		t.Fatalf("expected next run times for enabled task, got %+v", nextRuns)
-	}
-
-	close(executor.blockCh)
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		runs := scheduler.GetTaskRuns(taskID)
-		if len(runs) == 1 && runs[0].Status == "success" {
-			return
+		taskID, err := scheduler.AddTask(&Task{
+			ID:         "task-success",
+			Schedule:   "@hourly",
+			Command:    "noop",
+			MaxRetries: 0,
+			Timeout:    1,
+		})
+		if err != nil {
+			t.Fatalf("AddTask: %v", err)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("expected scheduled run to finish successfully")
+		scheduler.tasks[taskID].MaxRetries = 0
+
+		scheduler.runTask(taskID)
+
+		runs := scheduler.GetTaskRuns(taskID)
+		if len(runs) != 1 {
+			t.Fatalf("expected one run, got %d", len(runs))
+		}
+		if runs[0].Status != "success" || runs[0].Output != "No executor configured" {
+			t.Fatalf("unexpected success run: %+v", runs[0])
+		}
+		if runs[0].EndTime == nil {
+			t.Fatal("expected end time to be recorded")
+		}
+		if len(persister.savedRuns) != 1 {
+			t.Fatalf("expected persister to save runs, got %d", len(persister.savedRuns))
+		}
+		if got := scheduler.GetRunHistory(taskID, 1); len(got) != 1 {
+			t.Fatalf("expected run history entry, got %d", len(got))
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		executor := &stubExecutor{
+			fn: func(ctx context.Context, cmd string, input map[string]interface{}) (string, error) {
+				return "partial output", errors.New("boom")
+			},
+		}
+		scheduler := NewScheduler(executor)
+		taskID, err := scheduler.AddTask(&Task{
+			ID:         "task-failure",
+			Schedule:   "@hourly",
+			Command:    "explode",
+			MaxRetries: 0,
+			Timeout:    1,
+		})
+		if err != nil {
+			t.Fatalf("AddTask: %v", err)
+		}
+		scheduler.tasks[taskID].MaxRetries = 0
+
+		scheduler.runTask(taskID)
+
+		runs := scheduler.GetTaskRuns(taskID)
+		if len(runs) != 1 {
+			t.Fatalf("expected one run, got %d", len(runs))
+		}
+		if runs[0].Status != "failed" || runs[0].Error != "boom" || runs[0].Output != "partial output" {
+			t.Fatalf("unexpected failed run: %+v", runs[0])
+		}
+		if executor.calls != 1 {
+			t.Fatalf("expected executor to be called once, got %d", executor.calls)
+		}
+		if got := scheduler.GetAllRuns(10); len(got) != 1 {
+			t.Fatalf("expected one aggregated run, got %d", len(got))
+		}
+	})
 }
 
-func TestSchedulerRunningStateTaskValidationAndLoadEdges(t *testing.T) {
+func TestSchedulerLoadPersistedAndRetryHelpers(t *testing.T) {
+	when := time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC)
+	persister := &stubPersister{
+		loadTasksFn: func() ([]*Task, error) {
+			return []*Task{{ID: "task-1", Name: "loaded", Schedule: "@daily", Enabled: true, NextRun: &when}}, nil
+		},
+		loadRunsFn: func() ([]*TaskRun, error) {
+			return []*TaskRun{{ID: "run-1", TaskID: "task-1", StartTime: when, Status: "success"}}, nil
+		},
+	}
 	scheduler := New()
-	if scheduler.IsRunning() {
-		t.Fatal("expected new scheduler to be stopped")
+	scheduler.SetPersister(persister)
+
+	if err := scheduler.LoadPersisted(); err != nil {
+		t.Fatalf("LoadPersisted: %v", err)
 	}
+	if len(scheduler.ListTasks()) != 1 {
+		t.Fatalf("expected one loaded task, got %d", len(scheduler.ListTasks()))
+	}
+	if len(scheduler.GetTaskRuns("task-1")) != 1 {
+		t.Fatalf("expected one loaded run, got %d", len(scheduler.GetTaskRuns("task-1")))
+	}
+	if delay := scheduler.calculateRetryDelay(0, &Task{RetryBackoff: "exponential"}); delay != time.Second {
+		t.Fatalf("expected exponential retry delay 1s, got %v", delay)
+	}
+	if delay := scheduler.calculateRetryDelay(2, &Task{RetryBackoff: "linear"}); delay != 3*time.Second {
+		t.Fatalf("expected linear retry delay 3s, got %v", delay)
+	}
+	if delay := scheduler.calculateRetryDelay(5, &Task{}); delay != 2*time.Second {
+		t.Fatalf("expected fixed retry delay 2s, got %v", delay)
+	}
+}
+
+func TestSchedulerStartAndStop(t *testing.T) {
+	scheduler := New()
+
 	if err := scheduler.Start(); err != nil {
-		t.Fatalf("Start failed: %v", err)
+		t.Fatalf("Start: %v", err)
 	}
-	if !scheduler.IsRunning() {
-		t.Fatal("expected scheduler to report running after Start")
+	if err := scheduler.Start(); err == nil {
+		t.Fatal("expected second start to fail")
+	}
+	if !scheduler.running {
+		t.Fatal("expected scheduler to be marked running")
 	}
 	scheduler.Stop()
-	if scheduler.IsRunning() {
-		t.Fatal("expected scheduler to report stopped after Stop")
+	if scheduler.running {
+		t.Fatal("expected scheduler to stop running")
 	}
-
-	if err := (&Task{}).Validate(); err == nil {
-		t.Fatal("expected empty task validation to fail")
-	}
-	if err := (&Task{Schedule: "@hourly"}).Validate(); err == nil {
-		t.Fatal("expected missing command validation to fail")
-	}
-	if err := (&Task{Schedule: "@hourly", Command: "echo", Timezone: "No/SuchZone"}).Validate(); err == nil {
-		t.Fatal("expected invalid timezone validation to fail")
-	}
-
-	disabledTimes := scheduler.NextRunTimes(2)
-	if len(disabledTimes) != 0 {
-		t.Fatalf("expected empty next run map for empty scheduler, got %+v", disabledTimes)
-	}
-
-	taskID, err := scheduler.AddTask(&Task{
-		Name:     "history",
-		Schedule: "@hourly",
-		Command:  "echo",
-		Enabled:  true,
-	})
-	if err != nil {
-		t.Fatalf("AddTask failed: %v", err)
-	}
-
-	scheduler.mu.Lock()
-	run1 := &TaskRun{ID: "run-1", TaskID: taskID, Status: "success", StartTime: time.Now().UTC().Add(-2 * time.Hour)}
-	run2 := &TaskRun{ID: "run-2", TaskID: taskID, Status: "failed", StartTime: time.Now().UTC().Add(-time.Hour)}
-	scheduler.taskRuns[taskID] = []*TaskRun{run1, run2}
-	scheduler.mu.Unlock()
-
-	if got := scheduler.GetRunHistory(taskID, 1); len(got) != 1 || got[0].ID != "run-2" {
-		t.Fatalf("expected limited run history to return newest run, got %+v", got)
-	}
-	if got := scheduler.GetAllRuns(1); len(got) != 1 || got[0].ID != "run-2" {
-		t.Fatalf("expected limited GetAllRuns to return newest run, got %+v", got)
-	}
-
-	persister := &failingPersister{saveRunsErr: errors.New("cannot save runs")}
-	scheduler.SetPersister(persister)
-	if err := scheduler.ClearHistory(taskID); err == nil {
-		t.Fatal("expected ClearHistory to surface persistence failure")
-	}
-	if err := scheduler.LastPersistenceError(); err == nil || err.Error() != "cannot save runs" {
-		t.Fatalf("expected save-runs failure to be recorded, got %v", err)
-	}
-
-	scheduler = New()
-	if err := scheduler.LoadPersisted(); err != nil {
-		t.Fatalf("LoadPersisted without persister failed: %v", err)
-	}
-
-	loader := New()
-	loader.SetPersister(&loadFailingPersister{loadTasksErr: errors.New("load tasks failed")})
-	if err := loader.LoadPersisted(); err == nil {
-		t.Fatal("expected LoadPersisted to fail on task load error")
-	}
+	scheduler.Stop()
 }

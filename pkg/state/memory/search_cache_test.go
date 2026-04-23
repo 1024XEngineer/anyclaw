@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -111,6 +112,36 @@ func TestSearchCacheResetStats(t *testing.T) {
 	stats := cache.Stats()
 	if stats.Hits != 0 || stats.Misses != 0 {
 		t.Errorf("expected reset stats to be 0, got hits=%d misses=%d", stats.Hits, stats.Misses)
+	}
+}
+
+func TestSearchCacheConcurrentGet(t *testing.T) {
+	cache := NewSearchCache(DefaultCacheConfig())
+	cache.Set("q1", []SearchResult{{Entry: MemoryEntry{ID: "1"}, Score: 0.9}})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				results, ok := cache.Get("q1")
+				if !ok {
+					t.Error("expected cache hit")
+					return
+				}
+				if len(results) != 1 || results[0].Entry.ID != "1" {
+					t.Errorf("unexpected cached result: %+v", results)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	stats := cache.Stats()
+	if stats.Hits != 3200 {
+		t.Errorf("expected 3200 hits, got %d", stats.Hits)
 	}
 }
 

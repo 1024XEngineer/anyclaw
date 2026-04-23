@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-var (
-	readFile = os.ReadFile
-	statFile = os.Stat
-)
-
 type FileType string
 
 const (
@@ -62,10 +57,8 @@ type Watcher struct {
 	mu       sync.RWMutex
 	files    map[FileType]*FileEntry
 	handlers []ChangeHandler
-	watchSet []FileType
 	interval time.Duration
 	stopCh   chan struct{}
-	doneCh   chan struct{}
 	running  bool
 	baseDir  string
 }
@@ -83,7 +76,12 @@ func DefaultWatcherConfig(baseDir string) WatcherConfig {
 		BaseDir:      baseDir,
 		PollInterval: 2 * time.Second,
 		AutoLoad:     true,
-		Files:        defaultFileTypes(),
+		Files: []FileType{
+			FileAgents, FileSoul, FileTools,
+			FileIdentity, FileUser, FileHeartbeat,
+			FileBootstrap, FileRules,
+			FileMemory, FileSkills, FileCommands,
+		},
 	}
 }
 
@@ -95,11 +93,8 @@ func NewWatcher(cfg WatcherConfig) *Watcher {
 		cfg.BaseDir = "."
 	}
 
-	watchSet := normalizeWatchSet(cfg.Files)
-
 	w := &Watcher{
 		files:    make(map[FileType]*FileEntry),
-		watchSet: watchSet,
 		interval: cfg.PollInterval,
 		baseDir:  cfg.BaseDir,
 	}
@@ -109,7 +104,7 @@ func NewWatcher(cfg WatcherConfig) *Watcher {
 	}
 
 	if cfg.AutoLoad {
-		for _, ft := range watchSet {
+		for _, ft := range cfg.Files {
 			w.loadFile(ft)
 		}
 	}
@@ -123,32 +118,25 @@ func (w *Watcher) Start() error {
 		w.mu.Unlock()
 		return fmt.Errorf("bootstrap: watcher already running")
 	}
-	stopCh := make(chan struct{})
-	doneCh := make(chan struct{})
-	w.stopCh = stopCh
-	w.doneCh = doneCh
+	w.stopCh = make(chan struct{})
+	stopCh := w.stopCh
 	w.running = true
 	w.mu.Unlock()
 
-	go w.watchLoop(stopCh, doneCh)
+	go w.watchLoop(stopCh)
 	return nil
 }
 
 func (w *Watcher) Stop() {
 	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	if !w.running {
-		w.mu.Unlock()
 		return
 	}
-	stopCh := w.stopCh
-	doneCh := w.doneCh
 	w.running = false
+	close(w.stopCh)
 	w.stopCh = nil
-	w.doneCh = nil
-	w.mu.Unlock()
-
-	close(stopCh)
-	<-doneCh
 }
 
 func (w *Watcher) Get(ft FileType) (*FileEntry, bool) {
@@ -159,7 +147,7 @@ func (w *Watcher) Get(ft FileType) (*FileEntry, bool) {
 	if !ok {
 		return nil, false
 	}
-	return cloneFileEntry(entry), true
+	return entry, true
 }
 
 func (w *Watcher) GetContent(ft FileType) (string, bool) {
@@ -176,7 +164,7 @@ func (w *Watcher) GetAll() map[FileType]*FileEntry {
 
 	result := make(map[FileType]*FileEntry, len(w.files))
 	for k, v := range w.files {
-		result[k] = cloneFileEntry(v)
+		result[k] = v
 	}
 	return result
 }
@@ -193,7 +181,7 @@ func (w *Watcher) ReloadAll() error {
 	defer w.mu.Unlock()
 
 	var errs []error
-	for _, ft := range w.watchSet {
+	for ft := range w.files {
 		if err := w.loadFileLocked(ft); err != nil {
 			errs = append(errs, err)
 		}
@@ -207,10 +195,9 @@ func (w *Watcher) OnChange(handler ChangeHandler) {
 	w.handlers = append(w.handlers, handler)
 }
 
-func (w *Watcher) watchLoop(stopCh <-chan struct{}, doneCh chan<- struct{}) {
+func (w *Watcher) watchLoop(stopCh <-chan struct{}) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
-	defer close(doneCh)
 
 	for {
 		select {
@@ -224,10 +211,10 @@ func (w *Watcher) watchLoop(stopCh <-chan struct{}, doneCh chan<- struct{}) {
 
 func (w *Watcher) checkChanges() {
 	w.mu.Lock()
-	events := make([]ChangeEvent, 0)
+	var events []ChangeEvent
 
 	for ft, entry := range w.files {
-		info, err := statFile(entry.Path)
+		info, err := os.Stat(entry.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				events = append(events, ChangeEvent{
@@ -246,7 +233,7 @@ func (w *Watcher) checkChanges() {
 			continue
 		}
 
-		content, err := readFile(entry.Path)
+		content, err := os.ReadFile(entry.Path)
 		if err != nil {
 			continue
 		}
@@ -273,18 +260,24 @@ func (w *Watcher) checkChanges() {
 		})
 	}
 
-	for _, ft := range w.watchSet {
+	// Check for new files
+	for _, ft := range []FileType{
+		FileAgents, FileSoul, FileTools,
+		FileIdentity, FileUser, FileHeartbeat,
+		FileBootstrap, FileRules,
+		FileMemory, FileSkills, FileCommands,
+	} {
 		if _, exists := w.files[ft]; exists {
 			continue
 		}
 
 		path := filepath.Join(w.baseDir, string(ft))
-		info, err := statFile(path)
+		info, err := os.Stat(path)
 		if err != nil {
 			continue
 		}
 
-		content, err := readFile(path)
+		content, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
@@ -308,10 +301,11 @@ func (w *Watcher) checkChanges() {
 		})
 	}
 
+	handlers := append([]ChangeHandler(nil), w.handlers...)
 	w.mu.Unlock()
 
 	for _, event := range events {
-		w.notify(event)
+		w.notify(handlers, event)
 	}
 }
 
@@ -324,16 +318,15 @@ func (w *Watcher) loadFile(ft FileType) {
 func (w *Watcher) loadFileLocked(ft FileType) error {
 	path := filepath.Join(w.baseDir, string(ft))
 
-	info, err := statFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			delete(w.files, ft)
 			return nil
 		}
 		return fmt.Errorf("bootstrap: stat %s: %w", ft, err)
 	}
 
-	content, err := readFile(path)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("bootstrap: read %s: %w", ft, err)
 	}
@@ -349,11 +342,9 @@ func (w *Watcher) loadFileLocked(ft FileType) error {
 	return nil
 }
 
-func (w *Watcher) notify(event ChangeEvent) {
-	handlers := w.snapshotHandlers()
+func (w *Watcher) notify(handlers []ChangeHandler, event ChangeEvent) {
 	for _, handler := range handlers {
 		handler := handler
-		event := event
 		go handler(event)
 	}
 }
@@ -363,57 +354,6 @@ func (w *Watcher) metadataGraceWindow() time.Duration {
 		return w.interval
 	}
 	return time.Second
-}
-
-func (w *Watcher) snapshotHandlers() []ChangeHandler {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
-	if len(w.handlers) == 0 {
-		return nil
-	}
-
-	handlers := make([]ChangeHandler, len(w.handlers))
-	copy(handlers, w.handlers)
-	return handlers
-}
-
-func cloneFileEntry(entry *FileEntry) *FileEntry {
-	if entry == nil {
-		return nil
-	}
-
-	cloned := *entry
-	return &cloned
-}
-
-func defaultFileTypes() []FileType {
-	return []FileType{
-		FileAgents, FileSoul, FileTools,
-		FileIdentity, FileUser, FileHeartbeat,
-		FileBootstrap, FileRules,
-		FileMemory, FileSkills, FileCommands,
-	}
-}
-
-func normalizeWatchSet(files []FileType) []FileType {
-	if len(files) == 0 {
-		files = defaultFileTypes()
-	}
-
-	seen := make(map[FileType]struct{}, len(files))
-	result := make([]FileType, 0, len(files))
-	for _, ft := range files {
-		if ft == "" {
-			continue
-		}
-		if _, ok := seen[ft]; ok {
-			continue
-		}
-		seen[ft] = struct{}{}
-		result = append(result, ft)
-	}
-	return result
 }
 
 type FileLoader struct {
@@ -438,7 +378,7 @@ func (l *FileLoader) Load(ft FileType) (*FileEntry, error) {
 	}
 
 	path := filepath.Join(l.baseDir, string(ft))
-	content, err := readFile(path)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -446,19 +386,13 @@ func (l *FileLoader) Load(ft FileType) (*FileEntry, error) {
 		return nil, fmt.Errorf("bootstrap: load %s: %w", ft, err)
 	}
 
-	info, err := statFile(path)
+	info, _ := os.Stat(path)
 	entry := &FileEntry{
 		Type:    ft,
 		Path:    path,
 		Content: string(content),
-	}
-	if err == nil {
-		entry.LastMod = info.ModTime()
-		entry.Size = info.Size()
-	} else if os.IsNotExist(err) {
-		entry.Size = int64(len(content))
-	} else {
-		return nil, fmt.Errorf("bootstrap: stat %s: %w", ft, err)
+		LastMod: info.ModTime(),
+		Size:    info.Size(),
 	}
 	l.entries[ft] = entry
 

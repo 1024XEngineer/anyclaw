@@ -7,17 +7,26 @@ import (
 )
 
 func NewMemoryBackend(cfg Config) (MemoryBackend, error) {
+	opts := []SQLiteMemoryOption{}
+	if cfg.Embedder != nil {
+		opts = append(opts, WithEmbedder(cfg.Embedder))
+	}
+	if cfg.Cache.Enabled {
+		ccfg := CacheConfig{MaxSize: cfg.Cache.MaxSize, TTL: cfg.Cache.TTL}
+		opts = append(opts, WithCache(ccfg))
+	}
+
 	switch cfg.Backend {
 	case BackendFile:
 		return NewFileMemory(cfg.WorkDir), nil
 	case BackendSQLite:
-		mem, err := NewSQLiteMemory(cfg.WorkDir, cfg.SQLite.DSN, sqliteOptionsFromConfig(cfg.SQLite)...)
+		mem, err := NewSQLiteMemory(cfg.WorkDir, cfg.DSN, opts...)
 		if err != nil {
 			return nil, err
 		}
 		return mem, nil
 	case BackendDual:
-		return nil, fmt.Errorf("backend %q is not supported by NewMemoryBackend; use NewDualMemory explicitly", cfg.Backend)
+		return NewDualMemory(cfg.WorkDir, cfg.DSN, opts...)
 	default:
 		return nil, fmt.Errorf("unknown backend type: %s", cfg.Backend)
 	}
@@ -89,21 +98,4 @@ func BackupSQLiteToFile(dsn string, workDir string) error {
 func EnsureMemoryDir(workDir string) error {
 	memoryDir := filepath.Join(workDir, "memory")
 	return os.MkdirAll(memoryDir, 0o755)
-}
-
-func sqliteOptionsFromConfig(cfg SQLiteConfig) []SQLiteMemoryOption {
-	opts := []SQLiteMemoryOption{
-		WithMaxOpenConns(cfg.MaxOpen),
-		WithBusyTimeout(cfg.BusyTimeout),
-	}
-	if cfg.Embedder != nil {
-		opts = append(opts, WithEmbedder(cfg.Embedder))
-	}
-	if cfg.Cache.Enabled {
-		opts = append(opts, WithCache(CacheConfig{
-			MaxSize: cfg.Cache.MaxSize,
-			TTL:     cfg.Cache.TTL,
-		}))
-	}
-	return opts
 }

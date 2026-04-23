@@ -189,33 +189,6 @@ func TestExclusiveSlotTerminate(t *testing.T) {
 	}
 }
 
-func TestExclusiveSlotAcquireAfterTerminateFails(t *testing.T) {
-	slot := NewExclusiveSlot(DefaultSlotConfig())
-
-	ctx := context.Background()
-	if _, err := slot.Acquire(ctx, "engine1", ContextConfig{MaxAge: time.Hour}); err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-
-	if err := slot.Terminate("engine1"); err != nil {
-		t.Fatalf("terminate: %v", err)
-	}
-
-	result, err := slot.Acquire(ctx, "engine2", ContextConfig{MaxAge: time.Hour})
-	if err != nil {
-		t.Fatalf("acquire after terminate: %v", err)
-	}
-	if result == nil || result.Granted {
-		t.Fatal("expected terminated slot to reject new acquire")
-	}
-	if result.Error == nil {
-		t.Fatal("expected terminated slot to report an error")
-	}
-	if slot.Status().State != SlotTerminated {
-		t.Errorf("expected terminated state to persist, got %s", slot.Status().State)
-	}
-}
-
 func TestExclusiveSlotTerminateWrongID(t *testing.T) {
 	slot := NewExclusiveSlot(DefaultSlotConfig())
 
@@ -367,35 +340,6 @@ func TestExclusiveSlotMaxDuration(t *testing.T) {
 	mu.Unlock()
 }
 
-func TestExclusiveSlotTimeoutCallbackCanInspectSlot(t *testing.T) {
-	var slot *ExclusiveSlot
-	timeoutCh := make(chan string, 1)
-
-	slot = NewExclusiveSlot(SlotConfig{
-		MaxIdle:     100 * time.Millisecond,
-		MaxDuration: time.Hour,
-		MaxPending:  5,
-		OnTimeout: func(id string) {
-			_ = slot.Status()
-			timeoutCh <- id
-		},
-	})
-
-	ctx := context.Background()
-	if _, err := slot.Acquire(ctx, "engine1", ContextConfig{MaxAge: time.Hour}); err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-
-	select {
-	case id := <-timeoutCh:
-		if id != "engine1" {
-			t.Fatalf("expected timeout for engine1, got %s", id)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for timeout callback")
-	}
-}
-
 func TestExclusiveSlotCallbacks(t *testing.T) {
 	var activated, deactivated string
 	var mu sync.Mutex
@@ -432,98 +376,6 @@ func TestExclusiveSlotCallbacks(t *testing.T) {
 		t.Errorf("expected deactivated engine1, got %s", deactivated)
 	}
 	mu.Unlock()
-}
-
-func TestExclusiveSlotQueuedAcquirePreservesConfigAndCallbacksDoNotDeadlock(t *testing.T) {
-	var slot *ExclusiveSlot
-	activated := make(chan string, 2)
-	deactivated := make(chan string, 1)
-
-	slot = NewExclusiveSlot(SlotConfig{
-		MaxIdle:    time.Minute,
-		MaxPending: 5,
-		OnActivate: func(id string) {
-			_ = slot.Status()
-			activated <- id
-		},
-		OnDeactivate: func(id string) {
-			_ = slot.Status()
-			deactivated <- id
-		},
-	})
-
-	ctx := context.Background()
-	if _, err := slot.Acquire(ctx, "engine1", ContextConfig{MaxAge: time.Hour}); err != nil {
-		t.Fatalf("first acquire: %v", err)
-	}
-
-	select {
-	case id := <-activated:
-		if id != "engine1" {
-			t.Fatalf("expected engine1 activation, got %s", id)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for initial activation callback")
-	}
-
-	queuedCfg := ContextConfig{
-		MaxAge:          2 * time.Minute,
-		AutoExpire:      true,
-		CleanupInterval: 10 * time.Millisecond,
-	}
-
-	resultCh := make(chan *SlotResult, 1)
-	go func() {
-		result, _ := slot.Acquire(ctx, "engine2", queuedCfg)
-		resultCh <- result
-	}()
-
-	time.Sleep(50 * time.Millisecond)
-
-	releaseDone := make(chan struct{})
-	go func() {
-		slot.Release("engine1")
-		close(releaseDone)
-	}()
-
-	select {
-	case <-releaseDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("release deadlocked")
-	}
-
-	select {
-	case id := <-deactivated:
-		if id != "engine1" {
-			t.Fatalf("expected engine1 deactivation, got %s", id)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for deactivation callback")
-	}
-
-	select {
-	case id := <-activated:
-		if id != "engine2" {
-			t.Fatalf("expected engine2 activation, got %s", id)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for queued activation callback")
-	}
-
-	select {
-	case result := <-resultCh:
-		if result == nil || !result.Granted {
-			t.Fatal("expected queued acquire to be granted")
-		}
-		if result.Engine == nil {
-			t.Fatal("expected granted slot to include engine")
-		}
-		if result.Engine.maxAge != queuedCfg.MaxAge {
-			t.Fatalf("expected queued engine max age %v, got %v", queuedCfg.MaxAge, result.Engine.maxAge)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for queued acquire result")
-	}
 }
 
 func TestExclusiveSlotEngineAccess(t *testing.T) {

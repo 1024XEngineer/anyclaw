@@ -60,7 +60,7 @@ func (c *DefaultContext) WindowAppears(title string) (bool, error) {
 		return c.desktopTools.WindowAppears(title)
 	}
 	cmd := exec.Command("powershell", "-Command",
-		fmt.Sprintf(`$title = %s; Get-Process | Where-Object {$_.MainWindowTitle -like ('*' + $title + '*')}`, quotePowerShellLiteral(title)))
+		fmt.Sprintf(`Get-Process | Where-Object {$_.MainWindowTitle -like '*%s*'}`, title))
 	output, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -73,7 +73,7 @@ func (c *DefaultContext) WindowFocused(title string) (bool, error) {
 		return c.desktopTools.WindowFocused(title)
 	}
 	cmd := exec.Command("powershell", "-Command",
-		fmt.Sprintf(`$title = %s; (Get-Process | Where-Object {$_.MainWindowTitle -like ('*' + $title + '*')} | Select-Object -First 1).MainWindowTitle`, quotePowerShellLiteral(title)))
+		fmt.Sprintf(`(Get-Process | Where-Object {$_.MainWindowTitle -like '*%s*'} | Select-Object -First 1).MainWindowTitle`, title))
 	output, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -136,7 +136,7 @@ func (c *DefaultContext) NetworkRequest(url string) (int, error) {
 
 func (c *DefaultContext) AppRunning(appName string) (bool, error) {
 	cmd := exec.Command("powershell", "-Command",
-		fmt.Sprintf(`$name = %s; Get-Process -Name $name -ErrorAction SilentlyContinue`, quotePowerShellLiteral(appName)))
+		fmt.Sprintf(`Get-Process -Name '%s' -ErrorAction SilentlyContinue`, appName))
 	output, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -175,8 +175,4 @@ func (c *DefaultContext) CustomVerify(name string, params map[string]any) (*Veri
 
 func (c *DefaultContext) SetDesktopTools(tools DesktopTools) {
 	c.desktopTools = tools
-}
-
-func quotePowerShellLiteral(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
