@@ -533,6 +533,56 @@ func TestCreateSnapshotFromSecretsWithEncryption(t *testing.T) {
 	}
 }
 
+func TestStoreWithEncryptionKeepsVersionHistoryPlainInMemory(t *testing.T) {
+	key, err := GenerateEncryptionKey()
+	if err != nil {
+		t.Fatalf("GenerateEncryptionKey failed: %v", err)
+	}
+
+	cfg := DefaultStoreConfig()
+	cfg.EncryptionKey = key
+
+	store, cleanup := setupTestStore(t, cfg)
+	defer cleanup()
+
+	if err := store.RecordRotation("api_key", 0, 1, "plain-v1", "admin", nil); err != nil {
+		t.Fatalf("RecordRotation v1 failed: %v", err)
+	}
+	if err := store.SetSecret(&SecretEntry{
+		Key:   "trigger",
+		Value: "save-again",
+		Scope: ScopeGlobal,
+	}); err != nil {
+		t.Fatalf("SetSecret failed: %v", err)
+	}
+
+	vh, ok := store.GetVersionHistory("api_key")
+	if !ok {
+		t.Fatal("expected version history to exist")
+	}
+	if len(vh.Versions) != 1 {
+		t.Fatalf("expected 1 version, got %d", len(vh.Versions))
+	}
+	if vh.Versions[0].Value != "plain-v1" {
+		t.Fatalf("expected in-memory version history to stay plaintext, got %q", vh.Versions[0].Value)
+	}
+
+	if err := store.RecordRotation("api_key", 1, 2, "plain-v2", "admin", nil); err != nil {
+		t.Fatalf("RecordRotation v2 failed: %v", err)
+	}
+	if err := store.RollbackVersion("api_key", 1, "admin"); err != nil {
+		t.Fatalf("RollbackVersion failed: %v", err)
+	}
+
+	active, ok := store.GetActiveVersion("api_key")
+	if !ok {
+		t.Fatal("expected active version after rollback")
+	}
+	if active.Value != "plain-v1" {
+		t.Fatalf("expected rollback to use plaintext value, got %q", active.Value)
+	}
+}
+
 func TestRuntimeSnapshot(t *testing.T) {
 	secrets := map[string]*SecretEntry{
 		"db_password": {
@@ -1952,6 +2002,42 @@ func TestRotateSecret(t *testing.T) {
 	}
 }
 
+func TestRotateSecretPersistsAcrossReload(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "old-key-value",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+	if _, err := manager.RotateSecret(&RotationRequest{
+		Key:         "api_key",
+		NewValue:    "new-key-value",
+		RequestedBy: "admin",
+		Reason:      "persist test",
+		ActivateNow: true,
+	}); err != nil {
+		t.Fatalf("RotateSecret failed: %v", err)
+	}
+
+	reloaded, err := NewStore(store.Config())
+	if err != nil {
+		t.Fatalf("reload store failed: %v", err)
+	}
+	entry, ok := reloaded.GetSecret("api_key", ScopeGlobal, "")
+	if !ok {
+		t.Fatal("expected rotated secret after reload")
+	}
+	if entry.Value != "new-key-value" {
+		t.Fatalf("expected reloaded value %q, got %q", "new-key-value", entry.Value)
+	}
+}
+
 func TestRotateSecretMultipleTimes(t *testing.T) {
 	store, cleanup := setupTestStore(t, nil)
 	defer cleanup()
@@ -2104,6 +2190,54 @@ func TestRollbackVersion(t *testing.T) {
 	vh, _ := manager.GetVersionHistory("api_key")
 	if vh.Current != 1 {
 		t.Errorf("expected current version 1 after rollback, got %d", vh.Current)
+	}
+}
+
+func TestRollbackVersionPersistsAcrossReload(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "v1-value",
+			Scope: ScopeGlobal,
+		},
+	}, "initial")
+
+	manager := NewActivationManagerWithFallback(store, snap, nil)
+	if _, err := manager.RotateSecret(&RotationRequest{
+		Key:         "api_key",
+		NewValue:    "v2-value",
+		RequestedBy: "admin",
+		Reason:      "rotate",
+		ActivateNow: true,
+	}); err != nil {
+		t.Fatalf("RotateSecret failed: %v", err)
+	}
+	if _, err := manager.RotateSecret(&RotationRequest{
+		Key:         "api_key",
+		NewValue:    "v3-value",
+		RequestedBy: "admin",
+		Reason:      "rotate again",
+		ActivateNow: true,
+	}); err != nil {
+		t.Fatalf("RotateSecret failed: %v", err)
+	}
+	if err := manager.RollbackVersion("api_key", 1, "admin"); err != nil {
+		t.Fatalf("RollbackVersion failed: %v", err)
+	}
+
+	reloaded, err := NewStore(store.Config())
+	if err != nil {
+		t.Fatalf("reload store failed: %v", err)
+	}
+	entry, ok := reloaded.GetSecret("api_key", ScopeGlobal, "")
+	if !ok {
+		t.Fatal("expected rolled back secret after reload")
+	}
+	if entry.Value != "v2-value" {
+		t.Fatalf("expected reloaded value %q, got %q", "v2-value", entry.Value)
 	}
 }
 
@@ -2271,6 +2405,32 @@ func TestCheckScheduledRotationsNotDue(t *testing.T) {
 	}
 }
 
+func TestCheckScheduledRotationsWithoutSnapshot(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	manager := NewActivationManager(store, nil)
+
+	past := time.Now().Add(-time.Hour)
+	if err := manager.SetRotationPolicy(&RotationPolicy{
+		Key:          "api_key",
+		Strategy:     RotationScheduled,
+		Interval:     24 * time.Hour,
+		NextRotation: &past,
+		AutoActivate: true,
+	}); err != nil {
+		t.Fatalf("SetRotationPolicy failed: %v", err)
+	}
+
+	results, err := manager.CheckScheduledRotations("system")
+	if err != nil {
+		t.Fatalf("CheckScheduledRotations failed: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no rotations without active snapshot, got %d", len(results))
+	}
+}
+
 func TestCleanupOldVersions(t *testing.T) {
 	store, cleanup := setupTestStore(t, nil)
 	defer cleanup()
@@ -2364,6 +2524,40 @@ func TestRotateSecretNotFound(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for nonexistent key")
+	}
+}
+
+func TestRotateSecretWithoutSnapshot(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	manager := NewActivationManager(store, nil)
+
+	_, err := manager.RotateSecret(&RotationRequest{
+		Key:         "api_key",
+		NewValue:    "new-value",
+		RequestedBy: "admin",
+	})
+	if err == nil {
+		t.Fatal("expected error without active snapshot")
+	}
+	if !strings.Contains(err.Error(), "no active snapshot") {
+		t.Fatalf("expected no active snapshot error, got %v", err)
+	}
+}
+
+func TestRollbackVersionWithoutSnapshot(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	manager := NewActivationManager(store, nil)
+
+	err := manager.RollbackVersion("api_key", 1, "admin")
+	if err == nil {
+		t.Fatal("expected error without active snapshot")
+	}
+	if !strings.Contains(err.Error(), "no active snapshot") {
+		t.Fatalf("expected no active snapshot error, got %v", err)
 	}
 }
 
