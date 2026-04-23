@@ -68,6 +68,7 @@ type Compactor struct {
 	messages []*Message
 	guard    *WindowGuard
 	config   CompactionConfig
+	version  uint64
 }
 
 func NewCompactor(guard *WindowGuard, cfg CompactionConfig) *Compactor {
@@ -95,18 +96,30 @@ func NewCompactor(guard *WindowGuard, cfg CompactionConfig) *Compactor {
 }
 
 func (c *Compactor) Add(msg *Message) {
+	if msg == nil {
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if msg.AccessedAt.IsZero() {
-		msg.AccessedAt = time.Now()
+	stored := cloneMessage(msg)
+	if stored.AccessedAt.IsZero() {
+		stored.AccessedAt = time.Now()
 	}
-	if msg.CreatedAt.IsZero() {
-		msg.CreatedAt = time.Now()
+	if stored.CreatedAt.IsZero() {
+		stored.CreatedAt = time.Now()
 	}
 
-	c.messages = append(c.messages, msg)
-	_ = c.guard.track(msg.Tokens)
+	if c.guard != nil {
+		if err := c.guard.track(stored.Tokens); err != nil && c.guard.hardLimit {
+			c.guard.Remove(stored.Tokens)
+			return
+		}
+	}
+
+	c.messages = append(c.messages, stored)
+	c.version++
 }
 
 func (c *Compactor) Remove(id string) {
@@ -117,6 +130,7 @@ func (c *Compactor) Remove(id string) {
 		if msg.ID == id {
 			c.guard.Remove(msg.Tokens)
 			c.messages = append(c.messages[:i], c.messages[i+1:]...)
+			c.version++
 			return
 		}
 	}
@@ -127,7 +141,9 @@ func (c *Compactor) Messages() []*Message {
 	defer c.mu.Unlock()
 
 	result := make([]*Message, len(c.messages))
-	copy(result, c.messages)
+	for i, msg := range c.messages {
+		result[i] = cloneMessage(msg)
+	}
 	return result
 }
 
@@ -167,19 +183,25 @@ func (c *Compactor) NeedsCompaction() bool {
 
 func (c *Compactor) Compact(ctx context.Context, summarizer Summarizer) (*SummaryResult, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if len(c.messages) <= c.config.MinKeepMessages {
+		c.mu.Unlock()
 		return &SummaryResult{}, nil
 	}
 
 	_, max, _ := c.guard.Status()
+	if max <= 0 {
+		c.mu.Unlock()
+		return &SummaryResult{}, nil
+	}
+
 	currentTokens := 0
 	for _, msg := range c.messages {
 		currentTokens += msg.Tokens
 	}
 
 	if float64(currentTokens)/float64(max) < c.config.CompactThreshold {
+		c.mu.Unlock()
 		return &SummaryResult{}, nil
 	}
 
@@ -191,6 +213,7 @@ func (c *Compactor) Compact(ctx context.Context, summarizer Summarizer) (*Summar
 
 	candidates := c.selectCandidates()
 	if len(candidates) == 0 {
+		c.mu.Unlock()
 		return &SummaryResult{}, nil
 	}
 
@@ -208,18 +231,30 @@ func (c *Compactor) Compact(ctx context.Context, summarizer Summarizer) (*Summar
 	}
 
 	if len(toCompact) == 0 {
+		c.mu.Unlock()
 		return &SummaryResult{}, nil
 	}
 
-	summaryText := c.generateSummary(toCompact, summarizer, ctx)
+	snapshotVersion := c.version
+	summaryInput := cloneMessages(toCompact)
+	c.mu.Unlock()
+
+	summaryText := c.generateSummary(summaryInput, summarizer, ctx)
 	summaryTokens := estimateTokens(summaryText)
 	if summaryTokens > c.config.MaxSummaryTokens {
 		summaryTokens = c.config.MaxSummaryTokens
 	}
 
 	compactedIDs := make(map[string]bool)
-	for _, msg := range toCompact {
+	for _, msg := range summaryInput {
 		compactedIDs[msg.ID] = true
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.version != snapshotVersion {
+		return &SummaryResult{}, nil
 	}
 
 	remaining := make([]*Message, 0, len(c.messages))
@@ -252,6 +287,7 @@ func (c *Compactor) Compact(ctx context.Context, summarizer Summarizer) (*Summar
 	for _, msg := range c.messages {
 		_ = c.guard.track(msg.Tokens)
 	}
+	c.version++
 
 	remainingTokens := 0
 	for _, msg := range c.messages {
@@ -390,4 +426,25 @@ func (s *StaticSummarizer) Summarize(ctx context.Context, text string) (string, 
 
 func estimateTokens(text string) int {
 	return len([]rune(text)) / 4
+}
+
+func cloneMessage(msg *Message) *Message {
+	if msg == nil {
+		return nil
+	}
+
+	cloned := *msg
+	return &cloned
+}
+
+func cloneMessages(messages []*Message) []*Message {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	cloned := make([]*Message, len(messages))
+	for i, msg := range messages {
+		cloned[i] = cloneMessage(msg)
+	}
+	return cloned
 }

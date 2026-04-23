@@ -24,6 +24,7 @@ func TestProjectorNormalizesIngressRoutingEntry(t *testing.T) {
 		},
 		Hint: RouteHint{
 			RequestedSessionID: "session-hint",
+			TitleHint:          "Webhook ticket",
 		},
 	})
 	if err != nil {
@@ -50,6 +51,9 @@ func TestProjectorNormalizesIngressRoutingEntry(t *testing.T) {
 	}
 	if request.Hint.RequestedSessionID != "session-hint" {
 		t.Fatalf("expected requested session hint to survive projection, got %q", request.Hint.RequestedSessionID)
+	}
+	if request.Hint.TitleHint != "Webhook ticket" {
+		t.Fatalf("expected title hint to survive projection, got %q", request.Hint.TitleHint)
 	}
 }
 

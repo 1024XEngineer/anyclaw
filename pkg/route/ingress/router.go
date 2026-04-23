@@ -68,6 +68,11 @@ func buildDecision(req RouteRequest, mode string, titlePrefix string) RouteDecis
 		decision.ThreadID = req.ThreadID
 	}
 
+	if title := strings.TrimSpace(req.TitleHint); title != "" {
+		decision.TitleHint = title
+		return decision
+	}
+
 	baseTitle := req.Channel + " " + req.Source
 	if strings.TrimSpace(req.ThreadID) != "" {
 		baseTitle = baseTitle + " (thread)"

@@ -82,13 +82,15 @@ func (e *Engine) List() []*Context {
 
 	result := make([]*Context, 0, len(e.contexts))
 	for _, ctx := range e.contexts {
-		result = append(result, ctx)
+		result = append(result, cloneContext(ctx))
 	}
 	return result
 }
 
 func (e *Engine) cleanup(interval time.Duration) {
 	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
 	for range ticker.C {
 		e.mu.Lock()
 		now := time.Now()
@@ -105,4 +107,19 @@ func (e *Engine) Size() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.contexts)
+}
+
+func cloneContext(ctx *Context) *Context {
+	if ctx == nil {
+		return nil
+	}
+
+	cloned := *ctx
+	if ctx.Metadata != nil {
+		cloned.Metadata = make(map[string]string, len(ctx.Metadata))
+		for key, value := range ctx.Metadata {
+			cloned.Metadata[key] = value
+		}
+	}
+	return &cloned
 }

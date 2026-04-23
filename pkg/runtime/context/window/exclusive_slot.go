@@ -36,6 +36,7 @@ type SlotRequest struct {
 	Priority int
 	Ch       chan *SlotResult
 	Timeout  time.Duration
+	Config   ContextConfig
 }
 
 type SlotResult struct {
@@ -88,7 +89,14 @@ func NewExclusiveSlot(cfg SlotConfig) *ExclusiveSlot {
 }
 
 func (s *ExclusiveSlot) Acquire(ctx context.Context, id string, cfg ContextConfig) (*SlotResult, error) {
+	var callbacks []func()
+
 	s.mu.Lock()
+
+	if s.state == SlotTerminated {
+		s.mu.Unlock()
+		return &SlotResult{Granted: false, Error: fmt.Errorf("slot terminated")}, nil
+	}
 
 	if s.state == SlotActive && s.activeID == id {
 		s.heartbeatAt = time.Now()
@@ -112,6 +120,7 @@ func (s *ExclusiveSlot) Acquire(ctx context.Context, id string, cfg ContextConfi
 			ID:      id,
 			Ch:      ch,
 			Timeout: 30 * time.Second,
+			Config:  cfg,
 		}
 
 		for i, p := range s.pendingQueue {
@@ -145,11 +154,10 @@ func (s *ExclusiveSlot) Acquire(ctx context.Context, id string, cfg ContextConfi
 	s.state = SlotActive
 	s.createdAt = time.Now()
 	s.heartbeatAt = time.Now()
+	appendSlotCallback(&callbacks, s.onActivate, id)
 	s.mu.Unlock()
 
-	if s.onActivate != nil {
-		s.onActivate(id)
-	}
+	runSlotCallbacks(callbacks)
 
 	return &SlotResult{
 		Engine:  engine,
@@ -159,30 +167,39 @@ func (s *ExclusiveSlot) Acquire(ctx context.Context, id string, cfg ContextConfi
 }
 
 func (s *ExclusiveSlot) Release(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var callbacks []func()
 
+	s.mu.Lock()
 	if s.state != SlotActive || s.activeID != id {
+		s.mu.Unlock()
 		return
 	}
 
-	s.deactivateLocked()
-	s.grantNextLocked()
+	s.deactivateLocked(&callbacks)
+	s.grantNextLocked(&callbacks)
+	s.mu.Unlock()
+
+	runSlotCallbacks(callbacks)
 }
 
 func (s *ExclusiveSlot) ForceRelease(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var callbacks []func()
 
+	s.mu.Lock()
 	if s.state != SlotActive {
+		s.mu.Unlock()
 		return fmt.Errorf("no active slot")
 	}
 	if s.activeID != id {
+		s.mu.Unlock()
 		return fmt.Errorf("slot %s is not active (active: %s)", id, s.activeID)
 	}
 
-	s.deactivateLocked()
-	s.grantNextLocked()
+	s.deactivateLocked(&callbacks)
+	s.grantNextLocked(&callbacks)
+	s.mu.Unlock()
+
+	runSlotCallbacks(callbacks)
 	return nil
 }
 
@@ -237,22 +254,23 @@ func (s *ExclusiveSlot) Engine() *Engine {
 }
 
 func (s *ExclusiveSlot) Terminate(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var callbacks []func()
 
+	s.mu.Lock()
 	if s.state != SlotActive || s.activeID != id {
+		s.mu.Unlock()
 		return fmt.Errorf("slot %s is not active", id)
 	}
 
 	s.state = SlotTerminated
 	s.activeEngine = nil
 	s.activeID = ""
-
-	if s.onDeactivate != nil {
-		s.onDeactivate(id)
-	}
+	appendSlotCallback(&callbacks, s.onDeactivate, id)
 
 	s.drainQueueLocked()
+	s.mu.Unlock()
+
+	runSlotCallbacks(callbacks)
 	return nil
 }
 
@@ -280,18 +298,15 @@ func (s *ExclusiveSlot) removeFromQueue(id string) {
 	}
 }
 
-func (s *ExclusiveSlot) deactivateLocked() {
+func (s *ExclusiveSlot) deactivateLocked(callbacks *[]func()) {
 	id := s.activeID
 	s.state = SlotInactive
 	s.activeEngine = nil
 	s.activeID = ""
-
-	if s.onDeactivate != nil {
-		s.onDeactivate(id)
-	}
+	appendSlotCallback(callbacks, s.onDeactivate, id)
 }
 
-func (s *ExclusiveSlot) grantNextLocked() {
+func (s *ExclusiveSlot) grantNextLocked(callbacks *[]func()) {
 	if len(s.pendingQueue) == 0 {
 		return
 	}
@@ -299,10 +314,7 @@ func (s *ExclusiveSlot) grantNextLocked() {
 	req := s.pendingQueue[0]
 	s.pendingQueue = s.pendingQueue[1:]
 
-	engine := New(ContextConfig{
-		MaxAge:     30 * time.Minute,
-		AutoExpire: true,
-	})
+	engine := New(req.Config)
 
 	s.activeEngine = engine
 	s.activeID = req.ID
@@ -319,9 +331,7 @@ func (s *ExclusiveSlot) grantNextLocked() {
 	default:
 	}
 
-	if s.onActivate != nil {
-		s.onActivate(req.ID)
-	}
+	appendSlotCallback(callbacks, s.onActivate, req.ID)
 }
 
 func (s *ExclusiveSlot) drainQueueLocked() {
@@ -342,6 +352,8 @@ func (s *ExclusiveSlot) idleMonitor() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		var callbacks []func()
+
 		s.mu.Lock()
 		if s.state != SlotActive {
 			s.mu.Unlock()
@@ -353,16 +365,31 @@ func (s *ExclusiveSlot) idleMonitor() {
 
 		if idleDuration > s.maxIdle || activeDuration > s.maxDuration {
 			id := s.activeID
-			s.deactivateLocked()
-
-			if s.onTimeout != nil {
-				s.onTimeout(id)
-			}
-
-			s.grantNextLocked()
+			s.deactivateLocked(&callbacks)
+			appendSlotCallback(&callbacks, s.onTimeout, id)
+			s.grantNextLocked(&callbacks)
 		}
 
 		s.mu.Unlock()
+		runSlotCallbacks(callbacks)
+	}
+}
+
+func appendSlotCallback(callbacks *[]func(), callback func(string), id string) {
+	if callback == nil {
+		return
+	}
+
+	cb := callback
+	callbackID := id
+	*callbacks = append(*callbacks, func() {
+		cb(callbackID)
+	})
+}
+
+func runSlotCallbacks(callbacks []func()) {
+	for _, callback := range callbacks {
+		callback()
 	}
 }
 

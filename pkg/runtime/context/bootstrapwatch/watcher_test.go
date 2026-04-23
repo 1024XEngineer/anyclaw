@@ -76,7 +76,7 @@ func TestWatcherAutoDetect(t *testing.T) {
 	w := NewWatcher(WatcherConfig{
 		BaseDir:  dir,
 		AutoLoad: true,
-		Files:    []FileType{FileAgents},
+		Files:    []FileType{FileAgents, FileSoul},
 	})
 
 	_, ok := w.Get(FileSoul)
@@ -363,6 +363,71 @@ func TestWatcherStartStop(t *testing.T) {
 	w.Stop()
 }
 
+func TestWatcherStopWaitsForInFlightLoopBeforeRestart(t *testing.T) {
+	dir := setupTestDir(t)
+	writeFile(t, dir, "AGENTS.md", "agents")
+
+	origReadFile := readFile
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	var once sync.Once
+
+	readFile = func(path string) ([]byte, error) {
+		if filepath.Base(path) == string(FileAgents) {
+			once.Do(func() {
+				close(started)
+				<-unblock
+			})
+		}
+		return origReadFile(path)
+	}
+	t.Cleanup(func() {
+		readFile = origReadFile
+	})
+
+	w := NewWatcher(WatcherConfig{
+		BaseDir:      dir,
+		PollInterval: 10 * time.Millisecond,
+		AutoLoad:     false,
+		Files:        []FileType{FileAgents},
+	})
+
+	if err := w.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for in-flight read")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		w.Stop()
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		t.Fatal("stop returned before in-flight poll completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(unblock)
+
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stop to finish")
+	}
+
+	if err := w.Start(); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	w.Stop()
+}
+
 func TestWatcherStartTwice(t *testing.T) {
 	dir := setupTestDir(t)
 
@@ -398,7 +463,6 @@ func TestWatcherSameContentNoEvent(t *testing.T) {
 		},
 	})
 
-	// Touch file without changing content
 	time.Sleep(10 * time.Millisecond)
 	if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
 		t.Fatalf("chtimes: %v", err)
@@ -508,6 +572,54 @@ func TestWatcherCheckChangesDoesNotBlockOnSlowHandlers(t *testing.T) {
 	}
 }
 
+func TestWatcherConfiguredFilesDriveDiscoveryAndReloadAll(t *testing.T) {
+	dir := setupTestDir(t)
+
+	w := NewWatcher(WatcherConfig{
+		BaseDir:  dir,
+		AutoLoad: true,
+		Files:    []FileType{FileCustom},
+	})
+
+	if _, ok := w.Get(FileCustom); ok {
+		t.Fatal("expected custom file to be absent initially")
+	}
+
+	path := writeFile(t, dir, "custom", "custom v1")
+	w.checkChanges()
+
+	entry, ok := w.Get(FileCustom)
+	if !ok {
+		t.Fatal("expected custom file detected from configured watch set")
+	}
+	if entry.Content != "custom v1" {
+		t.Fatalf("expected custom v1, got %s", entry.Content)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove custom file: %v", err)
+	}
+	if err := w.ReloadAll(); err != nil {
+		t.Fatalf("reload all after delete: %v", err)
+	}
+	if _, ok := w.Get(FileCustom); ok {
+		t.Fatal("expected deleted custom file to be removed from cache")
+	}
+
+	writeFile(t, dir, "custom", "custom v2")
+	if err := w.ReloadAll(); err != nil {
+		t.Fatalf("reload all after recreate: %v", err)
+	}
+
+	entry, ok = w.Get(FileCustom)
+	if !ok {
+		t.Fatal("expected custom file reloaded from configured watch set")
+	}
+	if entry.Content != "custom v2" {
+		t.Fatalf("expected custom v2, got %s", entry.Content)
+	}
+}
+
 func TestFileLoader(t *testing.T) {
 	dir := setupTestDir(t)
 	writeFile(t, dir, "AGENTS.md", "# Agents")
@@ -523,13 +635,44 @@ func TestFileLoader(t *testing.T) {
 		t.Errorf("expected '# Agents', got %s", entry.Content)
 	}
 
-	// Should return cached entry
 	entry2, err := loader.Load(FileAgents)
 	if err != nil {
 		t.Fatalf("load cached: %v", err)
 	}
 	if entry != entry2 {
 		t.Error("expected same cached entry")
+	}
+}
+
+func TestFileLoaderLoadHandlesMissingStatAfterRead(t *testing.T) {
+	dir := setupTestDir(t)
+	content := "# Agents"
+	writeFile(t, dir, "AGENTS.md", content)
+
+	origStatFile := statFile
+	statFile = func(path string) (os.FileInfo, error) {
+		if filepath.Base(path) == string(FileAgents) {
+			return nil, os.ErrNotExist
+		}
+		return origStatFile(path)
+	}
+	t.Cleanup(func() {
+		statFile = origStatFile
+	})
+
+	loader := NewFileLoader(dir)
+	entry, err := loader.Load(FileAgents)
+	if err != nil {
+		t.Fatalf("load with missing stat: %v", err)
+	}
+	if entry == nil {
+		t.Fatal("expected entry despite missing stat after read")
+	}
+	if entry.Size != int64(len(content)) {
+		t.Fatalf("expected fallback size %d, got %d", len(content), entry.Size)
+	}
+	if !entry.LastMod.IsZero() {
+		t.Fatalf("expected zero LastMod when stat is missing, got %v", entry.LastMod)
 	}
 }
 

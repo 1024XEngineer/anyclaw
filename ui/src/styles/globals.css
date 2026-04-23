@@ -1,0 +1,340 @@
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    background: #ffffff;
+    color: var(--ink);
+    font-family:
+      "Plus Jakarta Sans",
+      "PingFang SC",
+      "Hiragino Sans GB",
+      "Microsoft YaHei UI",
+      "Segoe UI Variable",
+      sans-serif;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid rgba(96, 118, 153, 0.42);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .rail-surface {
+    background: #ffffff;
+  }
+
+  .shell-panel {
+    background: var(--panel);
+    backdrop-filter: blur(18px);
+  }
+
+  .shell-input {
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 999px;
+    background: #ffffff;
+  }
+
+  .shell-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 999px;
+    background: #ffffff;
+    transition:
+      transform 150ms ease,
+      background-color 150ms ease;
+  }
+
+  .shell-button:hover {
+    transform: translateY(-1px);
+    background: #fafafa;
+  }
+
+  .chip-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    border: 1px solid rgba(15, 23, 42, 0.06);
+    border-radius: 999px;
+    background: #fafbfc;
+    padding: 0.82rem 1.05rem;
+    color: #3d3b37;
+    transition:
+      transform 150ms ease,
+      background-color 150ms ease;
+  }
+
+  .chip-button:hover {
+    transform: translateY(-1px);
+    background: #f6f8fa;
+  }
+
+  .chat-scroll-area {
+    scrollbar-gutter: stable;
+    scrollbar-width: none;
+    overscroll-behavior: contain;
+  }
+
+  .chat-scroll-area[data-scrolling="true"] {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.34) transparent;
+  }
+
+  .chat-scroll-area::-webkit-scrollbar {
+    width: 0;
+  }
+
+  .chat-scroll-area[data-scrolling="true"]::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  .chat-scroll-area::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .chat-scroll-area::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    background-clip: padding-box;
+  }
+
+  .chat-scroll-area[data-scrolling="true"]::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.34);
+    background-clip: padding-box;
+  }
+
+  .chat-scroll-area[data-scrolling="true"]::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.44);
+    background-clip: padding-box;
+  }
+
+  .chat-markdown {
+    color: #1f2937;
+    font-size: 15px;
+    line-height: 1.9;
+  }
+
+  .chat-markdown > :first-child {
+    margin-top: 0;
+  }
+
+  .chat-markdown > :last-child {
+    margin-bottom: 0;
+  }
+
+  .chat-markdown p,
+  .chat-markdown ul,
+  .chat-markdown ol,
+  .chat-markdown blockquote,
+  .chat-markdown pre,
+  .chat-markdown table,
+  .chat-markdown h1,
+  .chat-markdown h2,
+  .chat-markdown h3,
+  .chat-markdown h4 {
+    margin: 0 0 0.85rem;
+  }
+
+  .chat-markdown h1,
+  .chat-markdown h2,
+  .chat-markdown h3,
+  .chat-markdown h4 {
+    color: #111827;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.5;
+  }
+
+  .chat-markdown h1 {
+    font-size: 1.32rem;
+  }
+
+  .chat-markdown h2 {
+    font-size: 1.18rem;
+  }
+
+  .chat-markdown h3 {
+    font-size: 1.04rem;
+  }
+
+  .chat-markdown ul,
+  .chat-markdown ol {
+    padding-left: 1.35rem;
+  }
+
+  .chat-markdown li + li {
+    margin-top: 0.24rem;
+  }
+
+  .chat-markdown a {
+    color: #2563eb;
+    text-decoration: underline;
+    text-decoration-color: rgba(37, 99, 235, 0.24);
+    text-underline-offset: 0.22em;
+  }
+
+  .chat-markdown strong {
+    color: #111827;
+    font-weight: 600;
+  }
+
+  .chat-markdown code {
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 0.6rem;
+    background: #f8fafc;
+    padding: 0.12rem 0.38rem;
+    font-family:
+      "SFMono-Regular",
+      "JetBrains Mono",
+      "Cascadia Code",
+      "Consolas",
+      monospace;
+    font-size: 0.92em;
+  }
+
+  .chat-markdown pre {
+    overflow-x: auto;
+    border: 1px solid rgba(15, 23, 42, 0.05);
+    border-radius: 0.95rem;
+    background: #fafbfd;
+    padding: 0.9rem 1rem;
+  }
+
+  .chat-markdown pre code {
+    border: none;
+    background: transparent;
+    padding: 0;
+    white-space: pre;
+  }
+
+  .chat-markdown blockquote {
+    border-left: 3px solid rgba(37, 99, 235, 0.16);
+    color: #475467;
+    margin-left: 0;
+    padding-left: 0.85rem;
+  }
+
+  .chat-markdown hr {
+    border: none;
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+    margin: 1.25rem 0;
+  }
+
+  .chat-markdown table {
+    width: 100%;
+    overflow: hidden;
+    border-collapse: collapse;
+    border-radius: 1rem;
+    border-style: hidden;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.08);
+  }
+
+  .chat-markdown th,
+  .chat-markdown td {
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    padding: 0.7rem 0.85rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .chat-markdown th {
+    background: #fafbfd;
+    color: #344054;
+    font-weight: 600;
+  }
+
+  .thinking-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.28rem;
+  }
+
+  .thinking-dot {
+    width: 0.34rem;
+    height: 0.34rem;
+    border-radius: 999px;
+    background: rgba(37, 99, 235, 0.52);
+    animation: thinking-bounce 1.15s infinite ease-in-out;
+  }
+
+  .thinking-dot:nth-child(2) {
+    animation-delay: 0.16s;
+  }
+
+  .thinking-dot:nth-child(3) {
+    animation-delay: 0.32s;
+  }
+
+  .thinking-line {
+    height: 0.72rem;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(226, 232, 240, 0.55), rgba(241, 245, 249, 0.96), rgba(226, 232, 240, 0.55));
+    background-size: 220% 100%;
+    animation: thinking-shimmer 1.45s linear infinite;
+  }
+}
+
+@keyframes thinking-bounce {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes thinking-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
+}

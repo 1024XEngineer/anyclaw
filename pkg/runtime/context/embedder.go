@@ -25,7 +25,7 @@ func ResolveEmbedder(cfg *config.Config, secretsSnap *secrets.RuntimeSnapshot) m
 		case "ollama":
 			return memory.NewOllamaEmbeddingProvider(baseURL, embedModel)
 		default:
-			return memory.NewOpenAIEmbeddingProvider(apiKey, embedModel)
+			return memory.NewOpenAIEmbeddingProvider(apiKey, embedModel, baseURL)
 		}
 	}
 	if strings.ToLower(cfg.LLM.Provider) == "ollama" {
@@ -33,16 +33,18 @@ func ResolveEmbedder(cfg *config.Config, secretsSnap *secrets.RuntimeSnapshot) m
 	}
 	apiKey := resolveSecret(secretsSnap, cfg.LLM.APIKey, "llm_api_key")
 	if strings.TrimSpace(apiKey) != "" {
-		return memory.NewOpenAIEmbeddingProvider(apiKey, "")
+		return memory.NewOpenAIEmbeddingProvider(apiKey, "", cfg.LLM.BaseURL)
 	}
 	return nil
 }
 
 func resolveSecret(snap *secrets.RuntimeSnapshot, plaintext string, secretKey string) string {
 	if snap != nil {
-		resolved := snap.ResolveValue(plaintext)
-		if resolved != plaintext {
-			return resolved
+		if strings.Contains(plaintext, "${SECRET:") {
+			resolved, err := snap.ResolveValueStrict(plaintext)
+			if err == nil {
+				return resolved
+			}
 		}
 		if entry, ok := snap.Get(secretKey); ok {
 			return entry.Value

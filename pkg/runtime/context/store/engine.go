@@ -1,4 +1,4 @@
-package context
+package store
 
 import (
 	"context"
@@ -133,7 +133,7 @@ func (e *InMemoryContextEngine) AddDocument(ctx context.Context, doc Document) e
 
 	doc.CreatedAt = time.Now()
 	doc.UpdatedAt = time.Now()
-	e.documents[doc.ID] = &doc
+	e.documents[doc.ID] = cloneDocument(&doc)
 	return nil
 }
 
@@ -146,7 +146,7 @@ func (e *InMemoryContextEngine) Search(ctx context.Context, query string, option
 		score := calculateSimilarity(query, doc.Content)
 		if score >= options.Threshold {
 			results = append(results, SearchResult{
-				Document: doc,
+				Document: cloneDocument(doc),
 				Score:    score,
 			})
 		}
@@ -156,7 +156,7 @@ func (e *InMemoryContextEngine) Search(ctx context.Context, query string, option
 		return results[i].Score > results[j].Score
 	})
 
-	if len(results) > options.TopK {
+	if options.TopK > 0 && len(results) > options.TopK {
 		results = results[:options.TopK]
 	}
 
@@ -171,7 +171,7 @@ func (e *InMemoryContextEngine) GetDocument(ctx context.Context, id string) (*Do
 	if !ok {
 		return nil, fmt.Errorf("document not found: %s", id)
 	}
-	return doc, nil
+	return cloneDocument(doc), nil
 }
 
 func (e *InMemoryContextEngine) DeleteDocument(ctx context.Context, id string) error {
@@ -318,4 +318,21 @@ func ParseContextEngineConfig(data []byte) (*ContextEngineConfig, error) {
 		return nil, fmt.Errorf("failed to parse context engine config: %w", err)
 	}
 	return &config, nil
+}
+
+func cloneDocument(doc *Document) *Document {
+	if doc == nil {
+		return nil
+	}
+	cloned := *doc
+	if doc.Metadata != nil {
+		cloned.Metadata = make(map[string]any, len(doc.Metadata))
+		for key, value := range doc.Metadata {
+			cloned.Metadata[key] = value
+		}
+	}
+	if doc.Vector != nil {
+		cloned.Vector = append([]float64(nil), doc.Vector...)
+	}
+	return &cloned
 }

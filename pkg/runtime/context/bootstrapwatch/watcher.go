@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+var (
+	readFile = os.ReadFile
+	statFile = os.Stat
+)
+
 type FileType string
 
 const (
@@ -54,16 +59,15 @@ type ChangeEvent struct {
 type ChangeHandler func(event ChangeEvent)
 
 type Watcher struct {
-	mu           sync.RWMutex
-	opsMu        sync.Mutex
-	dispatchMu   sync.Mutex
-	dispatchTail chan struct{}
-	files        map[FileType]*FileEntry
-	handlers     []ChangeHandler
-	interval     time.Duration
-	stopCh       chan struct{}
-	running      bool
-	baseDir      string
+	mu       sync.RWMutex
+	files    map[FileType]*FileEntry
+	handlers []ChangeHandler
+	watchSet []FileType
+	interval time.Duration
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	running  bool
+	baseDir  string
 }
 
 type WatcherConfig struct {
@@ -79,12 +83,7 @@ func DefaultWatcherConfig(baseDir string) WatcherConfig {
 		BaseDir:      baseDir,
 		PollInterval: 2 * time.Second,
 		AutoLoad:     true,
-		Files: []FileType{
-			FileAgents, FileSoul, FileTools,
-			FileIdentity, FileUser, FileHeartbeat,
-			FileBootstrap, FileRules,
-			FileMemory, FileSkills, FileCommands,
-		},
+		Files:        defaultFileTypes(),
 	}
 }
 
@@ -96,12 +95,13 @@ func NewWatcher(cfg WatcherConfig) *Watcher {
 		cfg.BaseDir = "."
 	}
 
+	watchSet := normalizeWatchSet(cfg.Files)
+
 	w := &Watcher{
-		files:        make(map[FileType]*FileEntry),
-		interval:     cfg.PollInterval,
-		stopCh:       make(chan struct{}),
-		baseDir:      cfg.BaseDir,
-		dispatchTail: closedSignal(),
+		files:    make(map[FileType]*FileEntry),
+		watchSet: watchSet,
+		interval: cfg.PollInterval,
+		baseDir:  cfg.BaseDir,
 	}
 
 	if cfg.OnChange != nil {
@@ -109,7 +109,7 @@ func NewWatcher(cfg WatcherConfig) *Watcher {
 	}
 
 	if cfg.AutoLoad {
-		for _, ft := range cfg.Files {
+		for _, ft := range watchSet {
 			w.loadFile(ft)
 		}
 	}
@@ -123,23 +123,32 @@ func (w *Watcher) Start() error {
 		w.mu.Unlock()
 		return fmt.Errorf("bootstrap: watcher already running")
 	}
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	w.stopCh = stopCh
+	w.doneCh = doneCh
 	w.running = true
 	w.mu.Unlock()
 
-	go w.watchLoop()
+	go w.watchLoop(stopCh, doneCh)
 	return nil
 }
 
 func (w *Watcher) Stop() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if !w.running {
+		w.mu.Unlock()
 		return
 	}
+	stopCh := w.stopCh
+	doneCh := w.doneCh
 	w.running = false
-	close(w.stopCh)
-	w.stopCh = make(chan struct{})
+	w.stopCh = nil
+	w.doneCh = nil
+	w.mu.Unlock()
+
+	close(stopCh)
+	<-doneCh
 }
 
 func (w *Watcher) Get(ft FileType) (*FileEntry, bool) {
@@ -150,7 +159,7 @@ func (w *Watcher) Get(ft FileType) (*FileEntry, bool) {
 	if !ok {
 		return nil, false
 	}
-	return entry, true
+	return cloneFileEntry(entry), true
 }
 
 func (w *Watcher) GetContent(ft FileType) (string, bool) {
@@ -167,15 +176,12 @@ func (w *Watcher) GetAll() map[FileType]*FileEntry {
 
 	result := make(map[FileType]*FileEntry, len(w.files))
 	for k, v := range w.files {
-		result[k] = v
+		result[k] = cloneFileEntry(v)
 	}
 	return result
 }
 
 func (w *Watcher) Reload(ft FileType) error {
-	w.opsMu.Lock()
-	defer w.opsMu.Unlock()
-
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -183,14 +189,11 @@ func (w *Watcher) Reload(ft FileType) error {
 }
 
 func (w *Watcher) ReloadAll() error {
-	w.opsMu.Lock()
-	defer w.opsMu.Unlock()
-
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	var errs []error
-	for ft := range w.files {
+	for _, ft := range w.watchSet {
 		if err := w.loadFileLocked(ft); err != nil {
 			errs = append(errs, err)
 		}
@@ -204,13 +207,14 @@ func (w *Watcher) OnChange(handler ChangeHandler) {
 	w.handlers = append(w.handlers, handler)
 }
 
-func (w *Watcher) watchLoop() {
+func (w *Watcher) watchLoop(stopCh <-chan struct{}, doneCh chan<- struct{}) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
+	defer close(doneCh)
 
 	for {
 		select {
-		case <-w.stopCh:
+		case <-stopCh:
 			return
 		case <-ticker.C:
 			w.checkChanges()
@@ -219,19 +223,99 @@ func (w *Watcher) watchLoop() {
 }
 
 func (w *Watcher) checkChanges() {
-	w.opsMu.Lock()
-	defer w.opsMu.Unlock()
+	w.mu.Lock()
+	events := make([]ChangeEvent, 0)
 
-	snapshot, baseDir := w.snapshotFiles()
-	candidates := w.scanChanges(snapshot, baseDir)
-	events, handlers := w.applyChanges(candidates)
-	w.enqueueNotifications(events, handlers)
+	for ft, entry := range w.files {
+		info, err := statFile(entry.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				events = append(events, ChangeEvent{
+					Type:    ft,
+					Path:    entry.Path,
+					OldSize: entry.Size,
+					NewSize: 0,
+					Action:  ActionDeleted,
+					Time:    time.Now(),
+				})
+				delete(w.files, ft)
+			}
+			continue
+		}
+		if info.ModTime() == entry.LastMod && info.Size() == entry.Size && time.Since(entry.LastMod) > w.metadataGraceWindow() {
+			continue
+		}
+
+		content, err := readFile(entry.Path)
+		if err != nil {
+			continue
+		}
+
+		newContent := string(content)
+		if newContent == entry.Content {
+			entry.LastMod = info.ModTime()
+			entry.Size = info.Size()
+			continue
+		}
+
+		oldSize := entry.Size
+		entry.Content = newContent
+		entry.LastMod = info.ModTime()
+		entry.Size = info.Size()
+
+		events = append(events, ChangeEvent{
+			Type:    ft,
+			Path:    entry.Path,
+			OldSize: oldSize,
+			NewSize: info.Size(),
+			Action:  ActionModified,
+			Time:    time.Now(),
+		})
+	}
+
+	for _, ft := range w.watchSet {
+		if _, exists := w.files[ft]; exists {
+			continue
+		}
+
+		path := filepath.Join(w.baseDir, string(ft))
+		info, err := statFile(path)
+		if err != nil {
+			continue
+		}
+
+		content, err := readFile(path)
+		if err != nil {
+			continue
+		}
+
+		entry := &FileEntry{
+			Type:    ft,
+			Path:    path,
+			Content: string(content),
+			LastMod: info.ModTime(),
+			Size:    info.Size(),
+		}
+		w.files[ft] = entry
+
+		events = append(events, ChangeEvent{
+			Type:    ft,
+			Path:    path,
+			OldSize: 0,
+			NewSize: info.Size(),
+			Action:  ActionCreated,
+			Time:    time.Now(),
+		})
+	}
+
+	w.mu.Unlock()
+
+	for _, event := range events {
+		w.notify(event)
+	}
 }
 
 func (w *Watcher) loadFile(ft FileType) {
-	w.opsMu.Lock()
-	defer w.opsMu.Unlock()
-
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.loadFileLocked(ft)
@@ -240,15 +324,16 @@ func (w *Watcher) loadFile(ft FileType) {
 func (w *Watcher) loadFileLocked(ft FileType) error {
 	path := filepath.Join(w.baseDir, string(ft))
 
-	info, err := os.Stat(path)
+	info, err := statFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			delete(w.files, ft)
 			return nil
 		}
 		return fmt.Errorf("bootstrap: stat %s: %w", ft, err)
 	}
 
-	content, err := os.ReadFile(path)
+	content, err := readFile(path)
 	if err != nil {
 		return fmt.Errorf("bootstrap: read %s: %w", ft, err)
 	}
@@ -264,6 +349,15 @@ func (w *Watcher) loadFileLocked(ft FileType) error {
 	return nil
 }
 
+func (w *Watcher) notify(event ChangeEvent) {
+	handlers := w.snapshotHandlers()
+	for _, handler := range handlers {
+		handler := handler
+		event := event
+		go handler(event)
+	}
+}
+
 func (w *Watcher) metadataGraceWindow() time.Duration {
 	if w.interval > time.Second {
 		return w.interval
@@ -271,196 +365,29 @@ func (w *Watcher) metadataGraceWindow() time.Duration {
 	return time.Second
 }
 
-type fileSnapshot struct {
-	fileType FileType
-	entry    FileEntry
-}
-
-type fileChange struct {
-	fileType FileType
-	entry    *FileEntry
-	event    *ChangeEvent
-}
-
-func (w *Watcher) snapshotFiles() ([]fileSnapshot, string) {
+func (w *Watcher) snapshotHandlers() []ChangeHandler {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	snapshot := make([]fileSnapshot, 0, len(w.files))
-	for ft, entry := range w.files {
-		if entry == nil {
-			continue
-		}
-		snapshot = append(snapshot, fileSnapshot{
-			fileType: ft,
-			entry:    *entry,
-		})
+	if len(w.handlers) == 0 {
+		return nil
 	}
 
-	return snapshot, w.baseDir
+	handlers := make([]ChangeHandler, len(w.handlers))
+	copy(handlers, w.handlers)
+	return handlers
 }
 
-func (w *Watcher) scanChanges(snapshot []fileSnapshot, baseDir string) []fileChange {
-	candidates := make([]fileChange, 0, len(snapshot)+len(defaultWatchFileTypes()))
-	known := make(map[FileType]struct{}, len(snapshot))
-
-	for _, item := range snapshot {
-		known[item.fileType] = struct{}{}
-
-		info, err := os.Stat(item.entry.Path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				candidates = append(candidates, fileChange{
-					fileType: item.fileType,
-					event: &ChangeEvent{
-						Type:    item.fileType,
-						Path:    item.entry.Path,
-						OldSize: item.entry.Size,
-						NewSize: 0,
-						Action:  ActionDeleted,
-						Time:    time.Now(),
-					},
-				})
-			}
-			continue
-		}
-
-		// Some filesystems can coalesce rapid writes into the same modtime.
-		// Once a file has been stable for a short grace window, stat metadata is
-		// enough to skip the more expensive full read.
-		if info.ModTime() == item.entry.LastMod && info.Size() == item.entry.Size && time.Since(item.entry.LastMod) > w.metadataGraceWindow() {
-			continue
-		}
-
-		content, err := os.ReadFile(item.entry.Path)
-		if err != nil {
-			continue
-		}
-
-		updated := item.entry
-		updated.LastMod = info.ModTime()
-		updated.Size = info.Size()
-
-		newContent := string(content)
-		if newContent == item.entry.Content {
-			candidates = append(candidates, fileChange{
-				fileType: item.fileType,
-				entry:    &updated,
-			})
-			continue
-		}
-
-		updated.Content = newContent
-		candidates = append(candidates, fileChange{
-			fileType: item.fileType,
-			entry:    &updated,
-			event: &ChangeEvent{
-				Type:    item.fileType,
-				Path:    item.entry.Path,
-				OldSize: item.entry.Size,
-				NewSize: info.Size(),
-				Action:  ActionModified,
-				Time:    time.Now(),
-			},
-		})
+func cloneFileEntry(entry *FileEntry) *FileEntry {
+	if entry == nil {
+		return nil
 	}
 
-	for _, ft := range defaultWatchFileTypes() {
-		if _, exists := known[ft]; exists {
-			continue
-		}
-
-		path := filepath.Join(baseDir, string(ft))
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-
-		content, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-
-		entry := &FileEntry{
-			Type:    ft,
-			Path:    path,
-			Content: string(content),
-			LastMod: info.ModTime(),
-			Size:    info.Size(),
-		}
-		candidates = append(candidates, fileChange{
-			fileType: ft,
-			entry:    entry,
-			event: &ChangeEvent{
-				Type:    ft,
-				Path:    path,
-				OldSize: 0,
-				NewSize: info.Size(),
-				Action:  ActionCreated,
-				Time:    time.Now(),
-			},
-		})
-	}
-
-	return candidates
+	cloned := *entry
+	return &cloned
 }
 
-func (w *Watcher) applyChanges(candidates []fileChange) ([]ChangeEvent, []ChangeHandler) {
-	if len(candidates) == 0 {
-		return nil, nil
-	}
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	events := make([]ChangeEvent, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.entry == nil {
-			delete(w.files, candidate.fileType)
-		} else if current, ok := w.files[candidate.fileType]; ok && current != nil {
-			*current = *candidate.entry
-		} else {
-			entryCopy := *candidate.entry
-			w.files[candidate.fileType] = &entryCopy
-		}
-
-		if candidate.event != nil {
-			events = append(events, *candidate.event)
-		}
-	}
-
-	if len(events) == 0 || len(w.handlers) == 0 {
-		return events, nil
-	}
-
-	handlers := append([]ChangeHandler(nil), w.handlers...)
-	return events, handlers
-}
-
-func (w *Watcher) enqueueNotifications(events []ChangeEvent, handlers []ChangeHandler) {
-	if len(events) == 0 || len(handlers) == 0 {
-		return
-	}
-
-	done := make(chan struct{})
-
-	w.dispatchMu.Lock()
-	prev := w.dispatchTail
-	w.dispatchTail = done
-	w.dispatchMu.Unlock()
-
-	go func() {
-		defer close(done)
-		<-prev
-		for _, event := range events {
-			for _, handler := range handlers {
-				handler(event)
-			}
-		}
-	}()
-}
-
-func defaultWatchFileTypes() []FileType {
+func defaultFileTypes() []FileType {
 	return []FileType{
 		FileAgents, FileSoul, FileTools,
 		FileIdentity, FileUser, FileHeartbeat,
@@ -469,10 +396,24 @@ func defaultWatchFileTypes() []FileType {
 	}
 }
 
-func closedSignal() chan struct{} {
-	ch := make(chan struct{})
-	close(ch)
-	return ch
+func normalizeWatchSet(files []FileType) []FileType {
+	if len(files) == 0 {
+		files = defaultFileTypes()
+	}
+
+	seen := make(map[FileType]struct{}, len(files))
+	result := make([]FileType, 0, len(files))
+	for _, ft := range files {
+		if ft == "" {
+			continue
+		}
+		if _, ok := seen[ft]; ok {
+			continue
+		}
+		seen[ft] = struct{}{}
+		result = append(result, ft)
+	}
+	return result
 }
 
 type FileLoader struct {
@@ -497,7 +438,7 @@ func (l *FileLoader) Load(ft FileType) (*FileEntry, error) {
 	}
 
 	path := filepath.Join(l.baseDir, string(ft))
-	content, err := os.ReadFile(path)
+	content, err := readFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -505,13 +446,19 @@ func (l *FileLoader) Load(ft FileType) (*FileEntry, error) {
 		return nil, fmt.Errorf("bootstrap: load %s: %w", ft, err)
 	}
 
-	info, _ := os.Stat(path)
+	info, err := statFile(path)
 	entry := &FileEntry{
 		Type:    ft,
 		Path:    path,
 		Content: string(content),
-		LastMod: info.ModTime(),
-		Size:    info.Size(),
+	}
+	if err == nil {
+		entry.LastMod = info.ModTime()
+		entry.Size = info.Size()
+	} else if os.IsNotExist(err) {
+		entry.Size = int64(len(content))
+	} else {
+		return nil, fmt.Errorf("bootstrap: stat %s: %w", ft, err)
 	}
 	l.entries[ft] = entry
 
