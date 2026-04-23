@@ -2,7 +2,7 @@ package ingress
 
 import "time"
 
-// RouteRequest is the lightweight routing input consumed by the M2 router.
+// RouteRequest is the legacy channel session routing input used by DecideChannel.
 type RouteRequest struct {
 	Channel   string
 	Source    string
@@ -13,7 +13,8 @@ type RouteRequest struct {
 	TitleHint string
 }
 
-// SessionRoute describes where an inbound message should land for legacy gateway callers.
+// SessionRoute describes where an inbound message should land. It is limited
+// to session-scoped routing concerns and must not select agents or resources.
 type SessionRoute struct {
 	Key         string `json:"key"`
 	SessionMode string `json:"session_mode"`
@@ -43,7 +44,7 @@ type MessageScope struct {
 	Metadata       map[string]string
 }
 
-// DeliveryHint stores the inbound delivery facts observed before delivery routing.
+// DeliveryHint stores the inbound delivery facts observed before M4 resolves a final target.
 type DeliveryHint struct {
 	ChannelID      string
 	ConversationID string
@@ -63,6 +64,7 @@ type RouteHint struct {
 type IngressRoutingEntry struct {
 	MessageID  string
 	Text       string
+	TitleHint  string
 	Actor      MessageActor
 	Scope      MessageScope
 	Delivery   DeliveryHint
@@ -70,10 +72,11 @@ type IngressRoutingEntry struct {
 	ReceivedAt time.Time
 }
 
-// MainRouteRequest is the normalized request emitted by the M1 projector.
+// MainRouteRequest is the normalized request shared by M1-M4.
 type MainRouteRequest struct {
 	MessageID    string
 	Text         string
+	TitleHint    string
 	Actor        MessageActor
 	Scope        MessageScope
 	DeliveryHint DeliveryHint
@@ -99,7 +102,7 @@ type RouteDecision struct {
 	ThreadID        string
 }
 
-// SessionResolution is the M3 output for session selection.
+// SessionResolution is the current M3 output for session selection.
 type SessionResolution struct {
 	SessionID   string
 	SessionKey  string
@@ -112,6 +115,38 @@ type SessionResolution struct {
 	ThreadID    string
 	Created     bool
 	NeedsCreate bool
+}
+
+// DeliveryTarget is the future M4 output for the final outbound target.
+type DeliveryTarget struct {
+	ChannelID      string
+	ConversationID string
+	ReplyTo        string
+	ThreadID       string
+	TransportMeta  map[string]string
+}
+
+// RouteResolution groups the route decisions for one inbound message.
+type RouteResolution struct {
+	Agent    AgentResolution
+	Session  SessionResolution
+	Delivery DeliveryTarget
+}
+
+// RoutedRequest is the route service output consumed by later layers.
+type RoutedRequest struct {
+	Request MainRouteRequest
+	Route   RouteResolution
+}
+
+// RouteInput is the raw input passed to the route service.
+type RouteInput struct {
+	Entry IngressRoutingEntry
+}
+
+// RouteOutput is the result returned by the current route service stage.
+type RouteOutput struct {
+	Request RoutedRequest
 }
 
 // SessionSnapshot is the route-layer view of one persisted session.
@@ -153,38 +188,6 @@ type SessionStore interface {
 	FindByConversationKey(conversationKey string) (SessionSnapshot, bool, error)
 	BindConversationKey(sessionID string, conversationKey string) (SessionSnapshot, error)
 	Create(opts SessionCreateOptions) (SessionSnapshot, error)
-}
-
-// DeliveryTarget is the M4 output for the final outbound target.
-type DeliveryTarget struct {
-	ChannelID      string
-	ConversationID string
-	ReplyTo        string
-	ThreadID       string
-	TransportMeta  map[string]string
-}
-
-// RouteResolution groups the route decisions for one inbound message.
-type RouteResolution struct {
-	Agent    AgentResolution
-	Session  SessionResolution
-	Delivery DeliveryTarget
-}
-
-// RoutedRequest is the route service output consumed by later layers.
-type RoutedRequest struct {
-	Request MainRouteRequest
-	Route   RouteResolution
-}
-
-// RouteInput is the raw input passed to the route service.
-type RouteInput struct {
-	Entry IngressRoutingEntry
-}
-
-// RouteOutput is the result returned by the current route service stage.
-type RouteOutput struct {
-	Request RoutedRequest
 }
 
 // LegacySessionRoute converts the M3 result back into the legacy session-only contract.
