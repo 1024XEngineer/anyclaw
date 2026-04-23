@@ -3,7 +3,7 @@
 // Do not edit manually.
 
 export const workspaceSnapshot = {
-  "generatedAt": "2026-04-23T17:23:04.908Z",
+  "generatedAt": "2026-04-23T17:39:44.786Z",
   "agent": {
     "name": "AnyClaw",
     "description": "",
@@ -45,6 +45,16 @@ export const workspaceSnapshot = {
   "skills": [],
   "extensions": [],
   "configuredChannels": [
+    {
+      "key": "wechat",
+      "enabled": false,
+      "configured": false
+    },
+    {
+      "key": "feishu",
+      "enabled": false,
+      "configured": false
+    },
     {
       "key": "telegram",
       "enabled": false,
