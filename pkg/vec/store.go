@@ -83,7 +83,7 @@ func (vs *VecStore) buildCreateTableSQL() string {
 	}
 
 	for _, aux := range vs.auxColumns {
-		cols = append(cols, fmt.Sprintf("#%s text", aux))
+		cols = append(cols, fmt.Sprintf("+%s text", aux))
 	}
 
 	return fmt.Sprintf(
@@ -94,39 +94,30 @@ func (vs *VecStore) buildCreateTableSQL() string {
 }
 
 func (vs *VecStore) Insert(ctx context.Context, id any, vector []float32, metadata map[string]string) error {
+	return vs.InsertWithAux(ctx, id, vector, metadata, nil)
+}
+
+func (vs *VecStore) InsertWithAux(ctx context.Context, id any, vector []float32, metadata map[string]string, aux map[string]string) error {
 	if len(vector) != vs.dimensions {
 		return fmt.Errorf("vector dimension mismatch: expected %d, got %d", vs.dimensions, len(vector))
 	}
 
-	vs.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", vs.tableName), id)
-
-	cols := []string{"rowid", "vector"}
-	args := []any{id, vectorToBlob(vector)}
-
-	for _, key := range vs.metadata {
-		val := ""
-		if metadata != nil {
-			val = metadata[key]
-		}
-		cols = append(cols, key)
-		args = append(args, val)
-	}
-
-	placeholders := make([]string, len(cols))
-	for i := range cols {
-		placeholders[i] = "?"
-	}
-
-	query := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES (%s)",
-		vs.tableName,
-		strings.Join(cols, ", "),
-		strings.Join(placeholders, ", "),
-	)
-
-	_, err := vs.db.ExecContext(ctx, query, args...)
+	tx, err := vs.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("insert vector: %w", err)
+		return fmt.Errorf("begin insert transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", vs.tableName), id); err != nil {
+		return fmt.Errorf("delete existing vector: %w", err)
+	}
+
+	if err := vs.execInsert(ctx, tx, id, vector, metadata, aux); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit insert transaction: %w", err)
 	}
 	return nil
 }
@@ -138,30 +129,7 @@ func (vs *VecStore) InsertBatch(ctx context.Context, items []VecItem) error {
 	}
 	defer tx.Rollback()
 
-	cols := []string{"rowid", "vector"}
-	for _, key := range vs.metadata {
-		cols = append(cols, key)
-	}
-
-	placeholders := make([]string, len(cols))
-	for i := range cols {
-		placeholders[i] = "?"
-	}
-
-	query := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES (%s)",
-		vs.tableName,
-		strings.Join(cols, ", "),
-		strings.Join(placeholders, ", "),
-	)
-
 	delQuery := fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", vs.tableName)
-
-	stmt, err := tx.PrepareContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
-	}
-	defer stmt.Close()
 
 	delStmt, err := tx.PrepareContext(ctx, delQuery)
 	if err != nil {
@@ -175,18 +143,11 @@ func (vs *VecStore) InsertBatch(ctx context.Context, items []VecItem) error {
 				item.ID, vs.dimensions, len(item.Vector))
 		}
 
-		delStmt.ExecContext(ctx, item.ID)
-
-		args := []any{item.ID, vectorToBlob(item.Vector)}
-		for _, key := range vs.metadata {
-			val := ""
-			if item.Metadata != nil {
-				val = item.Metadata[key]
-			}
-			args = append(args, val)
+		if _, err := delStmt.ExecContext(ctx, item.ID); err != nil {
+			return fmt.Errorf("delete existing item %v: %w", item.ID, err)
 		}
 
-		if _, err := stmt.ExecContext(ctx, args...); err != nil {
+		if err := vs.execInsert(ctx, tx, item.ID, item.Vector, item.Metadata, item.Aux); err != nil {
 			return fmt.Errorf("insert item %v: %w", item.ID, err)
 		}
 	}
@@ -210,6 +171,9 @@ func (vs *VecStore) SearchWithFilter(ctx context.Context, queryVector []float32,
 	selectCols := "SELECT rowid, distance"
 	for _, meta := range vs.metadata {
 		selectCols += fmt.Sprintf(", %s", meta)
+	}
+	for _, aux := range vs.auxColumns {
+		selectCols += fmt.Sprintf(", %s", aux)
 	}
 
 	query := fmt.Sprintf(
@@ -253,8 +217,14 @@ func (vs *VecStore) SearchWithFilter(ctx context.Context, queryVector []float32,
 			scanArgs = append(scanArgs, metaVals[i])
 		}
 
+		auxVals := make([]any, len(vs.auxColumns))
+		for i := range vs.auxColumns {
+			auxVals[i] = new(string)
+			scanArgs = append(scanArgs, auxVals[i])
+		}
+
 		if err := rows.Scan(scanArgs...); err != nil {
-			continue
+			return nil, fmt.Errorf("scan search result: %w", err)
 		}
 
 		r.RowID = rowID
@@ -270,7 +240,20 @@ func (vs *VecStore) SearchWithFilter(ctx context.Context, queryVector []float32,
 			}
 		}
 
+		if len(vs.auxColumns) > 0 {
+			r.Aux = make(map[string]any)
+			for i, key := range vs.auxColumns {
+				if sv, ok := auxVals[i].(*string); ok {
+					r.Aux[key] = *sv
+				}
+			}
+		}
+
 		results = append(results, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate search results: %w", err)
 	}
 
 	return results, nil
@@ -280,6 +263,9 @@ func (vs *VecStore) Get(ctx context.Context, id any) (*VecItem, error) {
 	selectCols := "SELECT rowid, vector"
 	for _, meta := range vs.metadata {
 		selectCols += fmt.Sprintf(", %s", meta)
+	}
+	for _, aux := range vs.auxColumns {
+		selectCols += fmt.Sprintf(", %s", aux)
 	}
 
 	query := fmt.Sprintf("%s FROM %s WHERE rowid = ?", selectCols, vs.tableName)
@@ -296,6 +282,12 @@ func (vs *VecStore) Get(ctx context.Context, id any) (*VecItem, error) {
 		scanArgs = append(scanArgs, metaVals[i])
 	}
 
+	auxVals := make([]any, len(vs.auxColumns))
+	for i := range vs.auxColumns {
+		auxVals[i] = new(string)
+		scanArgs = append(scanArgs, auxVals[i])
+	}
+
 	if err := row.Scan(scanArgs...); err != nil {
 		return nil, fmt.Errorf("get vector item: %w", err)
 	}
@@ -308,6 +300,15 @@ func (vs *VecStore) Get(ctx context.Context, id any) (*VecItem, error) {
 		for i, key := range vs.metadata {
 			if sv, ok := metaVals[i].(*string); ok {
 				item.Metadata[key] = *sv
+			}
+		}
+	}
+
+	if len(vs.auxColumns) > 0 {
+		item.Aux = make(map[string]string)
+		for i, key := range vs.auxColumns {
+			if sv, ok := auxVals[i].(*string); ok {
+				item.Aux[key] = *sv
 			}
 		}
 	}
@@ -376,7 +377,15 @@ func (vs *VecStore) Count(ctx context.Context) (int64, error) {
 }
 
 func (vs *VecStore) List(ctx context.Context, limit int) ([]VecItem, error) {
-	query := fmt.Sprintf("SELECT rowid, vector FROM %s", vs.tableName)
+	selectCols := "SELECT rowid, vector"
+	for _, meta := range vs.metadata {
+		selectCols += fmt.Sprintf(", %s", meta)
+	}
+	for _, aux := range vs.auxColumns {
+		selectCols += fmt.Sprintf(", %s", aux)
+	}
+
+	query := fmt.Sprintf("%s FROM %s", selectCols, vs.tableName)
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
@@ -391,12 +400,50 @@ func (vs *VecStore) List(ctx context.Context, limit int) ([]VecItem, error) {
 	for rows.Next() {
 		var item VecItem
 		var vecBlob []byte
-		if err := rows.Scan(&item.RowID, &vecBlob); err != nil {
-			continue
+		scanArgs := []any{&item.RowID, &vecBlob}
+
+		metaVals := make([]any, len(vs.metadata))
+		for i := range vs.metadata {
+			metaVals[i] = new(string)
+			scanArgs = append(scanArgs, metaVals[i])
 		}
+
+		auxVals := make([]any, len(vs.auxColumns))
+		for i := range vs.auxColumns {
+			auxVals[i] = new(string)
+			scanArgs = append(scanArgs, auxVals[i])
+		}
+
+		if err := rows.Scan(scanArgs...); err != nil {
+			return nil, fmt.Errorf("scan listed item: %w", err)
+		}
+
 		item.ID = item.RowID
 		item.Vector = blobToVector(vecBlob)
+
+		if len(vs.metadata) > 0 {
+			item.Metadata = make(map[string]string)
+			for i, key := range vs.metadata {
+				if sv, ok := metaVals[i].(*string); ok {
+					item.Metadata[key] = *sv
+				}
+			}
+		}
+
+		if len(vs.auxColumns) > 0 {
+			item.Aux = make(map[string]string)
+			for i, key := range vs.auxColumns {
+				if sv, ok := auxVals[i].(*string); ok {
+					item.Aux[key] = *sv
+				}
+			}
+		}
+
 		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate listed items: %w", err)
 	}
 
 	return items, nil
@@ -433,6 +480,7 @@ type VecItem struct {
 	ID       any
 	Vector   []float32
 	Metadata map[string]string
+	Aux      map[string]string
 }
 
 type VecSearchResult struct {
@@ -440,6 +488,7 @@ type VecSearchResult struct {
 	ID       any
 	Distance float64
 	Metadata map[string]any
+	Aux      map[string]any
 }
 
 type VecTableInfo struct {
@@ -448,6 +497,51 @@ type VecTableInfo struct {
 	Distance    string `json:"distance"`
 	VectorCount int64  `json:"vector_count"`
 	VecVersion  string `json:"vec_version"`
+}
+
+type sqlExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func (vs *VecStore) execInsert(ctx context.Context, execer sqlExecutor, id any, vector []float32, metadata map[string]string, aux map[string]string) error {
+	cols := []string{"rowid", "vector"}
+	args := []any{id, vectorToBlob(vector)}
+
+	for _, key := range vs.metadata {
+		val := ""
+		if metadata != nil {
+			val = metadata[key]
+		}
+		cols = append(cols, key)
+		args = append(args, val)
+	}
+
+	for _, key := range vs.auxColumns {
+		val := ""
+		if aux != nil {
+			val = aux[key]
+		}
+		cols = append(cols, key)
+		args = append(args, val)
+	}
+
+	placeholders := make([]string, len(cols))
+	for i := range cols {
+		placeholders[i] = "?"
+	}
+
+	query := fmt.Sprintf(
+		"INSERT INTO %s (%s) VALUES (%s)",
+		vs.tableName,
+		strings.Join(cols, ", "),
+		strings.Join(placeholders, ", "),
+	)
+
+	if _, err := execer.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("insert vector: %w", err)
+	}
+
+	return nil
 }
 
 func vectorToBlob(v []float32) []byte {

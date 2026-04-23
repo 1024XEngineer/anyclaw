@@ -27,6 +27,7 @@ func setupVecStore(t *testing.T) *VecStore {
 		Dimensions: 4,
 		Distance:   DistanceCosine,
 		Metadata:   []string{"category", "source"},
+		AuxColumns: []string{"tag"},
 	})
 
 	if err := vs.Init(context.Background()); err != nil {
@@ -196,7 +197,9 @@ func TestVecStoreGet(t *testing.T) {
 	ctx := context.Background()
 
 	meta := map[string]string{"category": "test", "source": "unit"}
-	vs.Insert(ctx, 42, []float32{0.1, 0.2, 0.3, 0.4}, meta)
+	if err := vs.InsertWithAux(ctx, 42, []float32{0.1, 0.2, 0.3, 0.4}, meta, map[string]string{"tag": "primary"}); err != nil {
+		t.Fatalf("insert with aux failed: %v", err)
+	}
 
 	item, err := vs.Get(ctx, 42)
 	if err != nil {
@@ -213,6 +216,9 @@ func TestVecStoreGet(t *testing.T) {
 
 	if item.Metadata["category"] != "test" {
 		t.Errorf("expected category test, got %s", item.Metadata["category"])
+	}
+	if item.Aux["tag"] != "primary" {
+		t.Errorf("expected aux tag primary, got %s", item.Aux["tag"])
 	}
 }
 
@@ -292,8 +298,12 @@ func TestVecStoreList(t *testing.T) {
 	vs := setupVecStore(t)
 	ctx := context.Background()
 
-	vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
-	vs.Insert(ctx, 2, []float32{0.5, 0.6, 0.7, 0.8}, nil)
+	if err := vs.InsertWithAux(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{"category": "a"}, map[string]string{"tag": "first"}); err != nil {
+		t.Fatalf("insert item 1 failed: %v", err)
+	}
+	if err := vs.InsertWithAux(ctx, 2, []float32{0.5, 0.6, 0.7, 0.8}, map[string]string{"category": "b"}, map[string]string{"tag": "second"}); err != nil {
+		t.Fatalf("insert item 2 failed: %v", err)
+	}
 
 	items, err := vs.List(ctx, 10)
 	if err != nil {
@@ -302,6 +312,12 @@ func TestVecStoreList(t *testing.T) {
 
 	if len(items) != 2 {
 		t.Errorf("expected 2 items, got %d", len(items))
+	}
+	if items[0].Aux["tag"] == "" {
+		t.Fatalf("expected aux column value in list result")
+	}
+	if items[0].Metadata["category"] == "" {
+		t.Fatalf("expected metadata value in list result")
 	}
 }
 
@@ -396,5 +412,93 @@ func TestVecStoreUpsert(t *testing.T) {
 
 	if len(item.Vector) != 4 || item.Vector[0] != 0.5 {
 		t.Errorf("expected vector updated, got %v", item.Vector)
+	}
+}
+
+func TestVecStoreInsertRollsBackOnFailure(t *testing.T) {
+	vs := setupVecStore(t)
+	ctx := context.Background()
+
+	if err := vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{"category": "before"}); err != nil {
+		t.Fatalf("initial insert failed: %v", err)
+	}
+
+	vs.metadata = append(vs.metadata, "missing_column")
+
+	if err := vs.Insert(ctx, 1, []float32{0.9, 0.8, 0.7, 0.6}, map[string]string{"category": "after"}); err == nil {
+		t.Fatal("expected insert failure after adding missing column")
+	}
+
+	vs.metadata = vs.metadata[:len(vs.metadata)-1]
+
+	item, err := vs.Get(ctx, 1)
+	if err != nil {
+		t.Fatalf("get after failed upsert failed: %v", err)
+	}
+
+	if item.Metadata["category"] != "before" {
+		t.Fatalf("expected original row to remain after rollback, got %q", item.Metadata["category"])
+	}
+	if item.Vector[0] != 0.1 {
+		t.Fatalf("expected original vector to remain after rollback, got %v", item.Vector)
+	}
+}
+
+func TestVecStoreSearchReturnsAuxColumns(t *testing.T) {
+	vs := setupVecStore(t)
+	ctx := context.Background()
+
+	if err := vs.InsertWithAux(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{
+		"category": "keep",
+		"source":   "unit",
+	}, map[string]string{"tag": "visible"}); err != nil {
+		t.Fatalf("insert with aux failed: %v", err)
+	}
+
+	results, err := vs.SearchWithFilter(ctx, []float32{0.1, 0.2, 0.3, 0.4}, 1, 0, map[string]string{
+		"category": "keep",
+	})
+	if err != nil {
+		t.Fatalf("search with metadata filter failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Aux["tag"] != "visible" {
+		t.Fatalf("expected aux tag visible, got %v", results[0].Aux["tag"])
+	}
+}
+
+func TestVecStoreInsertBatchPersistsAuxColumns(t *testing.T) {
+	vs := setupVecStore(t)
+	ctx := context.Background()
+
+	items := []VecItem{
+		{
+			ID:       int64(1),
+			Vector:   []float32{0.1, 0.2, 0.3, 0.4},
+			Metadata: map[string]string{"category": "a", "source": "batch"},
+			Aux:      map[string]string{"tag": "first"},
+		},
+		{
+			ID:       int64(2),
+			Vector:   []float32{0.4, 0.3, 0.2, 0.1},
+			Metadata: map[string]string{"category": "b", "source": "batch"},
+			Aux:      map[string]string{"tag": "second"},
+		},
+	}
+
+	if err := vs.InsertBatch(ctx, items); err != nil {
+		t.Fatalf("insert batch failed: %v", err)
+	}
+
+	got, err := vs.Get(ctx, 2)
+	if err != nil {
+		t.Fatalf("get after batch insert failed: %v", err)
+	}
+
+	if got.Aux["tag"] != "second" {
+		t.Fatalf("expected aux tag second, got %s", got.Aux["tag"])
 	}
 }
