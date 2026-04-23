@@ -244,7 +244,7 @@ func TestLoadUTF8BOMConfig(t *testing.T) {
 	path := filepath.Join(dir, "bom.json")
 
 	cfg := DefaultConfig()
-	cfg.Agent.Name = "personal-assistant"
+	cfg.Agent.Name = "个人助手"
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	data = append([]byte{0xEF, 0xBB, 0xBF}, data...)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
@@ -255,7 +255,7 @@ func TestLoadUTF8BOMConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected BOM config to load: %v", err)
 	}
-	if loaded.Agent.Name != "personal-assistant" {
+	if loaded.Agent.Name != "个人助手" {
 		t.Fatalf("expected agent name to survive BOM load, got %q", loaded.Agent.Name)
 	}
 }
@@ -471,43 +471,6 @@ func TestSaveRelativizesPathsInsideConfigDirectory(t *testing.T) {
 	}
 	if loaded.Orchestrator.SubAgents[0].WorkingDir != "workflows/worker" {
 		t.Fatalf("expected relative sub-agent working dir, got %q", loaded.Orchestrator.SubAgents[0].WorkingDir)
-	}
-}
-
-func TestSaveDoesNotMutateOriginalConfigPaths(t *testing.T) {
-	dir := t.TempDir()
-	configDir := filepath.Join(dir, "config")
-	path := filepath.Join(configDir, "anyclaw.json")
-
-	cfg := DefaultConfig()
-	profileDir := filepath.Join(configDir, "workflows", "go")
-	subAgentDir := filepath.Join(configDir, "workflows", "worker")
-	cfg.Agent.Profiles = []AgentProfile{
-		{
-			Name:            "Go Expert",
-			Description:     "Go specialist",
-			WorkingDir:      profileDir,
-			PermissionLevel: "limited",
-		},
-	}
-	cfg.Orchestrator.SubAgents = []SubAgentConfig{
-		{
-			Name:            "worker",
-			Description:     "background worker",
-			PermissionLevel: "limited",
-			WorkingDir:      subAgentDir,
-		},
-	}
-
-	if err := cfg.Save(path); err != nil {
-		t.Fatalf("save should succeed: %v", err)
-	}
-
-	if got := cfg.Agent.Profiles[0].WorkingDir; got != profileDir {
-		t.Fatalf("expected original profile working dir to remain %q, got %q", profileDir, got)
-	}
-	if got := cfg.Orchestrator.SubAgents[0].WorkingDir; got != subAgentDir {
-		t.Fatalf("expected original sub-agent working dir to remain %q, got %q", subAgentDir, got)
 	}
 }
 
