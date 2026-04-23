@@ -89,9 +89,8 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.ensureDefaultWorkspace(); err != nil {
 		return err
 	}
-	mux.HandleFunc("/healthz", s.handleHealth)
-	mux.HandleFunc("/status", s.handleStatus)
-	mux.HandleFunc("/", s.handleRootAPI)
+	s.startWorkers(ctx)
+	s.registerGatewayRoutes(mux)
 
 	s.startedAt = time.Now().UTC()
 	s.httpServer = &http.Server{
