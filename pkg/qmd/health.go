@@ -291,12 +291,11 @@ func (s *Supervisor) startServer(ctx context.Context) error {
 
 	s.mu.Lock()
 	s.server = srv
-	s.serverAddr = srv.config.HTTPAddr
+	s.serverAddr = srv.HTTPAddr()
 	s.mu.Unlock()
 
-	addr := "http://localhost" + s.serverAddr
 	s.client = NewClient(ClientConfig{
-		Address:    addr,
+		Address:    "http://" + s.serverAddr,
 		Protocol:   ProtocolHTTP,
 		Timeout:    5 * time.Second,
 		RetryCount: 3,
