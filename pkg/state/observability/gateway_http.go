@@ -1,9 +1,12 @@
 package observability
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	stdruntime "runtime"
+	"strings"
 	"time"
 )
 
@@ -20,6 +23,18 @@ type GatewayHTTP struct {
 type GatewayHealthRuntime interface {
 	LLMName() string
 	HasMemory() bool
+}
+
+type gatewayLLMAvailability interface {
+	HasLLM() bool
+}
+
+type gatewayLLMHealthChecker interface {
+	LLMHealthCheck(context.Context) error
+}
+
+type gatewayMemoryHealthChecker interface {
+	MemoryHealthCheck(context.Context) error
 }
 
 // NewGatewayHTTP creates the gateway observability adapter.
@@ -46,17 +61,17 @@ func (g *GatewayHTTP) LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		sw := &gatewayHTTPStatusWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		sw := newObservabilityStatusWriter(w)
 		next.ServeHTTP(sw, r)
 
 		duration := time.Since(start)
-		g.logger.Response(r.Method, r.URL.Path, sw.statusCode, duration.Milliseconds(),
+		g.logger.Response(r.Method, r.URL.Path, sw.StatusCode(), duration.Milliseconds(),
 			"remote_addr", r.RemoteAddr,
 			"user_agent", r.UserAgent(),
 		)
 
 		g.registry.Counter("anyclaw_requests_total", "Total HTTP requests", nil).Inc()
-		if sw.statusCode >= 400 {
+		if sw.StatusCode() >= 400 {
 			g.registry.Counter("anyclaw_errors_total", "Total errors", nil).Inc()
 		}
 		g.registry.Histogram("anyclaw_request_duration_seconds", "HTTP request duration", nil).Observe(duration.Seconds())
@@ -68,34 +83,46 @@ func (g *GatewayHTTP) TracingMiddleware(next http.Handler) http.Handler {
 	return TraceMiddleware(g.tp)(next)
 }
 
+// Flush exports any buffered observability spans.
+func (g *GatewayHTTP) Flush(ctx context.Context) error {
+	if g == nil || g.tp == nil {
+		return nil
+	}
+	return g.tp.Flush(ctx)
+}
+
+// Shutdown flushes and closes the gateway trace provider.
+func (g *GatewayHTTP) Shutdown(ctx context.Context) error {
+	if g == nil || g.tp == nil {
+		return nil
+	}
+	return g.tp.Shutdown(ctx)
+}
+
 // RegisterHealthChecks registers standard gateway health checks.
 func (g *GatewayHTTP) RegisterHealthChecks(runtime GatewayHealthRuntime) {
 	g.checker.Register("server", FuncCheck(func() error {
 		return nil
 	}))
 
-	g.checker.Register("llm", TimeoutCheck(FuncCheck(func() error {
-		if runtime == nil {
-			return nil
-		}
-		name := runtime.LLMName()
-		if name == "" {
-			return nil
-		}
-		return nil
-	}), 3*time.Second))
+	g.checker.Register("llm", TimeoutCheck(func(ctx context.Context) error {
+		return checkGatewayLLM(ctx, runtime)
+	}, 3*time.Second))
 
-	g.checker.Register("memory", FuncCheck(func() error {
-		if runtime == nil || !runtime.HasMemory() {
-			return nil
-		}
-		return nil
-	}))
+	g.checker.Register("memory", TimeoutCheck(func(ctx context.Context) error {
+		return checkGatewayMemory(ctx, runtime)
+	}, 3*time.Second))
 
 	g.checker.SetDetails("server", map[string]any{
 		"version":    g.version,
 		"uptime":     time.Since(g.startTime).Round(time.Second).String(),
 		"goroutines": stdruntime.NumGoroutine(),
+	})
+	g.checker.SetDetails("llm", map[string]any{
+		"name": configuredLLMName(runtime),
+	})
+	g.checker.SetDetails("memory", map[string]any{
+		"enabled": runtime != nil && runtime.HasMemory(),
 	})
 }
 
@@ -148,12 +175,38 @@ func (g *GatewayHTTP) MetricsJSONHandler() http.HandlerFunc {
 	}
 }
 
-type gatewayHTTPStatusWriter struct {
-	http.ResponseWriter
-	statusCode int
+func checkGatewayLLM(ctx context.Context, runtime GatewayHealthRuntime) error {
+	if runtime == nil {
+		return fmt.Errorf("llm runtime is unavailable")
+	}
+	if checker, ok := runtime.(gatewayLLMHealthChecker); ok {
+		return checker.LLMHealthCheck(ctx)
+	}
+	if availability, ok := runtime.(gatewayLLMAvailability); ok && !availability.HasLLM() {
+		return fmt.Errorf("llm backend is unavailable")
+	}
+	if strings.TrimSpace(runtime.LLMName()) == "" {
+		return fmt.Errorf("llm backend is unavailable")
+	}
+	return nil
 }
 
-func (sw *gatewayHTTPStatusWriter) WriteHeader(code int) {
-	sw.statusCode = code
-	sw.ResponseWriter.WriteHeader(code)
+func checkGatewayMemory(ctx context.Context, runtime GatewayHealthRuntime) error {
+	if runtime == nil {
+		return fmt.Errorf("memory runtime is unavailable")
+	}
+	if checker, ok := runtime.(gatewayMemoryHealthChecker); ok {
+		return checker.MemoryHealthCheck(ctx)
+	}
+	if !runtime.HasMemory() {
+		return fmt.Errorf("memory backend is unavailable")
+	}
+	return nil
+}
+
+func configuredLLMName(runtime GatewayHealthRuntime) string {
+	if runtime == nil {
+		return ""
+	}
+	return strings.TrimSpace(runtime.LLMName())
 }

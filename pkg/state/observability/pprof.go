@@ -3,6 +3,7 @@ package observability
 import (
 	"net/http"
 	"net/http/pprof"
+	"strings"
 )
 
 // PprofHandler returns an http.Handler that serves pprof endpoints.
@@ -25,9 +26,7 @@ func PprofHandler() http.Handler {
 
 // RegisterPprof registers pprof handlers on an existing ServeMux.
 func RegisterPprof(mux *http.ServeMux, prefix string) {
-	if prefix != "" && prefix[len(prefix)-1] != '/' {
-		prefix += "/"
-	}
+	prefix = normalizePprofPrefix(prefix)
 	mux.HandleFunc(prefix, pprof.Index)
 	mux.HandleFunc(prefix+"cmdline", pprof.Cmdline)
 	mux.HandleFunc(prefix+"profile", pprof.Profile)
@@ -39,4 +38,18 @@ func RegisterPprof(mux *http.ServeMux, prefix string) {
 	mux.Handle(prefix+"heap", pprof.Handler("heap"))
 	mux.Handle(prefix+"mutex", pprof.Handler("mutex"))
 	mux.Handle(prefix+"threadcreate", pprof.Handler("threadcreate"))
+}
+
+func normalizePprofPrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return "/debug/pprof/"
+	}
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	return prefix
 }

@@ -14,6 +14,7 @@ type TraceProvider struct {
 	serviceName string
 	exporter    SpanExporter
 	mu          sync.RWMutex
+	exportMu    sync.Mutex
 	spans       []*Span
 }
 
@@ -45,10 +46,6 @@ func (tp *TraceProvider) StartSpan(ctx context.Context, name string, opts ...Spa
 	span := newSpan(tp, name, opts...)
 	ctx = ContextWithSpan(ctx, span)
 
-	tp.mu.Lock()
-	tp.spans = append(tp.spans, span)
-	tp.mu.Unlock()
-
 	return span, ctx
 }
 
@@ -61,18 +58,27 @@ func (tp *TraceProvider) StartChildSpan(ctx context.Context, name string, opts .
 	return tp.StartSpan(ctx, name, opts...)
 }
 
-// Flush exports all completed spans.
+// Flush exports completed spans that could not be exported when they ended.
 func (tp *TraceProvider) Flush(ctx context.Context) error {
 	tp.mu.Lock()
 	spans := make([]*Span, len(tp.spans))
 	copy(spans, tp.spans)
-	tp.spans = tp.spans[:0]
+	tp.spans = nil
 	tp.mu.Unlock()
 
 	if len(spans) == 0 {
 		return nil
 	}
-	return tp.exporter.ExportSpans(ctx, spans)
+	tp.exportMu.Lock()
+	err := tp.exporter.ExportSpans(ctx, spans)
+	tp.exportMu.Unlock()
+	if err != nil {
+		tp.mu.Lock()
+		tp.spans = append(spans, tp.spans...)
+		tp.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // Shutdown shuts down the trace provider.
@@ -80,7 +86,23 @@ func (tp *TraceProvider) Shutdown(ctx context.Context) error {
 	if err := tp.Flush(ctx); err != nil {
 		return err
 	}
+	tp.exportMu.Lock()
+	defer tp.exportMu.Unlock()
 	return tp.exporter.Shutdown(ctx)
+}
+
+func (tp *TraceProvider) recordCompletedSpan(span *Span) {
+	if span == nil {
+		return
+	}
+	tp.exportMu.Lock()
+	err := tp.exporter.ExportSpans(context.Background(), []*Span{span})
+	tp.exportMu.Unlock()
+	if err != nil {
+		tp.mu.Lock()
+		tp.spans = append(tp.spans, span)
+		tp.mu.Unlock()
+	}
 }
 
 // Span represents a single operation in a trace.
@@ -196,10 +218,20 @@ func (s *Span) SetStatus(status string) {
 // End marks the span as completed.
 func (s *Span) End() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.EndTime != nil {
+		s.mu.Unlock()
+		return
+	}
 	now := time.Now().UTC()
 	s.EndTime = &now
 	s.DurationMs = now.Sub(s.StartTime).Milliseconds()
+	completed := s.snapshotLocked()
+	provider := s.provider
+	s.mu.Unlock()
+
+	if provider != nil {
+		provider.recordCompletedSpan(completed)
+	}
 }
 
 // RecordError records an error on the span.
@@ -216,6 +248,27 @@ func (s *Span) RecordError(err error) {
 			"exception.type":    fmt.Sprintf("%T", err),
 		},
 	})
+}
+
+func (s *Span) snapshotLocked() *Span {
+	snapshot := &Span{
+		TraceID:      s.TraceID,
+		SpanID:       s.SpanID,
+		ParentSpanID: s.ParentSpanID,
+		Name:         s.Name,
+		Kind:         s.Kind,
+		StartTime:    s.StartTime,
+		DurationMs:   s.DurationMs,
+		Status:       s.Status,
+		Attributes:   cloneAnyMap(s.Attributes),
+		Events:       cloneSpanEvents(s.Events),
+		ServiceName:  s.ServiceName,
+	}
+	if s.EndTime != nil {
+		end := *s.EndTime
+		snapshot.EndTime = &end
+	}
+	return snapshot
 }
 
 // spanContextKey is the context key for storing spans.
@@ -251,25 +304,15 @@ func TraceMiddleware(tp *TraceProvider) func(http.Handler) http.Handler {
 
 			r = r.WithContext(ctx)
 
-			sw := &statusWriter{ResponseWriter: w, statusCode: http.StatusOK}
+			sw := newObservabilityStatusWriter(w)
 			next.ServeHTTP(sw, r)
 
-			span.SetAttribute("http.status_code", sw.statusCode)
-			if sw.statusCode >= 500 {
+			span.SetAttribute("http.status_code", sw.StatusCode())
+			if sw.StatusCode() >= 500 {
 				span.SetStatus("error")
 			}
 		})
 	}
-}
-
-type statusWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (sw *statusWriter) WriteHeader(code int) {
-	sw.statusCode = code
-	sw.ResponseWriter.WriteHeader(code)
 }
 
 // ConsoleExporter prints spans to stdout as JSON lines.
@@ -289,3 +332,31 @@ func (ConsoleExporter) ExportSpans(ctx context.Context, spans []*Span) error {
 }
 
 func (ConsoleExporter) Shutdown(ctx context.Context) error { return nil }
+
+func cloneAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func cloneSpanEvents(src []SpanEvent) []SpanEvent {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]SpanEvent, len(src))
+	for i, event := range src {
+		dst[i] = SpanEvent{
+			Name:      event.Name,
+			Timestamp: event.Timestamp,
+		}
+		if len(event.Attributes) > 0 {
+			dst[i].Attributes = cloneAnyMap(event.Attributes)
+		}
+	}
+	return dst
+}

@@ -84,9 +84,9 @@ func TestGatewayHTTPHandlersAndMiddleware(t *testing.T) {
 		t.Fatalf("unexpected response code from tracing middleware: %d", rec.Code)
 	}
 
-	writer := &gatewayHTTPStatusWriter{ResponseWriter: httptest.NewRecorder(), statusCode: http.StatusOK}
+	writer := newObservabilityStatusWriter(httptest.NewRecorder())
 	writer.WriteHeader(http.StatusCreated)
-	if writer.statusCode != http.StatusCreated {
-		t.Fatalf("expected status writer to record new code, got %d", writer.statusCode)
+	if writer.StatusCode() != http.StatusCreated {
+		t.Fatalf("expected status writer to record new code, got %d", writer.StatusCode())
 	}
 }

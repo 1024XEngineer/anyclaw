@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+var histogramBoundaries = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+
 // Registry holds all metrics.
 type Registry struct {
 	mu       sync.RWMutex
@@ -112,8 +114,7 @@ func (h *Histogram) Observe(v float64) {
 		h.Max = v
 	}
 
-	boundaries := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
-	for _, b := range boundaries {
+	for _, b := range histogramBoundaries {
 		label := fmt.Sprintf("%.3f", b)
 		if v <= b {
 			h.Buckets[label]++
@@ -134,8 +135,7 @@ func (h *Histogram) percentileLocked(p float64) float64 {
 		return 0
 	}
 	target := int64(math.Ceil(float64(h.Count) * p))
-	boundaries := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
-	for _, b := range boundaries {
+	for _, b := range histogramBoundaries {
 		label := fmt.Sprintf("%.3f", b)
 		if h.Buckets[label] >= target {
 			return b
@@ -157,7 +157,7 @@ func (r *Registry) Counter(name, help string, labels map[string]string) *Counter
 	c := &Counter{
 		Name:   name,
 		Help:   help,
-		Labels: labels,
+		Labels: cloneStringMap(labels),
 	}
 	r.counters[key] = c
 	return c
@@ -176,7 +176,7 @@ func (r *Registry) Gauge(name, help string, labels map[string]string) *Gauge {
 	g := &Gauge{
 		Name:   name,
 		Help:   help,
-		Labels: labels,
+		Labels: cloneStringMap(labels),
 	}
 	r.gauges[key] = g
 	return g
@@ -195,7 +195,7 @@ func (r *Registry) Histogram(name, help string, labels map[string]string) *Histo
 	h := &Histogram{
 		Name:    name,
 		Help:    help,
-		Labels:  labels,
+		Labels:  cloneStringMap(labels),
 		Min:     math.MaxFloat64,
 		Buckets: make(map[string]int64),
 	}
@@ -260,8 +260,7 @@ func (r *Registry) PrometheusFormat() string {
 		sb.WriteString(fmt.Sprintf("%s_sum%s %g\n", h.Name, labelsStr(h.Labels), h.Sum))
 		sb.WriteString(fmt.Sprintf("%s_count%s %d\n", h.Name, labelsStr(h.Labels), h.Count))
 
-		boundaries := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
-		for _, b := range boundaries {
+		for _, b := range histogramBoundaries {
 			label := fmt.Sprintf("%.3f", b)
 			merged := mergeLabels(h.Labels, map[string]string{"le": label})
 			sb.WriteString(fmt.Sprintf("%s_bucket%s %d\n", h.Name, labelsStr(merged), h.Buckets[label]))
@@ -291,7 +290,7 @@ func (r *Registry) JSONFormat() map[string]any {
 		counters = append(counters, map[string]any{
 			"name":   c.Name,
 			"help":   c.Help,
-			"labels": c.Labels,
+			"labels": cloneStringMap(c.Labels),
 			"value":  c.Value,
 		})
 		c.mu.Unlock()
@@ -304,7 +303,7 @@ func (r *Registry) JSONFormat() map[string]any {
 		gauges = append(gauges, map[string]any{
 			"name":   g.Name,
 			"help":   g.Help,
-			"labels": g.Labels,
+			"labels": cloneStringMap(g.Labels),
 			"value":  g.Value,
 		})
 		g.mu.Unlock()
@@ -317,7 +316,7 @@ func (r *Registry) JSONFormat() map[string]any {
 		histograms = append(histograms, map[string]any{
 			"name":    h.Name,
 			"help":    h.Help,
-			"labels":  h.Labels,
+			"labels":  cloneStringMap(h.Labels),
 			"count":   h.Count,
 			"sum":     h.Sum,
 			"min":     h.Min,
@@ -325,7 +324,7 @@ func (r *Registry) JSONFormat() map[string]any {
 			"p50":     h.percentileLocked(0.50),
 			"p95":     h.percentileLocked(0.95),
 			"p99":     h.percentileLocked(0.99),
-			"buckets": h.Buckets,
+			"buckets": cloneInt64Map(h.Buckets),
 		})
 		h.mu.Unlock()
 	}
@@ -391,6 +390,28 @@ func mergeLabels(a, b map[string]string) map[string]string {
 		m[k] = v
 	}
 	return m
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func cloneInt64Map(src map[string]int64) map[string]int64 {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]int64, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func sortedCounters(m map[string]*Counter) []*Counter {

@@ -5,22 +5,46 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 )
 
 type recordingExporter struct {
+	mu       sync.Mutex
 	spans    []*Span
 	shutdown bool
 }
 
 func (e *recordingExporter) ExportSpans(ctx context.Context, spans []*Span) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.spans = append(e.spans, spans...)
 	return nil
 }
 
 func (e *recordingExporter) Shutdown(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.shutdown = true
 	return nil
+}
+
+func (e *recordingExporter) exportedCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.spans)
+}
+
+func (e *recordingExporter) exportedSpan(index int) *Span {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.spans[index]
+}
+
+func (e *recordingExporter) wasShutdownCalled() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.shutdown
 }
 
 func TestTraceProviderLifecycleAndMiddleware(t *testing.T) {
@@ -49,11 +73,11 @@ func TestTraceProviderLifecycleAndMiddleware(t *testing.T) {
 	if err := provider.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
-	if len(exporter.spans) != 2 {
-		t.Fatalf("expected 2 exported spans, got %d", len(exporter.spans))
+	if exporter.exportedCount() != 2 {
+		t.Fatalf("expected 2 exported spans, got %d", exporter.exportedCount())
 	}
-	if exporter.spans[1].Status != "error" {
-		t.Fatalf("expected error status after RecordError, got %+v", exporter.spans[1])
+	if exporter.exportedSpan(0).Status != "error" {
+		t.Fatalf("expected error status after RecordError, got %+v", exporter.exportedSpan(0))
 	}
 
 	rec := httptest.NewRecorder()
@@ -72,7 +96,8 @@ func TestTraceProviderLifecycleAndMiddleware(t *testing.T) {
 		t.Fatalf("Flush after middleware: %v", err)
 	}
 	found := false
-	for _, span := range exporter.spans {
+	for i := 0; i < exporter.exportedCount(); i++ {
+		span := exporter.exportedSpan(i)
 		if span.Name == "/boom" {
 			found = true
 			if span.Status != "error" {
@@ -87,7 +112,7 @@ func TestTraceProviderLifecycleAndMiddleware(t *testing.T) {
 	if err := provider.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
-	if !exporter.shutdown {
+	if !exporter.wasShutdownCalled() {
 		t.Fatal("expected exporter shutdown to be called")
 	}
 
@@ -95,7 +120,11 @@ func TestTraceProviderLifecycleAndMiddleware(t *testing.T) {
 	if nilExporterProvider.exporter == nil {
 		t.Fatal("expected nil exporter to fall back to NoopExporter")
 	}
-	if err := (ConsoleExporter{}).ExportSpans(context.Background(), exporter.spans); err != nil {
+	spans := make([]*Span, exporter.exportedCount())
+	for i := range spans {
+		spans[i] = exporter.exportedSpan(i)
+	}
+	if err := (ConsoleExporter{}).ExportSpans(context.Background(), spans); err != nil {
 		t.Fatalf("ConsoleExporter.ExportSpans: %v", err)
 	}
 	if err := (ConsoleExporter{}).Shutdown(context.Background()); err != nil {
