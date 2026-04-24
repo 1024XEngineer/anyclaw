@@ -52,8 +52,8 @@ func NewSearchCache(cfg CacheConfig) *SearchCache {
 }
 
 func (sc *SearchCache) Get(key string) ([]SearchResult, bool) {
-	sc.mu.RLock()
-	defer sc.mu.RUnlock()
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
 
 	entry, ok := sc.items[key]
 	if !ok {
@@ -61,6 +61,7 @@ func (sc *SearchCache) Get(key string) ([]SearchResult, bool) {
 		return nil, false
 	}
 	if time.Now().After(entry.expiresAt) {
+		delete(sc.items, key)
 		sc.misses++
 		return nil, false
 	}

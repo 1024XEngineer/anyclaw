@@ -3,7 +3,7 @@
 // Do not edit manually.
 
 export const workspaceSnapshot = {
-  "generatedAt": "2026-04-21T16:52:56.410Z",
+  "generatedAt": "2026-04-23T17:39:44.786Z",
   "agent": {
     "name": "AnyClaw",
     "description": "",

@@ -8,31 +8,37 @@ import (
 	"time"
 )
 
-// CronField describes a single parsed cron field.
+// CronField represents a parsed cron field (minute, hour, etc.)
+// It supports specific values, ranges (1-5), lists (1,3,5), steps (*/5), and wildcards (*).
 type CronField struct {
-	Values []int
+	Values []int // sorted list of matching values
 	Min    int
 	Max    int
 }
 
-// CronSpec is a parsed cron schedule or an @every interval schedule.
+// CronSpec is a fully parsed cron specification supporting all standard features.
 type CronSpec struct {
 	Minute     CronField
 	Hour       CronField
 	DayOfMonth CronField
 	Month      CronField
 	DayOfWeek  CronField
-	Every      time.Duration
 	Original   string
 }
 
-// ParseCronSpec parses a five-field cron expression plus common aliases.
+// ParseCronSpec parses a full cron expression with support for:
+//   - Wildcards: *
+//   - Ranges: 1-5
+//   - Lists: 1,3,5
+//   - Steps: */5, 1-10/2
+//   - Predefined aliases: @hourly, @daily, @weekly, @monthly, @yearly, @every 5m
+type CronSpecParser struct{}
+
+// Parse parses a cron expression string into a CronSpec.
 func ParseCronSpec(expr string) (*CronSpec, error) {
 	expr = strings.TrimSpace(expr)
-	if expr == "" {
-		return nil, fmt.Errorf("cron expression is required")
-	}
 
+	// Handle predefined aliases
 	switch strings.ToLower(expr) {
 	case "@yearly", "@annually":
 		expr = "0 0 1 1 *"
@@ -46,15 +52,20 @@ func ParseCronSpec(expr string) (*CronSpec, error) {
 		expr = "0 * * * *"
 	}
 
-	if strings.HasPrefix(strings.ToLower(expr), "@every ") {
-		d, err := time.ParseDuration(strings.TrimSpace(expr[len("@every "):]))
+	// Handle @every duration
+	if strings.HasPrefix(expr, "@every ") {
+		_, err := time.ParseDuration(strings.TrimPrefix(expr, "@every "))
 		if err != nil {
 			return nil, fmt.Errorf("invalid @every duration: %w", err)
 		}
-		if d <= 0 {
-			return nil, fmt.Errorf("@every duration must be greater than zero")
-		}
-		return &CronSpec{Every: d, Original: expr}, nil
+		return &CronSpec{
+			Original:   expr,
+			Minute:     CronField{Values: []int{-1}, Min: 0, Max: 59},
+			Hour:       CronField{Values: []int{-1}, Min: 0, Max: 23},
+			DayOfMonth: CronField{Values: []int{-1}, Min: 1, Max: 31},
+			Month:      CronField{Values: []int{-1}, Min: 1, Max: 12},
+			DayOfWeek:  CronField{Values: []int{-1}, Min: 0, Max: 6},
+		}, nil
 	}
 
 	parts := strings.Fields(expr)
@@ -63,24 +74,28 @@ func ParseCronSpec(expr string) (*CronSpec, error) {
 	}
 
 	spec := &CronSpec{Original: expr}
-	var err error
 
+	var err error
 	spec.Minute, err = parseField(parts[0], 0, 59)
 	if err != nil {
 		return nil, fmt.Errorf("invalid minute field %q: %w", parts[0], err)
 	}
+
 	spec.Hour, err = parseField(parts[1], 0, 23)
 	if err != nil {
 		return nil, fmt.Errorf("invalid hour field %q: %w", parts[1], err)
 	}
+
 	spec.DayOfMonth, err = parseField(parts[2], 1, 31)
 	if err != nil {
 		return nil, fmt.Errorf("invalid day-of-month field %q: %w", parts[2], err)
 	}
+
 	spec.Month, err = parseField(parts[3], 1, 12)
 	if err != nil {
 		return nil, fmt.Errorf("invalid month field %q: %w", parts[3], err)
 	}
+
 	spec.DayOfWeek, err = parseField(parts[4], 0, 6)
 	if err != nil {
 		return nil, fmt.Errorf("invalid day-of-week field %q: %w", parts[4], err)
@@ -89,25 +104,20 @@ func ParseCronSpec(expr string) (*CronSpec, error) {
 	return spec, nil
 }
 
-// Next returns the first time after t that matches the spec.
+// Next returns the next time after t that matches the cron spec.
 func (s *CronSpec) Next(t time.Time) time.Time {
-	if s == nil {
-		return time.Time{}
-	}
-	if s.Every > 0 {
-		return t.Add(s.Every)
-	}
-
 	loc := t.Location()
-	current := t.Add(time.Second).Truncate(time.Minute)
-	if !current.After(t) {
-		current = current.Add(time.Minute)
-	}
-	deadline := t.AddDate(5, 0, 0)
+	start := t.Add(time.Second)
 
-	for current.Before(deadline) {
-		if !s.Month.matches(int(current.Month())) {
-			nextMonth := s.Month.nextValue(int(current.Month()))
+	// Search forward up to 4 years (to handle leap years and all combinations)
+	deadline := t.AddDate(4, 0, 0)
+
+	for current := start; current.Before(deadline); {
+		// Check month
+		month := int(current.Month())
+		if !s.Month.matches(month) {
+			// Jump to next matching month
+			nextMonth := s.Month.nextValue(month)
 			if nextMonth == -1 {
 				nextMonth = s.Month.Values[0]
 				current = time.Date(current.Year()+1, time.Month(nextMonth), 1, 0, 0, 0, 0, loc)
@@ -117,14 +127,39 @@ func (s *CronSpec) Next(t time.Time) time.Time {
 			continue
 		}
 
-		if !s.matchesDay(current) {
+		// Check day (both day-of-month and day-of-week)
+		day := current.Day()
+		domMatch := s.DayOfMonth.matches(day)
+		dowMatch := s.DayOfWeek.matches(int(current.Weekday()))
+
+		// If both are restricted (not *), either can match (OR logic per standard cron)
+		// If only one is restricted, that one must match
+		// If neither is restricted (both *), any day matches
+		domRestricted := !s.DayOfMonth.isWildcard()
+		dowRestricted := !s.DayOfWeek.isWildcard()
+
+		dayMatch := false
+		if domRestricted && dowRestricted {
+			dayMatch = domMatch || dowMatch
+		} else if domRestricted {
+			dayMatch = domMatch
+		} else if dowRestricted {
+			dayMatch = dowMatch
+		} else {
+			dayMatch = true
+		}
+
+		if !dayMatch {
 			current = time.Date(current.Year(), current.Month(), current.Day()+1, 0, 0, 0, 0, loc)
 			continue
 		}
 
-		if !s.Hour.matches(current.Hour()) {
-			nextHour := s.Hour.nextValue(current.Hour())
+		// Check hour
+		hour := current.Hour()
+		if !s.Hour.matches(hour) {
+			nextHour := s.Hour.nextValue(hour)
 			if nextHour == -1 {
+				// No more matching hours today, go to next day
 				current = time.Date(current.Year(), current.Month(), current.Day()+1, 0, 0, 0, 0, loc)
 			} else {
 				current = time.Date(current.Year(), current.Month(), current.Day(), nextHour, 0, 0, 0, loc)
@@ -132,115 +167,104 @@ func (s *CronSpec) Next(t time.Time) time.Time {
 			continue
 		}
 
-		if !s.Minute.matches(current.Minute()) {
-			nextMinute := s.Minute.nextValue(current.Minute())
+		// Check minute
+		minute := current.Minute()
+		if !s.Minute.matches(minute) {
+			nextMinute := s.Minute.nextValue(minute)
 			if nextMinute == -1 {
-				nextHour := s.Hour.nextValue(current.Hour())
+				// No more matching minutes this hour, go to next hour
+				nextHour := s.Hour.nextValue(hour + 1)
 				if nextHour == -1 {
 					current = time.Date(current.Year(), current.Month(), current.Day()+1, 0, 0, 0, 0, loc)
 				} else {
 					current = time.Date(current.Year(), current.Month(), current.Day(), nextHour, 0, 0, 0, loc)
 				}
 			} else {
-				current = time.Date(current.Year(), current.Month(), current.Day(), current.Hour(), nextMinute, 0, 0, loc)
+				current = time.Date(current.Year(), current.Month(), current.Day(), hour, nextMinute, 0, 0, loc)
 			}
 			continue
 		}
 
-		if current.After(t) {
-			return current
-		}
-		current = current.Add(time.Minute)
+		// All fields match
+		return current
 	}
 
+	// No match found within 4 years
 	return time.Time{}
 }
 
-func (s *CronSpec) matchesDay(t time.Time) bool {
-	domMatch := s.DayOfMonth.matches(t.Day())
-	dowMatch := s.DayOfWeek.matches(int(t.Weekday()))
-	domRestricted := !s.DayOfMonth.isWildcard()
-	dowRestricted := !s.DayOfWeek.isWildcard()
-
-	switch {
-	case domRestricted && dowRestricted:
-		return domMatch || dowMatch
-	case domRestricted:
-		return domMatch
-	case dowRestricted:
-		return dowMatch
-	default:
-		return true
-	}
-}
-
-// Validate checks whether the parsed spec is usable.
+// Validate returns an error if the cron spec is invalid.
 func (s *CronSpec) Validate() error {
-	if s == nil {
-		return fmt.Errorf("cron spec is required")
+	if len(s.Minute.Values) == 0 {
+		return fmt.Errorf("minute field has no valid values")
 	}
-	if s.Every > 0 {
-		return nil
-	}
-	if len(s.Minute.Values) == 0 || len(s.Hour.Values) == 0 || len(s.DayOfMonth.Values) == 0 || len(s.Month.Values) == 0 || len(s.DayOfWeek.Values) == 0 {
-		return fmt.Errorf("cron spec has empty fields")
+	if len(s.Hour.Values) == 0 {
+		return fmt.Errorf("hour field has no valid values")
 	}
 	return nil
 }
 
-func (f CronField) isWildcard() bool {
+// IsWildcard returns true if the field matches all values.
+func (f *CronField) isWildcard() bool {
 	return len(f.Values) == 1 && f.Values[0] == -1
 }
 
-func (f CronField) matches(v int) bool {
+// matches checks if a value is in the field's values.
+func (f *CronField) matches(v int) bool {
 	if f.isWildcard() {
 		return true
 	}
-	for _, value := range f.Values {
-		if value == v {
+	for _, val := range f.Values {
+		if val == v {
 			return true
 		}
 	}
 	return false
 }
 
-func (f CronField) nextValue(v int) int {
+// nextValue returns the next value in the field that is greater than v, or -1 if none.
+func (f *CronField) nextValue(v int) int {
 	if f.isWildcard() {
-		if v < f.Max {
-			return v + 1
-		}
 		return -1
 	}
-	for _, value := range f.Values {
-		if value > v {
-			return value
+	for _, val := range f.Values {
+		if val > v {
+			return val
 		}
 	}
 	return -1
 }
 
-func parseField(field string, min int, max int) (CronField, error) {
-	values := make(map[int]struct{})
-	for _, part := range strings.Split(field, ",") {
+// parseField parses a single cron field (e.g., "*/5", "1-5", "1,3,5", "*").
+func parseField(field string, min, max int) (CronField, error) {
+	values := make(map[int]bool)
+
+	// Handle comma-separated list
+	parts := strings.Split(field, ",")
+	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		parsed, err := parseFieldPart(part, min, max)
+
+		fieldValues, err := parseFieldPart(part, min, max)
 		if err != nil {
 			return CronField{}, err
 		}
-		for _, value := range parsed {
-			values[value] = struct{}{}
+
+		for _, v := range fieldValues {
+			values[v] = true
 		}
 	}
+
 	if len(values) == 0 {
 		return CronField{}, fmt.Errorf("no valid values in field")
 	}
 
+	// Convert to sorted slice
 	sorted := make([]int, 0, len(values))
-	for value := range values {
-		sorted = append(sorted, value)
+	for v := range values {
+		sorted = append(sorted, v)
 	}
 	sort.Ints(sorted)
 
@@ -251,31 +275,32 @@ func parseField(field string, min int, max int) (CronField, error) {
 	}, nil
 }
 
-func parseFieldPart(part string, min int, max int) ([]int, error) {
+// parseFieldPart parses a single part of a cron field (handles *, ranges, steps).
+func parseFieldPart(part string, min, max int) ([]int, error) {
+	// Handle step values
 	step := 1
 	if idx := strings.Index(part, "/"); idx != -1 {
-		stepValue, err := strconv.Atoi(part[idx+1:])
+		stepStr := part[idx+1:]
+		var err error
+		step, err = strconv.Atoi(stepStr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid step value %q: %w", part[idx+1:], err)
+			return nil, fmt.Errorf("invalid step value %q: %w", stepStr, err)
 		}
-		if stepValue < 1 {
+		if step < 1 {
 			return nil, fmt.Errorf("step value must be >= 1")
 		}
-		step = stepValue
 		part = part[:idx]
 	}
 
-	switch {
-	case part == "*":
-		values := make([]int, 0, ((max-min)/step)+1)
-		for value := min; value <= max; value += step {
-			values = append(values, value)
+	var values []int
+
+	if part == "*" {
+		// Wildcard with optional step
+		for i := min; i <= max; i += step {
+			values = append(values, i)
 		}
-		if step == 1 {
-			return []int{-1}, nil
-		}
-		return values, nil
-	case strings.Contains(part, "-"):
+	} else if strings.Contains(part, "-") {
+		// Range with optional step
 		rangeParts := strings.SplitN(part, "-", 2)
 		start, err := strconv.Atoi(rangeParts[0])
 		if err != nil {
@@ -291,130 +316,165 @@ func parseFieldPart(part string, min int, max int) ([]int, error) {
 		if start < min || end > max {
 			return nil, fmt.Errorf("range %d-%d out of bounds [%d-%d]", start, end, min, max)
 		}
-		values := make([]int, 0, ((end-start)/step)+1)
-		for value := start; value <= end; value += step {
-			values = append(values, value)
+		for i := start; i <= end; i += step {
+			values = append(values, i)
 		}
-		return values, nil
-	default:
+	} else {
+		// Single value
 		if step != 1 {
 			return nil, fmt.Errorf("step not allowed on single value")
 		}
-		value, err := strconv.Atoi(part)
+		v, err := strconv.Atoi(part)
 		if err != nil {
 			return nil, fmt.Errorf("invalid value %q: %w", part, err)
 		}
-		if value < min || value > max {
-			return nil, fmt.Errorf("value %d out of range [%d-%d]", value, min, max)
+		if v < min || v > max {
+			return nil, fmt.Errorf("value %d out of range [%d-%d]", v, min, max)
 		}
-		return []int{value}, nil
+		values = append(values, v)
 	}
+
+	return values, nil
 }
 
-// Format returns a normalized human-readable schedule.
+// Format returns a human-readable description of the cron schedule.
 func (s *CronSpec) Format() string {
-	if s == nil {
-		return ""
-	}
 	if s.Original != "" {
 		return s.Original
 	}
-	if s.Every > 0 {
-		return "@every " + s.Every.String()
-	}
 
-	return strings.Join([]string{
-		formatField(s.Minute),
-		formatField(s.Hour),
-		formatField(s.DayOfMonth),
-		formatField(s.Month),
-		formatField(s.DayOfWeek),
-	}, " ")
+	parts := []string{
+		formatField(s.Minute, 0, 59),
+		formatField(s.Hour, 0, 23),
+		formatField(s.DayOfMonth, 1, 31),
+		formatField(s.Month, 1, 12),
+		formatField(s.DayOfWeek, 0, 6),
+	}
+	return strings.Join(parts, " ")
 }
 
-func formatField(field CronField) string {
-	if field.isWildcard() {
+func formatField(f CronField, min, max int) string {
+	if f.isWildcard() {
 		return "*"
 	}
-	parts := make([]string, len(field.Values))
-	for i, value := range field.Values {
-		parts[i] = strconv.Itoa(value)
+
+	// Check if it's a simple step pattern
+	if len(f.Values) > 1 {
+		step := f.Values[1] - f.Values[0]
+		isStep := true
+		for i := 2; i < len(f.Values); i++ {
+			if f.Values[i]-f.Values[i-1] != step {
+				isStep = false
+				break
+			}
+		}
+		if isStep && f.Values[0] == min {
+			return fmt.Sprintf("*/%d", step)
+		}
+	}
+
+	// Check if it's a range
+	if len(f.Values) > 1 {
+		isRange := true
+		for i := 1; i < len(f.Values); i++ {
+			if f.Values[i] != f.Values[i-1]+1 {
+				isRange = false
+				break
+			}
+		}
+		if isRange {
+			return fmt.Sprintf("%d-%d", f.Values[0], f.Values[len(f.Values)-1])
+		}
+	}
+
+	// List of values
+	parts := make([]string, len(f.Values))
+	for i, v := range f.Values {
+		parts[i] = strconv.Itoa(v)
 	}
 	return strings.Join(parts, ",")
 }
 
-// CronSpecForTask parses a task schedule.
+// CronSpecForTask returns a parsed CronSpec for a task's schedule.
 func CronSpecForTask(schedule string) (*CronSpec, error) {
 	return ParseCronSpec(schedule)
 }
 
-// NextRunTimes returns the next N execution timestamps after from.
+// NextRunTimes returns the next N run times for a cron expression.
 func NextRunTimes(schedule string, from time.Time, count int) ([]time.Time, error) {
 	spec, err := ParseCronSpec(schedule)
 	if err != nil {
 		return nil, err
 	}
-	if count <= 0 {
-		return []time.Time{}, nil
-	}
 
-	result := make([]time.Time, 0, count)
+	times := make([]time.Time, 0, count)
 	current := from
-	for len(result) < count {
+	for i := 0; i < count; i++ {
 		next := spec.Next(current)
 		if next.IsZero() {
 			break
 		}
-		result = append(result, next)
+		times = append(times, next)
 		current = next
 	}
-	return result, nil
+
+	return times, nil
 }
 
-// ValidateCronExpression validates a schedule and returns a short description.
+// ValidateCronExpression validates a cron expression and returns a description.
 func ValidateCronExpression(expr string) (string, error) {
 	spec, err := ParseCronSpec(expr)
 	if err != nil {
 		return "", err
 	}
+
 	if err := spec.Validate(); err != nil {
 		return "", err
 	}
+
 	return describeSchedule(spec), nil
 }
 
 func describeSchedule(spec *CronSpec) string {
-	if spec.Every > 0 {
-		return fmt.Sprintf("Every %s", spec.Every)
-	}
 	if spec.isEveryMinute() {
 		return "Every minute"
 	}
 	if spec.isEveryHour() {
-		return fmt.Sprintf("Every hour at minute %02d", spec.Minute.Values[0])
+		return "Every hour"
 	}
 	if spec.isDaily() {
 		return fmt.Sprintf("Every day at %02d:%02d", spec.Hour.Values[0], spec.Minute.Values[0])
 	}
 	if spec.isWeekly() {
 		days := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
-		return fmt.Sprintf("Every %s at %02d:%02d", days[spec.DayOfWeek.Values[0]], spec.Hour.Values[0], spec.Minute.Values[0])
+		day := "Sunday"
+		if len(spec.DayOfWeek.Values) > 0 && spec.DayOfWeek.Values[0] >= 0 && spec.DayOfWeek.Values[0] <= 6 {
+			day = days[spec.DayOfWeek.Values[0]]
+		}
+		return fmt.Sprintf("Every %s at %02d:%02d", day, spec.Hour.Values[0], spec.Minute.Values[0])
+	}
+	if spec.isMonthly() {
+		return fmt.Sprintf("On day %d of every month at %02d:%02d", spec.DayOfMonth.Values[0], spec.Hour.Values[0], spec.Minute.Values[0])
 	}
 	return "Custom schedule: " + spec.Format()
 }
 
 func (s *CronSpec) isEveryMinute() bool {
-	return s.Every == 0 && s.Minute.isWildcard() && s.Hour.isWildcard() && s.DayOfMonth.isWildcard() && s.Month.isWildcard() && s.DayOfWeek.isWildcard()
+	return s.Minute.isWildcard() && s.Hour.isWildcard() && s.DayOfMonth.isWildcard() && s.Month.isWildcard() && s.DayOfWeek.isWildcard()
 }
 
 func (s *CronSpec) isEveryHour() bool {
-	return s.Every == 0 && len(s.Minute.Values) == 1 && s.Hour.isWildcard() && s.DayOfMonth.isWildcard() && s.Month.isWildcard() && s.DayOfWeek.isWildcard()
+	return !s.Minute.isWildcard() && len(s.Minute.Values) == 1 && s.Hour.isWildcard() && s.DayOfMonth.isWildcard() && s.Month.isWildcard() && s.DayOfWeek.isWildcard()
 }
 
 func (s *CronSpec) isDaily() bool {
-	return s.Every == 0 && len(s.Minute.Values) == 1 && len(s.Hour.Values) == 1 && s.DayOfMonth.isWildcard() && s.Month.isWildcard() && s.DayOfWeek.isWildcard()
+	return !s.Minute.isWildcard() && len(s.Minute.Values) == 1 && !s.Hour.isWildcard() && len(s.Hour.Values) == 1 && s.DayOfMonth.isWildcard() && s.Month.isWildcard() && s.DayOfWeek.isWildcard()
 }
 
 func (s *CronSpec) isWeekly() bool {
-	return s.Every == 0 && len(s.Minute.Values) == 1 && len(s.Hour.Values) == 1 && s.DayOfMonth.isWildcard() && s.Month.isWildcard() && len(s.DayOfWeek.Values) == 1 && !s.DayOfWeek.isWildcard()
+	return !s.Minute.isWildcard() && len(s.Minute.Values) == 1 && !s.Hour.isWildcard() && len(s.Hour.Values) == 1 && s.DayOfMonth.isWildcard() && s.Month.isWildcard() && !s.DayOfWeek.isWildcard() && len(s.DayOfWeek.Values) == 1
+}
+
+func (s *CronSpec) isMonthly() bool {
+	return !s.Minute.isWildcard() && len(s.Minute.Values) == 1 && !s.Hour.isWildcard() && len(s.Hour.Values) == 1 && !s.DayOfMonth.isWildcard() && len(s.DayOfMonth.Values) == 1 && s.Month.isWildcard() && s.DayOfWeek.isWildcard()
 }

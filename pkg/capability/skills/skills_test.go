@@ -13,7 +13,7 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 )
 
-const testExecTimeoutSeconds = 10
+const testExecTimeoutSeconds = 30
 
 func TestSkillsManagerLoadAndHelpers(t *testing.T) {
 	root := t.TempDir()

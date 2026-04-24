@@ -55,7 +55,7 @@ export function ChannelsPage() {
 
   const enabledCount = data.priorityChannels.filter((channel) => channel.enabled || channel.running).length;
   const configuredCount = data.priorityChannels.filter((channel) => channel.configured).length;
-  const plannedCount = data.priorityChannels.filter((channel) => !channel.enabled && !channel.running).length;
+  const plannedCount = data.priorityChannels.length - configuredCount;
 
   const filteredSettings = useMemo(
     () => data.channelSettings.filter((item) => matchesQuery(query, [item.label, item.value, item.hint])),

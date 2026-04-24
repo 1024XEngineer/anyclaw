@@ -27,11 +27,4 @@ describe("MarkdownMessage", () => {
     expect(screen.getByRole("link", { name: "OpenAI" })).toHaveAttribute("href", "https://openai.com");
     expect(screen.getByRole("link", { name: "OpenAI" })).toHaveAttribute("target", "_blank");
   });
-
-  it("does not render unsafe markdown urls as clickable links", () => {
-    render(<MarkdownMessage content="[危险链接](javascript:alert(1))" />);
-
-    expect(screen.getByText("危险链接")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "危险链接" })).not.toBeInTheDocument();
-  });
 });

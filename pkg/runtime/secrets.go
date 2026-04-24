@@ -9,15 +9,9 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/state/policy/secrets"
 )
 
-// buildInitialSecretsSnapshot only prepares the in-memory bootstrap snapshot.
-// Callers can persist secrets later once they have an explicitly configured store policy.
-func buildInitialSecretsSnapshot(_ *secrets.Store, cfg *config.Config) *secrets.RuntimeSnapshot {
+func buildInitialSecretsSnapshot(store *secrets.Store, cfg *config.Config) *secrets.RuntimeSnapshot {
 	entries := make(map[string]*secrets.SecretEntry)
 	now := time.Now().UTC()
-
-	if cfg == nil {
-		return secrets.NewRuntimeSnapshot(entries, "bootstrap")
-	}
 
 	seedSecret := func(key string, value string) {
 		if strings.TrimSpace(value) == "" {
@@ -61,16 +55,22 @@ func buildInitialSecretsSnapshot(_ *secrets.Store, cfg *config.Config) *secrets.
 	}
 
 	snap := secrets.NewRuntimeSnapshot(entries, "bootstrap")
+
+	for _, entry := range entries {
+		_ = store.SetSecret(entry)
+	}
+	if len(entries) > 0 {
+		_, _ = store.CreateSnapshot("bootstrap")
+	}
+
 	return snap
 }
 
 func resolveSecret(snap *secrets.RuntimeSnapshot, plaintext string, secretKey string) string {
 	if snap != nil {
-		if strings.Contains(plaintext, "${SECRET:") {
-			resolved, err := snap.ResolveValueStrict(plaintext)
-			if err == nil {
-				return resolved
-			}
+		resolved := snap.ResolveValue(plaintext)
+		if resolved != plaintext {
+			return resolved
 		}
 		if entry, ok := snap.Get(secretKey); ok {
 			return entry.Value
