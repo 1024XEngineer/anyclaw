@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -113,6 +115,36 @@ func TestSearchCacheResetStats(t *testing.T) {
 	}
 }
 
+func TestSearchCacheConcurrentGet(t *testing.T) {
+	cache := NewSearchCache(DefaultCacheConfig())
+	cache.Set("q1", []SearchResult{{Entry: MemoryEntry{ID: "1"}, Score: 0.9}})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				results, ok := cache.Get("q1")
+				if !ok {
+					t.Error("expected cache hit")
+					return
+				}
+				if len(results) != 1 || results[0].Entry.ID != "1" {
+					t.Errorf("unexpected cached result: %+v", results)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	stats := cache.Stats()
+	if stats.Hits != 3200 {
+		t.Errorf("expected 3200 hits, got %d", stats.Hits)
+	}
+}
+
 func TestMakeCacheKey(t *testing.T) {
 	opts1 := SearchOptions{Limit: 10, UseKeyword: true}
 	opts2 := SearchOptions{Limit: 10, UseKeyword: true}
@@ -176,7 +208,7 @@ func TestWarmupCache(t *testing.T) {
 
 	queries := []string{"programming", "language", "weather"}
 
-	var progressCount int
+	var progressCount atomic.Int32
 	cfg := WarmupConfig{
 		Queries:     queries,
 		Concurrency: 2,
@@ -188,7 +220,7 @@ func TestWarmupCache(t *testing.T) {
 			Limit:         10,
 		},
 		OnProgress: func(p WarmupProgress) {
-			progressCount++
+			progressCount.Add(1)
 		},
 	}
 
@@ -203,7 +235,7 @@ func TestWarmupCache(t *testing.T) {
 	if cache.Len() != 3 {
 		t.Errorf("expected 3 cached queries, got %d", cache.Len())
 	}
-	if progressCount == 0 {
+	if progressCount.Load() == 0 {
 		t.Error("expected progress callbacks")
 	}
 

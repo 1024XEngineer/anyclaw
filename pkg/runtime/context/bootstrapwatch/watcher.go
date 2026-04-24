@@ -96,7 +96,6 @@ func NewWatcher(cfg WatcherConfig) *Watcher {
 	w := &Watcher{
 		files:    make(map[FileType]*FileEntry),
 		interval: cfg.PollInterval,
-		stopCh:   make(chan struct{}),
 		baseDir:  cfg.BaseDir,
 	}
 
@@ -119,10 +118,12 @@ func (w *Watcher) Start() error {
 		w.mu.Unlock()
 		return fmt.Errorf("bootstrap: watcher already running")
 	}
+	w.stopCh = make(chan struct{})
+	stopCh := w.stopCh
 	w.running = true
 	w.mu.Unlock()
 
-	go w.watchLoop()
+	go w.watchLoop(stopCh)
 	return nil
 }
 
@@ -135,7 +136,7 @@ func (w *Watcher) Stop() {
 	}
 	w.running = false
 	close(w.stopCh)
-	w.stopCh = make(chan struct{})
+	w.stopCh = nil
 }
 
 func (w *Watcher) Get(ft FileType) (*FileEntry, bool) {
@@ -194,13 +195,13 @@ func (w *Watcher) OnChange(handler ChangeHandler) {
 	w.handlers = append(w.handlers, handler)
 }
 
-func (w *Watcher) watchLoop() {
+func (w *Watcher) watchLoop(stopCh <-chan struct{}) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-w.stopCh:
+		case <-stopCh:
 			return
 		case <-ticker.C:
 			w.checkChanges()
@@ -210,13 +211,13 @@ func (w *Watcher) watchLoop() {
 
 func (w *Watcher) checkChanges() {
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	var events []ChangeEvent
 
 	for ft, entry := range w.files {
 		info, err := os.Stat(entry.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				w.notify(ChangeEvent{
+				events = append(events, ChangeEvent{
 					Type:    ft,
 					Path:    entry.Path,
 					OldSize: entry.Size,
@@ -249,7 +250,7 @@ func (w *Watcher) checkChanges() {
 		entry.LastMod = info.ModTime()
 		entry.Size = info.Size()
 
-		w.notify(ChangeEvent{
+		events = append(events, ChangeEvent{
 			Type:    ft,
 			Path:    entry.Path,
 			OldSize: oldSize,
@@ -290,7 +291,7 @@ func (w *Watcher) checkChanges() {
 		}
 		w.files[ft] = entry
 
-		w.notify(ChangeEvent{
+		events = append(events, ChangeEvent{
 			Type:    ft,
 			Path:    path,
 			OldSize: 0,
@@ -298,6 +299,13 @@ func (w *Watcher) checkChanges() {
 			Action:  ActionCreated,
 			Time:    time.Now(),
 		})
+	}
+
+	handlers := append([]ChangeHandler(nil), w.handlers...)
+	w.mu.Unlock()
+
+	for _, event := range events {
+		w.notify(handlers, event)
 	}
 }
 
@@ -334,9 +342,10 @@ func (w *Watcher) loadFileLocked(ft FileType) error {
 	return nil
 }
 
-func (w *Watcher) notify(event ChangeEvent) {
-	for _, handler := range w.handlers {
-		handler(event)
+func (w *Watcher) notify(handlers []ChangeHandler, event ChangeEvent) {
+	for _, handler := range handlers {
+		handler := handler
+		go handler(event)
 	}
 }
 

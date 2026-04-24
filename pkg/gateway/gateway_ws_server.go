@@ -3,6 +3,7 @@ package gateway
 import (
 	"net/http"
 
+	gatewaysurface "github.com/1024XEngineer/anyclaw/pkg/gateway/surface"
 	"github.com/gorilla/websocket"
 )
 
@@ -24,6 +25,7 @@ func (s *Server) handleOpenClawWS(w http.ResponseWriter, r *http.Request) {
 		conn:      conn,
 		user:      UserFromContext(r.Context()),
 		challenge: uniqueID("ws"),
+		transport: gatewaysurface.HTTPTransport(r, ""),
 		closed:    make(chan struct{}),
 	}
 	client.run(r.Context())

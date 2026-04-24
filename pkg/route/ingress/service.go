@@ -1,7 +1,6 @@
 package ingress
 
 import (
-	"context"
 	"fmt"
 	"strings"
 )
@@ -66,23 +65,17 @@ func NewService(router *Router, options ...Option) *Service {
 	return service
 }
 
-// DecideChannel keeps the existing session-only routing behavior for gateway callers.
-func (s *Service) DecideChannel(req ChannelRequest) SessionRoute {
-	if s == nil || s.router == nil {
-		return SessionRoute{}
-	}
-
+// DecideChannel keeps the session-only routing behavior for gateway callers.
+func (s *Service) DecideChannel(req ChannelRequest) (SessionRoute, error) {
 	request, err := s.projector.Project(channelIngressEntryFromRequest(req))
 	if err != nil {
-		return SessionRoute{}
+		return SessionRoute{}, err
 	}
-	return s.router.Decide(routeRequestFromMainRequest(request)).LegacySessionRoute()
+	return s.router.Decide(routeRequestFromMainRequest(&request)).LegacySessionRoute(), nil
 }
 
-// Route executes the current ingress route chain: M1 projector, M2 agent resolution, M3 session resolution, and M4 delivery resolution.
-func (s *Service) Route(ctx context.Context, input RouteInput) (RouteOutput, error) {
-	_ = ctx
-
+// Route executes the ingress route chain: M1 projector, M2 agent resolution, M3 session resolution, and M4 delivery resolution.
+func (s *Service) Route(input RouteInput) (RouteOutput, error) {
 	if s == nil {
 		return RouteOutput{}, fmt.Errorf("ingress route service is nil")
 	}
@@ -91,7 +84,7 @@ func (s *Service) Route(ctx context.Context, input RouteInput) (RouteOutput, err
 	if err != nil {
 		return RouteOutput{}, err
 	}
-	agentResolution, sessionDecision, err := s.agents.Resolve(request)
+	agentResolution, sessionDecision, err := s.agents.Resolve(&request)
 	if err != nil {
 		return RouteOutput{}, err
 	}
@@ -122,7 +115,6 @@ func channelIngressEntryFromRequest(req ChannelRequest) IngressRoutingEntry {
 	return IngressRoutingEntry{
 		Text: req.Message,
 		Scope: MessageScope{
-			EntryPoint:     "channel",
 			ChannelID:      strings.TrimSpace(req.Channel),
 			ConversationID: routeSource,
 			ThreadID:       strings.TrimSpace(req.ThreadID),
@@ -138,16 +130,5 @@ func channelIngressEntryFromRequest(req ChannelRequest) IngressRoutingEntry {
 		Hint: RouteHint{
 			RequestedSessionID: strings.TrimSpace(req.SessionID),
 		},
-	}
-}
-
-func routeRequestFromMainRequest(request MainRouteRequest) RouteRequest {
-	return RouteRequest{
-		Channel:  request.Scope.ChannelID,
-		Source:   request.Scope.ConversationID,
-		Text:     request.Text,
-		ThreadID: request.Scope.ThreadID,
-		IsGroup:  request.Scope.IsGroup,
-		GroupID:  request.Scope.GroupID,
 	}
 }

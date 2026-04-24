@@ -172,8 +172,9 @@ func (p *WhisperCPPProvider) Type() STTProviderType {
 
 func (p *WhisperCPPProvider) Transcribe(ctx context.Context, audio []byte, opts ...TranscribeOption) (*TranscriptResult, error) {
 	options := TranscribeOptions{
-		Language:    p.language,
-		InputFormat: InputMP3,
+		Language:       p.language,
+		InputFormat:    InputMP3,
+		WordTimestamps: p.wordTimestamps,
 	}
 	for _, opt := range opts {
 		opt(&options)
@@ -227,8 +228,9 @@ func (p *WhisperCPPProvider) TranscribeFile(ctx context.Context, filePath string
 	}
 
 	options := TranscribeOptions{
-		Language:    p.language,
-		InputFormat: InputWAV,
+		Language:       p.language,
+		InputFormat:    InputWAV,
+		WordTimestamps: p.wordTimestamps,
 	}
 	for _, opt := range opts {
 		opt(&options)
@@ -445,7 +447,7 @@ func (p *WhisperCPPProvider) parseJSONOutput(jsonPath string, options Transcribe
 				}
 				segment.Words = append(segment.Words, wi)
 
-				if options.WordTimestamps {
+				if p.wordTimestamps || options.WordTimestamps {
 					result.Words = append(result.Words, wi)
 				}
 			}

@@ -102,6 +102,60 @@ func TestResolveConversationSessionBindsPinnedSessionToConversationKey(t *testin
 	}
 }
 
+func TestBindConversationKeyEvictsPreviousSessionBinding(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	manager := NewSessionManager(store, nil)
+
+	first, err := manager.CreateWithOptions(SessionCreateOptions{
+		Title:           "First",
+		AgentName:       "MainAgent",
+		Org:             "org-1",
+		Project:         "project-1",
+		Workspace:       "workspace-1",
+		ConversationKey: "telegram:chat-3",
+	})
+	if err != nil {
+		t.Fatalf("CreateWithOptions(first): %v", err)
+	}
+	second, err := manager.CreateWithOptions(SessionCreateOptions{
+		Title:     "Second",
+		AgentName: "MainAgent",
+		Org:       "org-1",
+		Project:   "project-1",
+		Workspace: "workspace-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateWithOptions(second): %v", err)
+	}
+
+	updated, err := manager.BindConversationKey(second.ID, "telegram:chat-3")
+	if err != nil {
+		t.Fatalf("BindConversationKey: %v", err)
+	}
+	if updated.ConversationKey != "telegram:chat-3" {
+		t.Fatalf("expected rebound key on new session, got %q", updated.ConversationKey)
+	}
+
+	storedFirst, ok := store.GetSession(first.ID)
+	if !ok || storedFirst == nil {
+		t.Fatal("expected first session to remain in store")
+	}
+	if storedFirst.ConversationKey != "" {
+		t.Fatalf("expected old binding to be cleared, got %q", storedFirst.ConversationKey)
+	}
+
+	found, ok := manager.FindByConversationKey("telegram:chat-3")
+	if !ok || found == nil {
+		t.Fatal("expected conversation key lookup to succeed")
+	}
+	if found.ID != second.ID {
+		t.Fatalf("expected latest bound session %q, got %q", second.ID, found.ID)
+	}
+}
+
 func TestEnqueueTurnResetsStaleQueueDepthWhenSessionIsIdle(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -134,5 +188,37 @@ func TestEnqueueTurnResetsStaleQueueDepthWhenSessionIsIdle(t *testing.T) {
 	}
 	if updatedSession.Presence != "queued" {
 		t.Fatalf("expected queued presence after enqueue, got %q", updatedSession.Presence)
+	}
+}
+
+func TestCreateWithOptionsPreservesGroupFields(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	manager := NewSessionManager(store, nil)
+
+	session, err := manager.CreateWithOptions(SessionCreateOptions{
+		Title:        "Group session",
+		AgentName:    "MainAgent",
+		Participants: []string{"MainAgent", "Reviewer"},
+		Org:          "org-1",
+		Project:      "project-1",
+		Workspace:    "workspace-1",
+		GroupKey:     "group-1",
+		IsGroup:      true,
+	})
+	if err != nil {
+		t.Fatalf("CreateWithOptions: %v", err)
+	}
+
+	if len(session.Participants) != 2 {
+		t.Fatalf("expected participants to round-trip, got %#v", session.Participants)
+	}
+	if session.GroupKey != "group-1" {
+		t.Fatalf("expected group key to round-trip, got %q", session.GroupKey)
+	}
+	if !session.IsGroup {
+		t.Fatal("expected group flag to round-trip")
 	}
 }

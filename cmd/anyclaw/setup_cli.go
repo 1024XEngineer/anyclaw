@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,11 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/input/cli/setup"
 	"github.com/1024XEngineer/anyclaw/pkg/input/cli/ui"
 )
+
+var runDoctorSetup = setup.RunDoctor
+var runOnboardingSetup = setup.RunOnboarding
+var providerNeedsSetupAPIKey = setup.ProviderNeedsAPIKey
+var detectTerminalInteractive = terminalInteractive
 
 func terminalInteractive() bool {
 	stdinInfo, err := os.Stdin.Stat()
@@ -21,6 +27,52 @@ func terminalInteractive() bool {
 		return false
 	}
 	return (stdinInfo.Mode()&os.ModeCharDevice) != 0 && (stdoutInfo.Mode()&os.ModeCharDevice) != 0
+}
+
+func runDoctorCommand(args []string) error {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	configPath := fs.String("config", "anyclaw.json", "path to config file")
+	repair := fs.Bool("repair", false, "create missing directories while checking")
+	connectivity := fs.Bool("connectivity", true, "run a live model connectivity check")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	fmt.Printf("%s\n", ui.Bold.Sprint("AnyClaw doctor"))
+	fmt.Println(ui.Dim.Sprint(strings.Repeat("-", 50)))
+	report, _, err := runDoctorSetup(context.Background(), *configPath, setup.DoctorOptions{
+		CheckConnectivity: *connectivity,
+		CreateMissingDirs: *repair,
+	})
+	printDoctorReport(report)
+	if report != nil {
+		printInfo("Summary: %d error(s), %d warning(s)", report.ErrorCount(), report.WarningCount())
+	}
+	return err
+}
+
+func runOnboardCommand(args []string) error {
+	fs := flag.NewFlagSet("onboard", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	configPath := fs.String("config", "anyclaw.json", "path to config file")
+	nonInteractive := fs.Bool("non-interactive", false, "write defaults without prompting")
+	connectivity := fs.Bool("connectivity", true, "run a live model connectivity check after saving")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	result, err := runOnboardingSetup(context.Background(), *configPath, setup.OnboardOptions{
+		Interactive:       !*nonInteractive && detectTerminalInteractive(),
+		CheckConnectivity: *connectivity,
+		Stdin:             os.Stdin,
+		Stdout:            os.Stdout,
+	})
+	if result != nil {
+		printDoctorReport(result.Report)
+		printSuccess("Onboarding wrote: %s", config.ResolveConfigPath(*configPath))
+	}
+	return err
 }
 
 func printDoctorReport(report *setup.Report) {
@@ -55,13 +107,13 @@ func ensureConfigOnboarded(ctx context.Context, configPath string, checkConnecti
 			return nil
 		}
 
-		if !terminalInteractive() {
+		if !detectTerminalInteractive() {
 			printWarn("Config exists but model setup is incomplete. Run `anyclaw onboard` or fill your provider Base URL / API key before chatting.")
 			return nil
 		}
 
 		printInfo("First-run model setup required. Please choose a provider and enter Base URL / API key.")
-		result, err := setup.RunOnboarding(ctx, configPath, setup.OnboardOptions{
+		result, err := runOnboardingSetup(ctx, configPath, setup.OnboardOptions{
 			Interactive:       true,
 			CheckConnectivity: checkConnectivity,
 			Stdin:             os.Stdin,
@@ -76,8 +128,8 @@ func ensureConfigOnboarded(ctx context.Context, configPath string, checkConnecti
 	}
 
 	printInfo("No config found. Running first-run onboarding.")
-	result, err := setup.RunOnboarding(ctx, configPath, setup.OnboardOptions{
-		Interactive:       terminalInteractive(),
+	result, err := runOnboardingSetup(ctx, configPath, setup.OnboardOptions{
+		Interactive:       detectTerminalInteractive(),
 		CheckConnectivity: checkConnectivity,
 		Stdin:             os.Stdin,
 		Stdout:            os.Stdout,
@@ -115,7 +167,7 @@ func configNeedsProviderSetup(configPath string) (bool, error) {
 	if strings.EqualFold(provider, "compatible") && baseURL == "" {
 		return true, nil
 	}
-	if setup.ProviderNeedsAPIKey(provider) && apiKey == "" {
+	if providerNeedsSetupAPIKey(provider) && apiKey == "" {
 		return true, nil
 	}
 	return false, nil

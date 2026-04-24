@@ -770,6 +770,7 @@ func (s *Store) RebindSessionsForProject(projectID string, orgID string) error {
 	for _, session := range s.sessions {
 		if session.Project == projectID {
 			session.Org = orgID
+			session.ExecutionBinding.Org = orgID
 			changed = true
 		}
 	}
@@ -787,6 +788,8 @@ func (s *Store) RebindSessionsForWorkspace(workspaceID string, projectID string,
 		if session.Workspace == workspaceID {
 			session.Project = projectID
 			session.Org = orgID
+			session.ExecutionBinding.Project = projectID
+			session.ExecutionBinding.Org = orgID
 			changed = true
 		}
 	}

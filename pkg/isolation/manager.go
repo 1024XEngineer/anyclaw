@@ -137,6 +137,10 @@ func (m *ContextIsolationManager) CreateChildBoundary(parentScopeID string, chil
 		return nil, fmt.Errorf("parent boundary not found: %s", parentScopeID)
 	}
 
+	if childScope == nil {
+		return nil, fmt.Errorf("child scope cannot be nil")
+	}
+
 	childScopeID := childScope.ID()
 	if childScopeID == "" {
 		return nil, fmt.Errorf("child scope must have at least one of AgentID, SessionID, or TaskID")
@@ -231,37 +235,18 @@ func (m *ContextIsolationManager) ListSharingPolicies() []*SharedContextPolicy {
 	return result
 }
 
+func (m *ContextIsolationManager) sharingPolicy(sourceAgentID, targetAgentID, namespace string) *SharedContextPolicy {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return cloneSharedContextPolicy(m.matchSharingPolicyLocked(sourceAgentID, targetAgentID, namespace))
+}
+
 func (m *ContextIsolationManager) CanShareContext(sourceAgentID, targetAgentID, namespace string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	now := time.Now()
-	for _, policy := range m.policies {
-		if policy.ExpiresAt.Before(now) {
-			continue
-		}
-		if policy.SourceAgentID != sourceAgentID {
-			continue
-		}
-
-		targetMatch := false
-		for _, target := range policy.TargetAgentIDs {
-			if target == targetAgentID {
-				targetMatch = true
-				break
-			}
-		}
-		if !targetMatch {
-			continue
-		}
-
-		if policy.Namespace != "" && policy.Namespace != namespace {
-			continue
-		}
-
-		return true
-	}
-	return false
+	return m.canShareContextLocked(sourceAgentID, targetAgentID, namespace)
 }
 
 func (m *ContextIsolationManager) CreateSnapshot(agentID, sessionID, description string) (*ContextSnapshot, error) {
@@ -298,8 +283,7 @@ func (m *ContextIsolationManager) CreateSnapshot(agentID, sessionID, description
 			continue
 		}
 		if boundary.Scope.AgentID == agentID && (sessionID == "" || boundary.Scope.SessionID == sessionID) {
-			docs = engine.SnapshotDocuments()
-			break
+			docs = append(docs, engine.SnapshotDocuments()...)
 		}
 	}
 	for scopeID, kvEngine := range m.kvEngines {
@@ -308,11 +292,12 @@ func (m *ContextIsolationManager) CreateSnapshot(agentID, sessionID, description
 			continue
 		}
 		if boundary.Scope.AgentID == agentID && (sessionID == "" || boundary.Scope.SessionID == sessionID) {
-			kvs = make(map[string]any)
+			if kvs == nil {
+				kvs = make(map[string]any)
+			}
 			for _, ctx := range kvEngine.List() {
 				kvs[ctx.Key] = ctx.Value
 			}
-			break
 		}
 	}
 
@@ -437,7 +422,8 @@ func (m *ContextIsolationManager) SharedSearch(scopeID string, query string, nam
 
 			sourceAgentID := sourceBoundary.Scope.AgentID
 
-			if !m.canShareContextLocked(sourceAgentID, targetAgentID, namespace) {
+			policy := m.matchSharingPolicyLocked(sourceAgentID, targetAgentID, namespace)
+			if policy == nil || policy.RequireApproval {
 				continue
 			}
 
@@ -446,6 +432,9 @@ func (m *ContextIsolationManager) SharedSearch(scopeID string, query string, nam
 			}
 
 			for _, ctx := range kvEngine.List() {
+				if !policyAllowsContextKey(policy, ctx.Key) {
+					continue
+				}
 				if namespace != "" && ctx.Metadata["namespace"] != namespace {
 					continue
 				}
@@ -453,7 +442,7 @@ func (m *ContextIsolationManager) SharedSearch(scopeID string, query string, nam
 					SourceScopeID: sourceScopeID,
 					Key:           ctx.Key,
 					Value:         ctx.Value,
-					Metadata:      ctx.Metadata,
+					Metadata:      cloneStringMap(ctx.Metadata),
 				})
 			}
 		}
@@ -463,33 +452,79 @@ func (m *ContextIsolationManager) SharedSearch(scopeID string, query string, nam
 }
 
 func (m *ContextIsolationManager) canShareContextLocked(sourceID, targetID, namespace string) bool {
+	policy := m.matchSharingPolicyLocked(sourceID, targetID, namespace)
+	return policy != nil && !policy.RequireApproval
+}
+
+func (m *ContextIsolationManager) matchSharingPolicyLocked(sourceID, targetID, namespace string) *SharedContextPolicy {
 	now := time.Now()
 	for _, policy := range m.policies {
-		if policy.ExpiresAt.Before(now) {
+		if policy == nil {
+			continue
+		}
+		if !policy.ExpiresAt.IsZero() && policy.ExpiresAt.Before(now) {
 			continue
 		}
 		if policy.SourceAgentID != sourceID {
 			continue
 		}
-
-		targetMatch := false
-		for _, target := range policy.TargetAgentIDs {
-			if target == targetID {
-				targetMatch = true
-				break
-			}
-		}
-		if !targetMatch {
+		if !policyTargetsAgent(policy, targetID) {
 			continue
 		}
-
 		if policy.Namespace != "" && policy.Namespace != namespace {
 			continue
 		}
+		return policy
+	}
+	return nil
+}
 
-		return true
+func policyTargetsAgent(policy *SharedContextPolicy, targetID string) bool {
+	for _, target := range policy.TargetAgentIDs {
+		if target == targetID {
+			return true
+		}
 	}
 	return false
+}
+
+func policyAllowsContextKey(policy *SharedContextPolicy, key string) bool {
+	if policy == nil || len(policy.ContextKeys) == 0 {
+		return true
+	}
+	for _, allowed := range policy.ContextKeys {
+		if allowed == key {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneSharedContextPolicy(policy *SharedContextPolicy) *SharedContextPolicy {
+	if policy == nil {
+		return nil
+	}
+
+	cloned := *policy
+	if policy.TargetAgentIDs != nil {
+		cloned.TargetAgentIDs = append([]string(nil), policy.TargetAgentIDs...)
+	}
+	if policy.ContextKeys != nil {
+		cloned.ContextKeys = append([]string(nil), policy.ContextKeys...)
+	}
+	return &cloned
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+
+	cloned := make(map[string]string, len(src))
+	for key, value := range src {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (m *ContextIsolationManager) startCleanup() {

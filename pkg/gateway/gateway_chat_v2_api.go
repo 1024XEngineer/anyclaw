@@ -1,11 +1,10 @@
 package gateway
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
-	"github.com/1024XEngineer/anyclaw/pkg/gateway/intake/chat"
+	gatewaycommands "github.com/1024XEngineer/anyclaw/pkg/gateway/commands"
 )
 
 func (s *Server) handleV2Chat(w http.ResponseWriter, r *http.Request) {
@@ -19,18 +18,23 @@ func (s *Server) handleV2Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req chat.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, commandReq, err := s.surfaceService().DecodeHTTPV2Chat(r)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
 
-	if strings.TrimSpace(req.AgentName) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_name is required"})
+	if err := gatewaycommands.ValidateV2Chat(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.Message) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
+	dispatch, err := s.commandIntakeService().Dispatch(commandReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if dispatch.Kind != "ingress" || dispatch.Target != "ingress" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unexpected command dispatch"})
 		return
 	}
 

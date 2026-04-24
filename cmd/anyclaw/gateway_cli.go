@@ -15,6 +15,18 @@ import (
 	appRuntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
+var bootstrapGatewayRuntime = appRuntime.Bootstrap
+
+var runGatewayRuntime = func(ctx context.Context, app *appRuntime.MainRuntime) error {
+	if app.Config.Gateway.WorkerCount > 1 {
+		return gateway.RunWithWorkers(ctx, app)
+	}
+	return gateway.New(app).Run(ctx)
+}
+
+var startGatewayDaemon = gateway.StartDetached
+var stopGatewayDaemon = gateway.StopDetached
+
 func runGatewayCommand(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		printGatewayUsage()
@@ -58,16 +70,12 @@ func runGatewayServer(ctx context.Context, args []string) error {
 		return err
 	}
 
-	if err := ensureConfigOnboarded(ctx, *configPath, true); err != nil {
-		return err
-	}
 	if err := ensureGatewayControlUIBuilt(ctx, *configPath); err != nil {
 		return err
 	}
 
-	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
+	app, err := bootstrapGatewayRuntime(appRuntime.BootstrapOptions{
 		ConfigPath: *configPath,
-		Progress:   bootProgress,
 	})
 	if err != nil {
 		return fmt.Errorf("gateway bootstrap failed: %w", err)
@@ -88,51 +96,53 @@ func runGatewayServer(ctx context.Context, args []string) error {
 	printInfo("Health: %s/healthz", gatewayHTTPBaseURL(app.Config))
 	printInfo("Status: %s/status", gatewayHTTPBaseURL(app.Config))
 
-	if app.Config.Gateway.WorkerCount > 1 {
-		return gateway.RunWithWorkers(ctx, app)
-	}
-
-	server := gateway.New(app)
-	return server.Run(ctx)
+	return runGatewayRuntime(ctx, app)
 }
 
 func runGatewayDaemon(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: anyclaw gateway daemon <start|stop>")
 	}
-	configPath := "anyclaw.json"
-	if err := ensureConfigOnboarded(context.Background(), configPath, true); err != nil {
+
+	action := strings.TrimSpace(args[0])
+	fs := flag.NewFlagSet("gateway daemon "+action, flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	configPath := fs.String("config", "anyclaw.json", "path to config file")
+	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	if args[0] == "start" {
-		if err := ensureGatewayControlUIBuilt(context.Background(), configPath); err != nil {
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: anyclaw gateway daemon <start|stop> [--config <path>]")
+	}
+
+	if action == "start" {
+		if err := ensureGatewayControlUIBuilt(context.Background(), *configPath); err != nil {
 			return err
 		}
 	}
-	app, err := appRuntime.Bootstrap(appRuntime.BootstrapOptions{
-		ConfigPath: configPath,
-		Progress:   bootProgress,
+	app, err := bootstrapGatewayRuntime(appRuntime.BootstrapOptions{
+		ConfigPath: *configPath,
 	})
 	if err != nil {
 		return fmt.Errorf("daemon bootstrap failed: %w", err)
 	}
-	app.ConfigPath = configPath
+	app.ConfigPath = *configPath
 
-	switch args[0] {
+	switch action {
 	case "start":
-		if err := gateway.StartDetached(app); err != nil {
+		if err := startGatewayDaemon(app); err != nil {
 			return err
 		}
 		printSuccess("Gateway daemon started")
 		return nil
 	case "stop":
-		if err := gateway.StopDetached(app); err != nil {
+		if err := stopGatewayDaemon(app); err != nil {
 			return err
 		}
 		printSuccess("Gateway daemon stopped")
 		return nil
 	default:
-		return fmt.Errorf("unknown daemon command: %s", args[0])
+		return fmt.Errorf("unknown daemon command: %s", action)
 	}
 }
 

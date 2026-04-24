@@ -18,6 +18,7 @@ type Skill struct {
 	Name           string            `json:"name"`
 	Description    string            `json:"description"`
 	Version        string            `json:"version"`
+	Category       string            `json:"category,omitempty"`
 	Commands       []Command         `json:"commands"`
 	Prompts        map[string]string `json:"prompts"`
 	Tools          []Tool            `json:"tools"`
@@ -121,6 +122,7 @@ func skillFromDefinition(definition skillFileDefinition, virtualPath string) *Sk
 		Name:           definition.Name,
 		Description:    definition.Description,
 		Version:        definition.Version,
+		Category:       definition.Category,
 		Prompts:        map[string]string{},
 		Metadata:       map[string]string{},
 		Permissions:    append([]string(nil), definition.Permissions...),
@@ -152,6 +154,9 @@ func skillFromDefinition(definition skillFileDefinition, virtualPath string) *Sk
 		virtualPath = "builtin://" + skill.Name
 	}
 	skill.Metadata["path"] = virtualPath
+	if strings.TrimSpace(skill.Category) != "" {
+		skill.Metadata["category"] = skill.Category
+	}
 	skill.Metadata["source"] = skill.Source
 	skill.Metadata["registry"] = skill.Registry
 	return skill
@@ -189,6 +194,12 @@ func (s *SkillsManager) loadSkill(path string) (*Skill, error) {
 	}
 	if skill.Metadata == nil {
 		skill.Metadata = map[string]string{}
+	}
+	if strings.TrimSpace(skill.Category) == "" {
+		skill.Category = skill.Metadata["category"]
+	}
+	if strings.TrimSpace(skill.Metadata["category"]) == "" && strings.TrimSpace(skill.Category) != "" {
+		skill.Metadata["category"] = skill.Category
 	}
 	if skill.Source == "" {
 		skill.Source = skill.Metadata["source"]
@@ -344,9 +355,20 @@ func executeSkillEntrypoint(ctx context.Context, skill *Skill, input map[string]
 		return "", err
 	}
 	skillPath := strings.TrimSpace(skill.Metadata["path"])
+	if skillPath == "" {
+		return "", fmt.Errorf("skill %s has no execution directory", skill.Name)
+	}
+	skillPath, err = filepath.Abs(skillPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve skill directory: %w", err)
+	}
 	entrypoint := strings.TrimSpace(skill.Entrypoint)
 	if !filepath.IsAbs(entrypoint) {
 		entrypoint = filepath.Join(skillPath, entrypoint)
+	}
+	entrypoint = filepath.Clean(entrypoint)
+	if !pathWithinBase(skillPath, entrypoint) {
+		return "", fmt.Errorf("skill %s entrypoint must stay within skill directory", skill.Name)
 	}
 	launcher, args, err := resolveSkillLauncher(entrypoint)
 	if err != nil {
@@ -460,7 +482,7 @@ func (s *SkillsManager) Catalog() []SkillCatalogEntry {
 			Name:         skill.Name,
 			Description:  skill.Description,
 			Version:      skill.Version,
-			Category:     skill.Metadata["category"],
+			Category:     firstNonEmpty(skill.Category, skill.Metadata["category"]),
 			Registry:     skill.Registry,
 			Homepage:     skill.Homepage,
 			Source:       skill.Source,

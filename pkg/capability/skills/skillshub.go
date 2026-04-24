@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const SKILLSH_API = "https://skills.sh"
+var (
+	SKILLSH_API_BASE    = "https://skills.sh"
+	rawGitHubContentURL = "https://raw.githubusercontent.com"
+)
 
 type SkillSearchResult struct {
 	Name        string   `json:"name"`
@@ -66,7 +69,7 @@ func SearchCatalog(ctx context.Context, query string, limit int) ([]SkillCatalog
 func SearchSkills(ctx context.Context, query string, limit int) ([]SkillSearchResult, error) {
 	limit = normalizeSearchLimit(limit)
 
-	searchURL := fmt.Sprintf("%s/api/search?q=%s&limit=%d", SKILLSH_API, url.QueryEscape(query), limit)
+	searchURL := fmt.Sprintf("%s/api/search?q=%s&limit=%d", SKILLSH_API_BASE, url.QueryEscape(query), limit)
 
 	client := newRemoteClient(30 * time.Second)
 	var results struct {
@@ -80,7 +83,7 @@ func SearchSkills(ctx context.Context, query string, limit int) ([]SkillSearchRe
 }
 
 func GetSkillDetail(ctx context.Context, owner, repo, skillName string) (*SkillDetail, error) {
-	detailURL := fmt.Sprintf("%s/api/skills/%s/%s/%s", SKILLSH_API, owner, repo, skillName)
+	detailURL := fmt.Sprintf("%s/api/skills/%s/%s/%s", SKILLSH_API_BASE, owner, repo, skillName)
 
 	client := newRemoteClient(30 * time.Second)
 	var detail SkillDetail
@@ -94,10 +97,10 @@ func GetSkillDetail(ctx context.Context, owner, repo, skillName string) (*SkillD
 func GetSkillMarkdown(ctx context.Context, owner, repo, skillName string) (string, error) {
 	client := newRemoteClient(30 * time.Second)
 	candidates := []string{
-		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/skills/%s/SKILL.md", owner, repo, skillName),
-		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/skills/%s/SKILL.md", owner, repo, skillName),
-		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/SKILL.md", owner, repo),
-		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/SKILL.md", owner, repo),
+		fmt.Sprintf("%s/%s/%s/main/skills/%s/SKILL.md", rawGitHubContentURL, owner, repo, skillName),
+		fmt.Sprintf("%s/%s/%s/master/skills/%s/SKILL.md", rawGitHubContentURL, owner, repo, skillName),
+		fmt.Sprintf("%s/%s/%s/main/SKILL.md", rawGitHubContentURL, owner, repo),
+		fmt.Sprintf("%s/%s/%s/master/SKILL.md", rawGitHubContentURL, owner, repo),
 	}
 
 	for _, rawURL := range candidates {

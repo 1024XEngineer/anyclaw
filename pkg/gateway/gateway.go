@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -26,6 +27,8 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/speech"
 	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
+
+const defaultGatewayAddress = "127.0.0.1:18789"
 
 type Server struct {
 	mainRuntime    *runtime.MainRuntime
@@ -78,7 +81,10 @@ type Server struct {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	addr := runtime.GatewayAddress(s.mainRuntime.Config)
+	if s == nil {
+		return fmt.Errorf("gateway server is nil")
+	}
+
 	mux := http.NewServeMux()
 	s.initChannels()
 	s.initMCP(ctx)
@@ -92,7 +98,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	s.startedAt = time.Now().UTC()
 	s.httpServer = &http.Server{
-		Addr:              addr,
+		Addr:              s.address(),
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -113,4 +119,15 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return fmt.Errorf("gateway server failed: %w", err)
 	}
+}
+
+func (s *Server) address() string {
+	if s == nil || s.mainRuntime == nil || s.mainRuntime.Config == nil {
+		return defaultGatewayAddress
+	}
+	addr := runtime.GatewayAddress(s.mainRuntime.Config)
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return defaultGatewayAddress
+	}
+	return addr
 }

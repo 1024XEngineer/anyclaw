@@ -44,6 +44,9 @@ func NewBaiduProvider(apiKey string, opts ...BaiduOption) (*BaiduProvider, error
 	if p.apiKey == "" {
 		return nil, fmt.Errorf("baidu: api key is required")
 	}
+	if p.secretKey == "" {
+		return nil, fmt.Errorf("baidu: secret key is required")
+	}
 	return p, nil
 }
 

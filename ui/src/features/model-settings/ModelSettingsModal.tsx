@@ -325,7 +325,6 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
     () => providers.find((provider) => provider.id === selectedId) ?? null,
     [providers, selectedId],
   );
-  const currentDefaultId = providers.find((provider) => provider.is_default)?.id ?? null;
 
   const isCreating = selectedId === NEW_PROVIDER_ID;
   const requiresApiKey = draft.runtime !== "ollama";
@@ -359,24 +358,6 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
     setDraft(providerToDraft(provider));
     setSecretVisible(false);
     resetFeedback();
-
-    if (provider.id === currentDefaultId) {
-      return;
-    }
-
-    try {
-      const defaultProvider = await setDefaultMutation.mutateAsync(provider.id);
-      setSelectedId(defaultProvider.id);
-      setDraft(providerToDraft(defaultProvider));
-      await refreshQueries();
-      setNotice({
-        kind: "success",
-        message: `已切换到 ${defaultProvider.default_model || defaultProvider.name}`,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "切换默认模型失败";
-      setNotice({ kind: "error", message });
-    }
   }
 
   function handleCreateProvider() {

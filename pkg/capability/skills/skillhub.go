@@ -13,8 +13,10 @@ import (
 	"time"
 )
 
-const SKILLHUB_SEARCH_URL = "https://lightmake.site/api/v1/search"
-const SKILLHUB_DOWNLOAD_URL = "https://lightmake.site/api/v1/download"
+var (
+	SKILLHUB_SEARCH_URL   = "https://lightmake.site/api/v1/search"
+	SKILLHUB_DOWNLOAD_URL = "https://lightmake.site/api/v1/download"
+)
 
 type SkillhubSearchResult struct {
 	Name        string   `json:"name"`
@@ -251,7 +253,7 @@ func SearchSkillhubCatalog(ctx context.Context, query string, limit int) ([]Skil
 			Registry:    "skillhub",
 			Homepage:    r.URL,
 			Source:      r.URL,
-			InstallHint: "anyclaw clawhub install " + r.Name,
+			InstallHint: "anyclaw skill install " + r.Name,
 		})
 	}
 

@@ -204,6 +204,9 @@ func resolveBootstrapFilePath(dir string, name string) (string, string) {
 
 func HasInjectedMemoryFile(files []BootstrapFile) bool {
 	for _, file := range files {
+		if file.Missing {
+			continue
+		}
 		if strings.EqualFold(strings.TrimSpace(file.Name), "MEMORY.md") || strings.EqualFold(strings.TrimSpace(file.Name), "memory.md") {
 			return true
 		}

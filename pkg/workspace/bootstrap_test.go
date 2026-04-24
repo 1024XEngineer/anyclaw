@@ -174,3 +174,42 @@ func TestEnsureBootstrapAutoCompletesConfiguredWorkspaceAndPreservesExistingAnsw
 		t.Fatalf("expected IDENTITY.md to include assistant style, got %q", identityText)
 	}
 }
+
+func TestHasInjectedMemoryFileIgnoresMissingPlaceholder(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []BootstrapFile
+		want  bool
+	}{
+		{
+			name: "missing placeholder is ignored",
+			files: []BootstrapFile{
+				{Name: "MEMORY.md", Missing: true},
+			},
+			want: false,
+		},
+		{
+			name: "existing uppercase memory file is detected",
+			files: []BootstrapFile{
+				{Name: "MEMORY.md"},
+			},
+			want: true,
+		},
+		{
+			name: "existing lowercase memory file is detected",
+			files: []BootstrapFile{
+				{Name: "memory.md"},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := HasInjectedMemoryFile(tt.files)
+			if got != tt.want {
+				t.Fatalf("HasInjectedMemoryFile() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -16,12 +16,6 @@ type TTSProcessor interface {
 	Synthesize(ctx context.Context, text string, opts ...SynthesizeOption) (*AudioResult, error)
 }
 
-type AudioPlayer interface {
-	Play(ctx context.Context, audio []byte, format AudioFormat) error
-	Stop() error
-	IsPlaying() bool
-}
-
 type VoiceWakeProcessorConfig struct {
 	Agent           AgentRunner
 	TTSProcessor    TTSProcessor

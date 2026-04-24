@@ -13,7 +13,11 @@ type AgentResolver struct {
 }
 
 // Resolve decides which agent should own this route request.
-func (r AgentResolver) Resolve(request MainRouteRequest) (AgentResolution, RouteDecision, error) {
+func (r AgentResolver) Resolve(request *MainRouteRequest) (AgentResolution, RouteDecision, error) {
+	if request == nil {
+		request = &MainRouteRequest{}
+	}
+
 	decision := RouteDecision{}
 	if r.Router != nil {
 		decision = r.Router.Decide(routeRequestFromMainRequest(request))
@@ -58,4 +62,20 @@ func (r AgentResolver) mainAgentName() string {
 		return ""
 	}
 	return strings.TrimSpace(r.ResolveMainAgentName())
+}
+
+func routeRequestFromMainRequest(request *MainRouteRequest) RouteRequest {
+	if request == nil {
+		return RouteRequest{}
+	}
+
+	return RouteRequest{
+		Channel:   request.Scope.ChannelID,
+		Source:    request.Scope.ConversationID,
+		Text:      request.Text,
+		ThreadID:  request.Scope.ThreadID,
+		IsGroup:   request.Scope.IsGroup,
+		GroupID:   request.Scope.GroupID,
+		TitleHint: request.Hint.TitleHint,
+	}
 }

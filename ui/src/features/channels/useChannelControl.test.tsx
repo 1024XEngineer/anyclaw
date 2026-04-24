@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import type { PropsWithChildren } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -86,6 +86,45 @@ describe("useChannelControl", () => {
       expect(screen.getByTestId("pairing-enabled")).toHaveTextContent("true");
       expect(screen.getByTestId("mention-gate")).toHaveTextContent("true");
       expect(screen.getByTestId("adapter")).toHaveTextContent("");
+    });
+  });
+
+  it("surfaces plain-text server errors instead of a JSON parse failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (url === "/channels") {
+          return Promise.resolve({
+            ok: false,
+            status: 503,
+            statusText: "Service Unavailable",
+            text: async () => "channels unavailable",
+          } as Response);
+        }
+        if (url === "/channel/mention-gate") {
+          return jsonResponse({ enabled: false });
+        }
+        if (url === "/channel/pairing") {
+          return jsonResponse({ enabled: false, paired: [] });
+        }
+        if (url === "/channel/presence") {
+          return jsonResponse({});
+        }
+        if (url.startsWith("/channel/contacts")) {
+          return jsonResponse([]);
+        }
+
+        throw new Error(`Unhandled fetch request: ${url}`);
+      }),
+    );
+
+    const { result } = renderHook(() => useChannelControl("wechat"), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.selectedAdapterStatus).toBeNull();
     });
   });
 });

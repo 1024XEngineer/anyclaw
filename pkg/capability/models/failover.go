@@ -92,10 +92,22 @@ func (fc *FailoverClient) StreamChat(ctx context.Context, messages []Message, to
 		return fc.primary.StreamChat(ctx, messages, tools, onChunk)
 	}
 
-	// Try primary
-	err := fc.primary.StreamChat(ctx, messages, tools, onChunk)
+	// Try primary, but only fail over if it fails before emitting any output.
+	var emitted bool
+	forwardingChunk := func(chunk string) {
+		if chunk == "" {
+			return
+		}
+		emitted = true
+		onChunk(chunk)
+	}
+
+	err := fc.primary.StreamChat(ctx, messages, tools, forwardingChunk)
 	if err == nil {
 		return nil
+	}
+	if emitted {
+		return fmt.Errorf("stream interrupted after partial output from %s: %w", fc.primary.Name(), err)
 	}
 
 	// Try fallbacks

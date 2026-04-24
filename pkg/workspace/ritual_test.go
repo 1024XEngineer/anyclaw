@@ -64,3 +64,28 @@ func TestAdvanceBootstrapRitualCompletesAndRemovesBootstrapFile(t *testing.T) {
 		t.Fatalf("expected managed bootstrap block, got %q", string(userData))
 	}
 }
+
+func TestAdvanceBootstrapRitualUsesConfiguredIntro(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureBootstrap(dir, BootstrapOptions{
+		AgentName:        "HelperBot",
+		AgentDescription: "a focused workspace copilot",
+	}); err != nil {
+		t.Fatalf("EnsureBootstrap: %v", err)
+	}
+
+	result, err := AdvanceBootstrapRitual(dir, "", BootstrapRitualOptions{
+		AgentName:        "HelperBot",
+		AgentDescription: "a focused workspace copilot",
+	})
+	if err != nil {
+		t.Fatalf("AdvanceBootstrapRitual(start): %v", err)
+	}
+
+	if !strings.Contains(result.Response, "Hello. I am HelperBot, a focused workspace copilot.") {
+		t.Fatalf("expected configured intro, got %q", result.Response)
+	}
+	if strings.Contains(result.Response, "Hello. I am AnyClaw") {
+		t.Fatalf("expected intro to avoid default agent name, got %q", result.Response)
+	}
+}

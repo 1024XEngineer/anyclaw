@@ -5,25 +5,27 @@ import (
 	"errors"
 	"fmt"
 
+	gatewaycommands "github.com/1024XEngineer/anyclaw/pkg/gateway/commands"
 	taskrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
-	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (s *Server) wsChatSend(ctx context.Context, user *AuthUser, params map[string]any) (map[string]any, error) {
-	message := mapString(params, "message")
-	if message == "" {
-		return nil, fmt.Errorf("message is required")
+	req, commandReq := s.surfaceService().DecodeWSChatSend(params)
+	if err := gatewaycommands.ValidateChatSend(req); err != nil {
+		return nil, err
 	}
-	title := mapString(params, "title")
-	sessionID := mapString(params, "session_id")
-	assistantName, err := s.mainEntryPolicy().NormalizeRequestedAgent(mapString(params, "agent"), mapString(params, "assistant"))
+	dispatch, err := s.commandIntakeService().Dispatch(commandReq)
 	if err != nil {
 		return nil, err
 	}
-	if sessionID == "" {
-		orgID := mapString(params, "org")
-		projectID := mapString(params, "project")
-		workspaceID := mapString(params, "workspace")
+	assistantName, err := s.mainEntryPolicy().NormalizeRequestedAgent(req.Agent, req.Assistant)
+	if err != nil {
+		return nil, err
+	}
+	if req.SessionID == "" {
+		orgID := req.OrgID
+		projectID := req.ProjectID
+		workspaceID := req.WorkspaceID
 		if workspaceID == "" {
 			orgID, projectID, workspaceID = defaultResourceIDs(s.mainRuntime.WorkingDir)
 		}
@@ -34,30 +36,34 @@ func (s *Server) wsChatSend(ctx context.Context, user *AuthUser, params map[stri
 		if !HasHierarchyAccess(user, org.ID, project.ID, workspace.ID) {
 			return nil, fmt.Errorf("forbidden")
 		}
-		session, err := s.sessions.CreateWithOptions(state.SessionCreateOptions{
-			Title:       title,
-			AgentName:   assistantName,
-			Org:         org.ID,
-			Project:     project.ID,
-			Workspace:   workspace.ID,
-			SessionMode: "main",
-			QueueMode:   "fifo",
-		})
-		if err != nil {
-			return nil, err
-		}
-		sessionID = session.ID
-		s.appendEvent("session.created", session.ID, sessionCreatedEventPayload(session))
+		req.OrgID = org.ID
+		req.ProjectID = project.ID
+		req.WorkspaceID = workspace.ID
 	}
-	response, updatedSession, err := s.runSessionMessage(ctx, sessionID, title, message)
+	response, updatedSession, err := s.runChatIngressMessage(ctx, "ws", req, assistantName)
 	if err != nil {
 		if errors.Is(err, taskrunner.ErrTaskWaitingApproval) {
-			s.appendAudit(user, "chat.send", sessionID, map[string]any{"message_length": len(message), "transport": "ws", "status": "waiting_approval"})
+			sessionID := req.SessionID
+			if updatedSession != nil {
+				sessionID = updatedSession.ID
+			}
+			s.appendAudit(user, "chat.send", sessionID, map[string]any{
+				"message_length": len(req.Message),
+				"transport":      "ws",
+				"status":         "waiting_approval",
+				"command_kind":   dispatch.Kind,
+				"command_target": dispatch.Target,
+			})
 			return s.sessionApprovalResponse(sessionID), nil
 		}
 		return nil, err
 	}
-	s.appendAudit(user, "chat.send", updatedSession.ID, map[string]any{"message_length": len(message), "transport": "ws"})
+	s.appendAudit(user, "chat.send", updatedSession.ID, map[string]any{
+		"message_length": len(req.Message),
+		"transport":      "ws",
+		"command_kind":   dispatch.Kind,
+		"command_target": dispatch.Target,
+	})
 	return map[string]any{
 		"response": response,
 		"session":  updatedSession,

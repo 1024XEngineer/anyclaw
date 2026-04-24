@@ -1266,3 +1266,593 @@ func TestContextSyncAllPairs(t *testing.T) {
 		t.Errorf("expected 6 sync results, got %d", len(results))
 	}
 }
+
+func TestCreateChildBoundaryNilScope(t *testing.T) {
+	config := DefaultIsolationConfig()
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+	}, IsolationModeStrict, ContextVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("failed to create parent boundary: %v", err)
+	}
+
+	_, err = mgr.CreateChildBoundary("session-1", nil, IsolationModeStrict, ContextVisibilityPrivate)
+	if err == nil {
+		t.Fatal("expected error when child scope is nil")
+	}
+}
+
+func TestIsolatedEngineReturnsClones(t *testing.T) {
+	config := DefaultIsolationConfig()
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+	}, IsolationModeStrict, ContextVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("failed to create boundary: %v", err)
+	}
+
+	engine, _ := mgr.GetEngine("session-1")
+	ctx := context.Background()
+
+	metadata := map[string]any{"type": "test"}
+	vector := []float64{1, 2, 3}
+	doc := ctxpkg.Document{
+		ID:       "doc-1",
+		Content:  "Go programming language",
+		Metadata: metadata,
+		Vector:   vector,
+	}
+
+	if err := engine.AddDocument(ctx, doc); err != nil {
+		t.Fatalf("failed to add document: %v", err)
+	}
+
+	metadata["type"] = "mutated"
+	vector[0] = 99
+
+	stored, err := engine.GetDocument(ctx, "doc-1")
+	if err != nil {
+		t.Fatalf("failed to get stored document: %v", err)
+	}
+	if stored.Metadata["type"] != "test" {
+		t.Fatalf("expected stored metadata to stay isolated, got %v", stored.Metadata["type"])
+	}
+	if len(stored.Vector) != 3 || stored.Vector[0] != 1 {
+		t.Fatalf("expected stored vector to stay isolated, got %#v", stored.Vector)
+	}
+
+	stored.Metadata["type"] = "changed"
+	stored.Vector[0] = 77
+
+	again, err := engine.GetDocument(ctx, "doc-1")
+	if err != nil {
+		t.Fatalf("failed to get document again: %v", err)
+	}
+	if again.Metadata["type"] != "test" {
+		t.Fatalf("expected GetDocument to return a clone, got %v", again.Metadata["type"])
+	}
+	if again.Vector[0] != 1 {
+		t.Fatalf("expected GetDocument vector clone, got %#v", again.Vector)
+	}
+
+	results, err := engine.Search(ctx, "Go programming", ctxpkg.SearchOptions{
+		TopK:      1,
+		Threshold: 0.0,
+	})
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 search result, got %d", len(results))
+	}
+
+	results[0].Document.Metadata["type"] = "search"
+	postSearch, err := engine.GetDocument(ctx, "doc-1")
+	if err != nil {
+		t.Fatalf("failed to get document after search mutation: %v", err)
+	}
+	if postSearch.Metadata["type"] != "test" {
+		t.Fatalf("expected search result mutation to not leak, got %v", postSearch.Metadata["type"])
+	}
+
+	snapshot := engine.SnapshotDocuments()
+	if len(snapshot) != 1 {
+		t.Fatalf("expected 1 document in snapshot, got %d", len(snapshot))
+	}
+	snapshot[0].Metadata["type"] = "snapshot"
+	snapshot[0].Vector[0] = 55
+
+	postSnapshot, err := engine.GetDocument(ctx, "doc-1")
+	if err != nil {
+		t.Fatalf("failed to get document after snapshot mutation: %v", err)
+	}
+	if postSnapshot.Metadata["type"] != "test" {
+		t.Fatalf("expected snapshot mutation to not leak, got %v", postSnapshot.Metadata["type"])
+	}
+	if postSnapshot.Vector[0] != 1 {
+		t.Fatalf("expected snapshot vector mutation to not leak, got %#v", postSnapshot.Vector)
+	}
+}
+
+func TestSearchDocumentsTopKZeroMeansUnlimited(t *testing.T) {
+	config := DefaultIsolationConfig()
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+	}, IsolationModeStrict, ContextVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("failed to create boundary: %v", err)
+	}
+
+	engine, _ := mgr.GetEngine("session-1")
+	ctx := context.Background()
+
+	for _, doc := range []ctxpkg.Document{
+		{ID: "doc-1", Content: "Go programming"},
+		{ID: "doc-2", Content: "Go concurrency"},
+	} {
+		if err := engine.AddDocument(ctx, doc); err != nil {
+			t.Fatalf("failed to add document %s: %v", doc.ID, err)
+		}
+	}
+
+	results, err := engine.Search(ctx, "Go", ctxpkg.SearchOptions{
+		TopK:      0,
+		Threshold: 0.0,
+	})
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected unlimited TopK to return 2 results, got %d", len(results))
+	}
+}
+
+func TestCanShareContextRequiresApproval(t *testing.T) {
+	config := DefaultIsolationConfig()
+	config.EnableSharing = true
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	if err := mgr.AddSharingPolicy(&SharedContextPolicy{
+		SourceAgentID:   "agent-1",
+		TargetAgentIDs:  []string{"agent-2"},
+		RequireApproval: true,
+	}); err != nil {
+		t.Fatalf("failed to add sharing policy: %v", err)
+	}
+
+	if mgr.CanShareContext("agent-1", "agent-2", "") {
+		t.Fatal("expected approval-required policy to block automatic sharing")
+	}
+}
+
+func TestSharedSearchRespectsContextKeys(t *testing.T) {
+	config := DefaultIsolationConfig()
+	config.EnableSharing = true
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create source boundary: %v", err)
+	}
+
+	_, err = mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-2",
+		SessionID: "session-2",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create target boundary: %v", err)
+	}
+
+	if err := mgr.AddSharingPolicy(&SharedContextPolicy{
+		SourceAgentID:  "agent-1",
+		TargetAgentIDs: []string{"agent-2"},
+		ContextKeys:    []string{"allowed"},
+	}); err != nil {
+		t.Fatalf("failed to add sharing policy: %v", err)
+	}
+
+	kvEngine, _ := mgr.GetKVEngine("session-1")
+	ctx := context.Background()
+	if err := kvEngine.Set(ctx, "allowed", "value-1"); err != nil {
+		t.Fatalf("failed to set allowed key: %v", err)
+	}
+	if err := kvEngine.Set(ctx, "blocked", "value-2"); err != nil {
+		t.Fatalf("failed to set blocked key: %v", err)
+	}
+
+	results, err := mgr.SharedSearch("session-2", "", "")
+	if err != nil {
+		t.Fatalf("shared search failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 shared result, got %d", len(results))
+	}
+	if results[0].Key != "allowed" {
+		t.Fatalf("expected only allowed key to be shared, got %s", results[0].Key)
+	}
+}
+
+func TestContextBridgeTransferRequiresApproval(t *testing.T) {
+	config := DefaultIsolationConfig()
+	config.EnableSharing = true
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create source boundary: %v", err)
+	}
+
+	_, err = mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-2",
+		SessionID: "session-2",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create target boundary: %v", err)
+	}
+
+	if err := mgr.AddSharingPolicy(&SharedContextPolicy{
+		SourceAgentID:   "agent-1",
+		TargetAgentIDs:  []string{"agent-2"},
+		RequireApproval: true,
+	}); err != nil {
+		t.Fatalf("failed to add sharing policy: %v", err)
+	}
+
+	bridge := NewContextBridge(mgr)
+	if _, err := bridge.TransferDocuments(context.Background(), "session-1", "session-2", []string{"doc-1"}, ""); err == nil {
+		t.Fatal("expected approval-required policy to block transfer")
+	}
+}
+
+func TestContextBridgeTransferKeyValuesRespectsContextKeys(t *testing.T) {
+	config := DefaultIsolationConfig()
+	config.EnableSharing = true
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create source boundary: %v", err)
+	}
+
+	_, err = mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-2",
+		SessionID: "session-2",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create target boundary: %v", err)
+	}
+
+	if err := mgr.AddSharingPolicy(&SharedContextPolicy{
+		SourceAgentID:  "agent-1",
+		TargetAgentIDs: []string{"agent-2"},
+		ContextKeys:    []string{"allowed"},
+	}); err != nil {
+		t.Fatalf("failed to add sharing policy: %v", err)
+	}
+
+	sourceKV, _ := mgr.GetKVEngine("session-1")
+	targetKV, _ := mgr.GetKVEngine("session-2")
+	ctx := context.Background()
+	if err := sourceKV.Set(ctx, "allowed", "value-1"); err != nil {
+		t.Fatalf("failed to set allowed key: %v", err)
+	}
+	if err := sourceKV.Set(ctx, "blocked", "value-2"); err != nil {
+		t.Fatalf("failed to set blocked key: %v", err)
+	}
+
+	bridge := NewContextBridge(mgr)
+	transfer, err := bridge.TransferKeyValues("session-1", "session-2", []string{"allowed", "blocked"}, "")
+	if err != nil {
+		t.Fatalf("transfer failed: %v", err)
+	}
+	if len(transfer.KeyValues) != 1 {
+		t.Fatalf("expected only 1 allowed key to transfer, got %d", len(transfer.KeyValues))
+	}
+
+	if _, err := targetKV.Get(ctx, "shared_session-1_allowed"); err != nil {
+		t.Fatalf("expected allowed key to be transferred: %v", err)
+	}
+	if _, err := targetKV.Get(ctx, "shared_session-1_blocked"); err == nil {
+		t.Fatal("expected blocked key to stay filtered out")
+	}
+}
+
+func TestCreateSnapshotAggregatesAgentScopes(t *testing.T) {
+	config := DefaultIsolationConfig()
+	config.EnableSharing = true
+	config.EnableSnapshots = true
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+	}, IsolationModeStrict, ContextVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("failed to create session boundary: %v", err)
+	}
+
+	_, err = mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-2",
+		TaskID:    "task-1",
+	}, IsolationModeStrict, ContextVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("failed to create task boundary: %v", err)
+	}
+
+	sessionEngine, _ := mgr.GetEngine("session-1")
+	taskEngine, _ := mgr.GetEngine("task-1")
+	ctx := context.Background()
+	if err := sessionEngine.AddDocument(ctx, ctxpkg.Document{ID: "doc-1", Content: "session document"}); err != nil {
+		t.Fatalf("failed to add session document: %v", err)
+	}
+	if err := taskEngine.AddDocument(ctx, ctxpkg.Document{ID: "doc-2", Content: "task document"}); err != nil {
+		t.Fatalf("failed to add task document: %v", err)
+	}
+
+	sessionKV, _ := mgr.GetKVEngine("session-1")
+	taskKV, _ := mgr.GetKVEngine("task-1")
+	if err := sessionKV.Set(ctx, "key-1", "value-1"); err != nil {
+		t.Fatalf("failed to set session key: %v", err)
+	}
+	if err := taskKV.Set(ctx, "key-2", "value-2"); err != nil {
+		t.Fatalf("failed to set task key: %v", err)
+	}
+
+	snapshot, err := mgr.CreateSnapshot("agent-1", "", "aggregate")
+	if err != nil {
+		t.Fatalf("failed to create snapshot: %v", err)
+	}
+	if len(snapshot.Documents) != 2 {
+		t.Fatalf("expected 2 documents in aggregate snapshot, got %d", len(snapshot.Documents))
+	}
+	if len(snapshot.KeyValues) != 2 {
+		t.Fatalf("expected 2 key-values in aggregate snapshot, got %d", len(snapshot.KeyValues))
+	}
+}
+
+func TestContextScopeMiddlewareExitNestedCleansUpBoundary(t *testing.T) {
+	config := DefaultIsolationConfig()
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	middleware := NewContextScopeMiddleware(mgr)
+
+	if _, err := middleware.EnterScope("agent-1", "session-1", "", "outer", IsolationModeStrict, ContextVisibilityPrivate); err != nil {
+		t.Fatalf("failed to enter outer scope: %v", err)
+	}
+	if _, err := middleware.EnterScope("agent-1", "session-1", "task-1", "inner", IsolationModeHybrid, ContextVisibilityScoped); err != nil {
+		t.Fatalf("failed to enter inner scope: %v", err)
+	}
+
+	if err := middleware.ExitScope("agent-1"); err != nil {
+		t.Fatalf("failed to exit inner scope: %v", err)
+	}
+
+	if _, ok := mgr.GetBoundary("task-1"); ok {
+		t.Fatal("expected exited nested scope boundary to be deleted")
+	}
+	if _, ok := mgr.GetEngine("task-1"); ok {
+		t.Fatal("expected exited nested scope engine to be deleted")
+	}
+
+	currentScope, err := middleware.GetCurrentScope("agent-1")
+	if err != nil {
+		t.Fatalf("failed to get current scope after nested exit: %v", err)
+	}
+	if currentScope.ID() != "session-1" {
+		t.Fatalf("expected current scope to return to outer scope, got %s", currentScope.ID())
+	}
+}
+
+func TestContextScopeMiddlewareExitNestedSameScopeKeepsBoundary(t *testing.T) {
+	config := DefaultIsolationConfig()
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	middleware := NewContextScopeMiddleware(mgr)
+
+	if _, err := middleware.EnterScope("agent-1", "session-1", "", "test", IsolationModeStrict, ContextVisibilityPrivate); err != nil {
+		t.Fatalf("failed to enter first scope: %v", err)
+	}
+	if _, err := middleware.EnterScope("agent-1", "session-1", "", "test", IsolationModeStrict, ContextVisibilityPrivate); err != nil {
+		t.Fatalf("failed to enter duplicate scope: %v", err)
+	}
+
+	if err := middleware.ExitScope("agent-1"); err != nil {
+		t.Fatalf("failed to exit nested duplicate scope: %v", err)
+	}
+
+	if _, ok := mgr.GetBoundary("session-1"); !ok {
+		t.Fatal("expected boundary to remain while outer scope is still active")
+	}
+	if !middleware.IsScoped("agent-1") {
+		t.Fatal("expected agent to stay scoped after first exit")
+	}
+
+	if err := middleware.ExitScope("agent-1"); err != nil {
+		t.Fatalf("failed to exit outer scope: %v", err)
+	}
+	if _, ok := mgr.GetBoundary("session-1"); ok {
+		t.Fatal("expected boundary to be deleted after final exit")
+	}
+}
+
+func TestContextAggregatorCrossScopeSearchAllNamespaces(t *testing.T) {
+	config := DefaultIsolationConfig()
+	config.EnableSharing = true
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+		Namespace: "alpha",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create first boundary: %v", err)
+	}
+
+	_, err = mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-2",
+		SessionID: "session-2",
+		Namespace: "beta",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create second boundary: %v", err)
+	}
+
+	engine1, _ := mgr.GetEngine("session-1")
+	engine2, _ := mgr.GetEngine("session-2")
+	ctx := context.Background()
+	if err := engine1.AddDocument(ctx, ctxpkg.Document{ID: "doc-1", Content: "Go programming"}); err != nil {
+		t.Fatalf("failed to add first document: %v", err)
+	}
+	if err := engine2.AddDocument(ctx, ctxpkg.Document{ID: "doc-2", Content: "Go concurrency"}); err != nil {
+		t.Fatalf("failed to add second document: %v", err)
+	}
+
+	aggregator := NewContextAggregator(mgr)
+	results, err := aggregator.CrossScopeSearch([]string{"session-1", "session-2"}, "Go", "", 0)
+	if err != nil {
+		t.Fatalf("cross-scope search failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected search across all namespaces to return 2 results, got %d", len(results))
+	}
+}
+
+func TestContextSyncRejectsPrivateSource(t *testing.T) {
+	config := DefaultIsolationConfig()
+	config.EnableSharing = true
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+	}, IsolationModeShared, ContextVisibilityPrivate)
+	if err != nil {
+		t.Fatalf("failed to create private source boundary: %v", err)
+	}
+
+	_, err = mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-2",
+		SessionID: "session-2",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create target boundary: %v", err)
+	}
+
+	if err := mgr.AddSharingPolicy(&SharedContextPolicy{
+		SourceAgentID:  "agent-1",
+		TargetAgentIDs: []string{"agent-2"},
+	}); err != nil {
+		t.Fatalf("failed to add sharing policy: %v", err)
+	}
+
+	sync := NewContextSync(mgr)
+	if err := sync.SyncContext("session-1", "session-2", ""); err == nil {
+		t.Fatal("expected sync from private source to be rejected")
+	}
+}
+
+func TestContextSyncRespectsContextKeys(t *testing.T) {
+	config := DefaultIsolationConfig()
+	config.EnableSharing = true
+	mgr := NewContextIsolationManager(config)
+	defer mgr.Close()
+
+	_, err := mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-1",
+		SessionID: "session-1",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create source boundary: %v", err)
+	}
+
+	_, err = mgr.CreateBoundary(&ContextScope{
+		AgentID:   "agent-2",
+		SessionID: "session-2",
+	}, IsolationModeShared, ContextVisibilityPublic)
+	if err != nil {
+		t.Fatalf("failed to create target boundary: %v", err)
+	}
+
+	if err := mgr.AddSharingPolicy(&SharedContextPolicy{
+		SourceAgentID:  "agent-1",
+		TargetAgentIDs: []string{"agent-2"},
+		ContextKeys:    []string{"doc-1", "key-1"},
+	}); err != nil {
+		t.Fatalf("failed to add sharing policy: %v", err)
+	}
+
+	sourceEngine, _ := mgr.GetEngine("session-1")
+	targetEngine, _ := mgr.GetEngine("session-2")
+	sourceKV, _ := mgr.GetKVEngine("session-1")
+	targetKV, _ := mgr.GetKVEngine("session-2")
+	ctx := context.Background()
+
+	for _, doc := range []ctxpkg.Document{
+		{ID: "doc-1", Content: "allowed document"},
+		{ID: "doc-2", Content: "blocked document"},
+	} {
+		if err := sourceEngine.AddDocument(ctx, doc); err != nil {
+			t.Fatalf("failed to add document %s: %v", doc.ID, err)
+		}
+	}
+	if err := sourceKV.Set(ctx, "key-1", "value-1"); err != nil {
+		t.Fatalf("failed to set allowed key: %v", err)
+	}
+	if err := sourceKV.Set(ctx, "key-2", "value-2"); err != nil {
+		t.Fatalf("failed to set blocked key: %v", err)
+	}
+
+	sync := NewContextSync(mgr)
+	if err := sync.SyncContext("session-1", "session-2", ""); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	if targetEngine.DocumentCount() != 1 {
+		t.Fatalf("expected only 1 allowed document to sync, got %d", targetEngine.DocumentCount())
+	}
+	if _, err := targetEngine.GetDocument(ctx, "doc-1"); err != nil {
+		t.Fatalf("expected allowed document to sync: %v", err)
+	}
+	if _, err := targetEngine.GetDocument(ctx, "doc-2"); err == nil {
+		t.Fatal("expected blocked document to stay out of sync target")
+	}
+
+	if _, err := targetKV.Get(ctx, "key-1"); err != nil {
+		t.Fatalf("expected allowed key to sync: %v", err)
+	}
+	if _, err := targetKV.Get(ctx, "key-2"); err == nil {
+		t.Fatal("expected blocked key to stay out of sync target")
+	}
+}

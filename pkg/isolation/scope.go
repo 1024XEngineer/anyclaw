@@ -49,6 +49,8 @@ func (m *ContextScopeMiddleware) EnterScope(agentID, sessionID, taskID, namespac
 			m.scopeStack[agentID] = append(m.scopeStack[agentID], scope.ID())
 
 			if activeScope, exists := m.activeScopes[agentID]; exists {
+				activeScope.ScopeID = scope.ID()
+				activeScope.SessionID = sessionID
 				activeScope.Nested++
 			} else {
 				m.activeScopes[agentID] = &ActiveScope{
@@ -93,10 +95,27 @@ func (m *ContextScopeMiddleware) ExitScope(agentID string) error {
 	}
 
 	if activeScope.Nested > 1 {
-		activeScope.Nested--
-		if len(m.scopeStack[agentID]) > 1 {
+		exitingScopeID := ""
+		if len(m.scopeStack[agentID]) > 0 {
+			exitingScopeID = m.scopeStack[agentID][len(m.scopeStack[agentID])-1]
 			m.scopeStack[agentID] = m.scopeStack[agentID][:len(m.scopeStack[agentID])-1]
+			if len(m.scopeStack[agentID]) == 0 {
+				delete(m.scopeStack, agentID)
+			}
+		}
+
+		activeScope.Nested--
+		if len(m.scopeStack[agentID]) > 0 {
 			activeScope.ScopeID = m.scopeStack[agentID][len(m.scopeStack[agentID])-1]
+			if boundary, ok := m.manager.GetBoundary(activeScope.ScopeID); ok {
+				activeScope.SessionID = boundary.Scope.SessionID
+			} else {
+				activeScope.SessionID = ""
+			}
+		}
+
+		if exitingScopeID != "" && !scopeStackContains(m.scopeStack[agentID], exitingScopeID) {
+			return m.manager.DeleteBoundary(exitingScopeID)
 		}
 		return nil
 	}
@@ -104,8 +123,14 @@ func (m *ContextScopeMiddleware) ExitScope(agentID string) error {
 	if len(m.scopeStack[agentID]) > 0 {
 		scopeID := m.scopeStack[agentID][len(m.scopeStack[agentID])-1]
 		m.scopeStack[agentID] = m.scopeStack[agentID][:len(m.scopeStack[agentID])-1]
+		if len(m.scopeStack[agentID]) == 0 {
+			delete(m.scopeStack, agentID)
+		}
 		delete(m.activeScopes, agentID)
-		return m.manager.DeleteBoundary(scopeID)
+		if !scopeStackContains(m.scopeStack[agentID], scopeID) {
+			return m.manager.DeleteBoundary(scopeID)
+		}
+		return nil
 	}
 
 	delete(m.activeScopes, agentID)
@@ -204,6 +229,15 @@ func (m *ContextScopeMiddleware) ListActiveScopes() []*ActiveScope {
 		scopes = append(scopes, scope)
 	}
 	return scopes
+}
+
+func scopeStackContains(stack []string, scopeID string) bool {
+	for _, existing := range stack {
+		if existing == scopeID {
+			return true
+		}
+	}
+	return false
 }
 
 type ContextEnforcer struct {

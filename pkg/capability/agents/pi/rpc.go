@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
-	"github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
 type RPCServer struct {
@@ -100,7 +100,7 @@ func (s *RPCServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"name":    "AnyClaw Pi Agent RPC",
-		"version": runtime.Version,
+		"version": runtime.Version(),
 		"endpoints": []string{
 			"/v1/chat",
 			"/v1/sessions",

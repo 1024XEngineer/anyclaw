@@ -50,7 +50,7 @@ func runModelsStatus(args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadModelsCLIConfig(*configPath)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func runModelsList(args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := loadModelsCLIConfig(*configPath)
 	if err != nil {
 		return err
 	}
@@ -175,24 +175,36 @@ func runModelsSet(args []string) error {
 		return fmt.Errorf("model is required")
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.LoadPersisted(*configPath)
 	if err != nil {
 		return err
 	}
-	cfg.LLM.Model = model
 
 	if current, ok := cfg.FindDefaultProviderProfile(); ok {
+		if strings.TrimSpace(current.Provider) != "" {
+			cfg.LLM.Provider = strings.TrimSpace(current.Provider)
+		}
 		current.DefaultModel = model
 		if err := cfg.UpsertProviderProfile(current); err != nil {
 			return err
 		}
 	}
+	cfg.LLM.Model = model
 
 	if err := cfg.Save(*configPath); err != nil {
 		return err
 	}
 	printSuccess("Default model set to %s", model)
 	return nil
+}
+
+func loadModelsCLIConfig(configPath string) (*config.Config, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, err
+	}
+	_ = cfg.ApplyDefaultProviderProfile()
+	return cfg, nil
 }
 
 func printModelsUsage() {

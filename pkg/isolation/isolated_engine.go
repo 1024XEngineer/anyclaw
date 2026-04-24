@@ -59,20 +59,21 @@ func (e *IsolatedEngine) AddDocument(ctx context.Context, doc ctxpkg.Document) e
 		return fmt.Errorf("context size limit reached: %d", e.config.MaxContextSize)
 	}
 
-	if doc.Metadata == nil {
-		doc.Metadata = make(map[string]any)
+	storedDoc := cloneIsolatedDocument(&doc)
+	if storedDoc.Metadata == nil {
+		storedDoc.Metadata = make(map[string]any)
 	}
-	doc.Metadata["agent_id"] = e.scope.AgentID
-	doc.Metadata["session_id"] = e.scope.SessionID
-	doc.Metadata["task_id"] = e.scope.TaskID
-	doc.Metadata["namespace"] = e.scope.Namespace
-	doc.Metadata["scope_id"] = e.scope.ID()
+	storedDoc.Metadata["agent_id"] = e.scope.AgentID
+	storedDoc.Metadata["session_id"] = e.scope.SessionID
+	storedDoc.Metadata["task_id"] = e.scope.TaskID
+	storedDoc.Metadata["namespace"] = e.scope.Namespace
+	storedDoc.Metadata["scope_id"] = e.scope.ID()
 
 	now := time.Now()
-	doc.CreatedAt = now
-	doc.UpdatedAt = now
+	storedDoc.CreatedAt = now
+	storedDoc.UpdatedAt = now
 
-	e.documents[doc.ID] = &doc
+	e.documents[storedDoc.ID] = storedDoc
 	return nil
 }
 
@@ -96,7 +97,7 @@ func (e *IsolatedEngine) Search(ctx context.Context, query string, options ctxpk
 		score := calculateSimilarity(query, doc.Content)
 		if score >= options.Threshold {
 			results = append(results, ctxpkg.SearchResult{
-				Document: doc,
+				Document: cloneIsolatedDocument(doc),
 				Score:    score,
 			})
 		}
@@ -110,7 +111,7 @@ func (e *IsolatedEngine) Search(ctx context.Context, query string, options ctxpk
 		}
 	}
 
-	if len(results) > options.TopK {
+	if options.TopK > 0 && len(results) > options.TopK {
 		results = results[:options.TopK]
 	}
 
@@ -129,7 +130,7 @@ func (e *IsolatedEngine) GetDocument(ctx context.Context, id string) (*ctxpkg.Do
 	if !ok {
 		return nil, fmt.Errorf("document not found: %s", id)
 	}
-	return doc, nil
+	return cloneIsolatedDocument(doc), nil
 }
 
 func (e *IsolatedEngine) DeleteDocument(ctx context.Context, id string) error {
@@ -205,12 +206,7 @@ func (e *IsolatedEngine) Clone() IsolatedContextEngine {
 	cloned.visibility = e.visibility
 
 	for id, doc := range e.documents {
-		clonedDoc := *doc
-		clonedDoc.Metadata = make(map[string]any)
-		for k, v := range doc.Metadata {
-			clonedDoc.Metadata[k] = v
-		}
-		cloned.documents[id] = &clonedDoc
+		cloned.documents[id] = cloneIsolatedDocument(doc)
 	}
 
 	return cloned
@@ -222,7 +218,7 @@ func (e *IsolatedEngine) SnapshotDocuments() []ctxpkg.Document {
 
 	docs := make([]ctxpkg.Document, 0, len(e.documents))
 	for _, doc := range e.documents {
-		docs = append(docs, *doc)
+		docs = append(docs, *cloneIsolatedDocument(doc))
 	}
 	return docs
 }
@@ -240,10 +236,28 @@ func (e *IsolatedEngine) GetDocumentsByNamespace(namespace string) []ctxpkg.Docu
 	var docs []ctxpkg.Document
 	for _, doc := range e.documents {
 		if ns, ok := doc.Metadata["namespace"].(string); ok && ns == namespace {
-			docs = append(docs, *doc)
+			docs = append(docs, *cloneIsolatedDocument(doc))
 		}
 	}
 	return docs
+}
+
+func cloneIsolatedDocument(doc *ctxpkg.Document) *ctxpkg.Document {
+	if doc == nil {
+		return nil
+	}
+
+	cloned := *doc
+	if doc.Metadata != nil {
+		cloned.Metadata = make(map[string]any, len(doc.Metadata))
+		for key, value := range doc.Metadata {
+			cloned.Metadata[key] = value
+		}
+	}
+	if doc.Vector != nil {
+		cloned.Vector = append([]float64(nil), doc.Vector...)
+	}
+	return &cloned
 }
 
 func matchesFilters(doc *ctxpkg.Document, filters map[string]any) bool {

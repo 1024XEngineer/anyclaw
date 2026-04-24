@@ -1,10 +1,10 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -207,7 +207,9 @@ func runSessionsCommand(args []string) error {
 
 	path := "/sessions"
 	if strings.TrimSpace(*workspace) != "" {
-		path += "?workspace=" + strings.TrimSpace(*workspace)
+		query := url.Values{}
+		query.Set("workspace", strings.TrimSpace(*workspace))
+		path += "?" + query.Encode()
 	}
 
 	var sessions []sessionListItem
@@ -298,7 +300,9 @@ func runApprovalsGet(args []string) error {
 
 	path := "/approvals"
 	if trimmed := strings.TrimSpace(*status); trimmed != "" {
-		path += "?status=" + trimmed
+		query := url.Values{}
+		query.Set("status", trimmed)
+		path += "?" + query.Encode()
 	}
 
 	var approvals []approvalListItem
@@ -386,10 +390,4 @@ Usage:
   anyclaw approvals approve <id> [--comment "looks good"]
   anyclaw approvals reject <id> [--comment "stop"]
 `)
-}
-
-func writePrettyJSON(value any) error {
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(value)
 }

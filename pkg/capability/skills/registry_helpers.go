@@ -21,6 +21,7 @@ type skillFileDefinition struct {
 	Name           string            `json:"name"`
 	Description    string            `json:"description"`
 	Version        string            `json:"version"`
+	Category       string            `json:"category,omitempty"`
 	Source         string            `json:"source,omitempty"`
 	Registry       string            `json:"registry,omitempty"`
 	Homepage       string            `json:"homepage,omitempty"`
@@ -140,6 +141,9 @@ func writeSkillFile(skillDir string, definition skillFileDefinition) error {
 
 func installSkillDefinition(destDir string, skillName string, definition skillFileDefinition) error {
 	skillDir := filepath.Join(destDir, skillName)
+	if !pathWithinBase(destDir, skillDir) {
+		return fmt.Errorf("skill install path must stay within destination directory")
+	}
 	return writeSkillFile(skillDir, definition)
 }
 

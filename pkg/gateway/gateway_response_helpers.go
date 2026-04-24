@@ -1,12 +1,11 @@
 package gateway
 
 import (
-	"encoding/json"
 	"net/http"
+
+	gatewaysurface "github.com/1024XEngineer/anyclaw/pkg/gateway/surface"
 )
 
-func writeJSON(w http.ResponseWriter, statusCode int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(value)
+func writeError(w http.ResponseWriter, statusCode int, message string) {
+	_ = gatewaysurface.Service{}.WriteError(w, statusCode, message)
 }

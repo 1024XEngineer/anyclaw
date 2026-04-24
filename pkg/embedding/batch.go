@@ -299,10 +299,23 @@ func (bp *BatchProcessor) ProcessWithProvider(ctx context.Context, texts []strin
 				failed.Add(1)
 			}
 		} else {
-			for j, emb := range embeddings {
-				results[i+j] = emb
+			if err := validateBatchEmbeddings(provider, chunk, embeddings); err != nil {
+				for j := i; j < end; j++ {
+					errorMu.Lock()
+					errors = append(errors, BatchError{
+						Index: j,
+						Text:  texts[j],
+						Err:   err,
+					})
+					errorMu.Unlock()
+					failed.Add(1)
+				}
+			} else {
+				for j, emb := range embeddings {
+					results[i+j] = emb
+				}
+				succeeded.Add(int32(len(embeddings)))
 			}
-			succeeded.Add(int32(len(embeddings)))
 		}
 
 		p := processed.Add(int32(end - i))
@@ -348,6 +361,29 @@ func (bp *BatchProcessor) ProcessWithProvider(ctx context.Context, texts []strin
 		Failed:     int(failed.Load()),
 		Duration:   duration,
 	}, nil
+}
+
+func validateBatchEmbeddings(provider Provider, texts []string, embeddings [][]float32) error {
+	if len(embeddings) != len(texts) {
+		return fmt.Errorf(
+			"embedding: provider %s returned %d embeddings for %d texts",
+			provider.Name(),
+			len(embeddings),
+			len(texts),
+		)
+	}
+
+	for i, embedding := range embeddings {
+		if embedding == nil {
+			return fmt.Errorf(
+				"embedding: provider %s returned nil embedding at index %d",
+				provider.Name(),
+				i,
+			)
+		}
+	}
+
+	return nil
 }
 
 func (bp *BatchProcessor) EstimateCost(texts []string, providerIdx int) (tokens int, cost float64, err error) {

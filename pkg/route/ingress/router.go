@@ -7,18 +7,22 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
+// Router evaluates channel routing rules and returns the M2 route decision.
 type Router struct {
 	config config.RoutingConfig
 }
 
+// NewRouter creates the M2 rules router.
 func NewRouter(cfg config.RoutingConfig) *Router {
 	return &Router{config: cfg}
 }
 
+// Decide resolves one route request into a lightweight route decision.
 func (r *Router) Decide(req RouteRequest) RouteDecision {
 	if r == nil {
 		return RouteDecision{}
 	}
+
 	mode := strings.TrimSpace(r.config.Mode)
 	if mode == "" {
 		mode = "per-chat"
@@ -31,6 +35,7 @@ func (r *Router) Decide(req RouteRequest) RouteDecision {
 		if rule.Match != "" && !strings.Contains(req.Source, rule.Match) && !strings.Contains(req.Text, rule.Match) {
 			continue
 		}
+
 		decision := buildDecision(req, defaultString(rule.SessionMode, mode), rule.TitlePrefix)
 		if strings.TrimSpace(rule.SessionID) != "" {
 			decision.ForcedSessionID = strings.TrimSpace(rule.SessionID)
@@ -57,10 +62,17 @@ func buildDecision(req RouteRequest, mode string, titlePrefix string) RouteDecis
 		decision.SessionMode = "per-chat"
 		decision.RouteKey = req.Channel + ":" + req.Source
 	}
+
 	if strings.TrimSpace(req.ThreadID) != "" {
 		decision.RouteKey = decision.RouteKey + ":thread:" + req.ThreadID
 		decision.ThreadID = req.ThreadID
 	}
+
+	if title := strings.TrimSpace(req.TitleHint); title != "" {
+		decision.TitleHint = title
+		return decision
+	}
+
 	baseTitle := req.Channel + " " + req.Source
 	if strings.TrimSpace(req.ThreadID) != "" {
 		baseTitle = baseTitle + " (thread)"

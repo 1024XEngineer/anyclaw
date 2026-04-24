@@ -132,10 +132,19 @@ func TestNewProvider(t *testing.T) {
 		{
 			name: "baidu",
 			cfg: Config{
+				Provider:  ProviderBaidu,
+				APIKey:    "test-key",
+				SecretKey: "test-secret",
+			},
+			wantErr: false,
+		},
+		{
+			name: "baidu no secret",
+			cfg: Config{
 				Provider: ProviderBaidu,
 				APIKey:   "test-key",
 			},
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "siliconflow",
@@ -272,7 +281,7 @@ func TestDashScopeProvider(t *testing.T) {
 }
 
 func TestBaiduProvider(t *testing.T) {
-	p, err := NewBaiduProvider("test-key")
+	p, err := NewBaiduProvider("test-key", WithBaiduSecretKey("test-secret"))
 	if err != nil {
 		t.Fatalf("failed to create provider: %v", err)
 	}
@@ -282,6 +291,13 @@ func TestBaiduProvider(t *testing.T) {
 	}
 	if p.Dimension() != 384 {
 		t.Errorf("expected dimension 384, got %d", p.Dimension())
+	}
+}
+
+func TestBaiduProviderRequiresSecretKey(t *testing.T) {
+	_, err := NewBaiduProvider("test-key")
+	if err == nil {
+		t.Fatal("expected error when secret key is missing")
 	}
 }
 
@@ -343,6 +359,37 @@ func TestManagerFallback(t *testing.T) {
 
 	if mgr.CurrentProvider().Name() != "success" {
 		t.Errorf("expected fallback to success provider")
+	}
+}
+
+func TestManagerUsesCurrentProviderAfterFallback(t *testing.T) {
+	failCalls := 0
+	successCalls := 0
+	fail := &mockProvider{name: "fail", dim: 4, shouldFail: true, onEmbed: func() {
+		failCalls++
+	}}
+	success := &mockProvider{name: "success", dim: 4, onEmbed: func() {
+		successCalls++
+	}}
+
+	mgr, err := NewManager([]Provider{fail, success}, nil)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	ctx := context.Background()
+	if _, err := mgr.Embed(ctx, "first"); err != nil {
+		t.Fatalf("first embed should succeed with fallback: %v", err)
+	}
+	if _, err := mgr.Embed(ctx, "second"); err != nil {
+		t.Fatalf("second embed should succeed with current provider: %v", err)
+	}
+
+	if failCalls != 1 {
+		t.Fatalf("expected failed provider to be tried once, got %d", failCalls)
+	}
+	if successCalls != 2 {
+		t.Fatalf("expected current provider to handle both successful requests, got %d", successCalls)
 	}
 }
 

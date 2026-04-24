@@ -1094,6 +1094,9 @@ func limitStrings(items []string, limit int) []string {
 }
 
 func (a *Agent) ShowMemory() (string, error) {
+	if a.memory == nil {
+		return "", fmt.Errorf("memory backend is nil")
+	}
 	return a.memory.FormatAsMarkdown()
 }
 

@@ -21,24 +21,43 @@ function loadWorkspaceConfig() {
   const candidates = explicitConfig
     ? [path.resolve(repoRoot, explicitConfig)]
     : [
-        path.join(repoRoot, "anyclaw.example.json"),
         path.join(repoRoot, "anyclaw.json"),
+        path.join(repoRoot, "anyclaw.example.json"),
       ];
 
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue;
     try {
-      return readJSON(candidate);
+      return {
+        config: readJSON(candidate),
+        configPath: candidate,
+      };
     } catch (error) {
       process.stderr.write(`Skipping invalid snapshot config ${candidate}: ${error.message}\n`);
     }
   }
 
-  return {};
+  return {
+    config: {},
+    configPath: path.join(repoRoot, "anyclaw.json"),
+  };
 }
 
 function safeString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readStringAlias(source, ...keys) {
+  if (!source || typeof source !== "object") return "";
+
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim() !== "") {
+      return value.trim();
+    }
+  }
+
+  return "";
 }
 
 function safeArray(value) {
@@ -86,10 +105,67 @@ function humanizeKey(key) {
 
 function channelConfigured(entry, keys) {
   if (!entry || typeof entry !== "object") return false;
-  return keys.some((key) => {
+  return keys.every((key) => {
     const value = entry[key];
     return typeof value === "string" && value.trim() !== "";
   });
+}
+
+function channelConfiguredWithAliases(entry, keyGroups) {
+  if (!entry || typeof entry !== "object") return false;
+  return keyGroups.every((group) =>
+    group.some((key) => {
+      const value = entry[key];
+      return typeof value === "string" && value.trim() !== "";
+    }),
+  );
+}
+
+function resolveConfigPath(configPath, value, fallback) {
+  const configured = safeString(value) || safeString(fallback);
+  if (configured === "") return "";
+
+  const normalized = path.normalize(configured);
+  if (path.isAbsolute(normalized)) {
+    return normalized;
+  }
+
+  return path.resolve(path.dirname(configPath), normalized);
+}
+
+function readConfiguredDir(config, configPath, sectionKey, fallbackDir, nestedAliases = [], rootAliases = []) {
+  const section = config?.[sectionKey];
+  const nestedValue = readStringAlias(section, ...nestedAliases);
+  const rootValue = readStringAlias(config, ...rootAliases);
+  return resolveConfigPath(configPath, nestedValue || rootValue, fallbackDir);
+}
+
+function normalizeBasePath(value) {
+  let basePath = safeString(value);
+  if (basePath === "") {
+    return "/dashboard";
+  }
+
+  if (!basePath.startsWith("/")) {
+    basePath = `/${basePath}`;
+  }
+
+  basePath = basePath.replace(/\/+$/, "");
+  if (basePath === "" || basePath === "/") {
+    return "/dashboard";
+  }
+
+  return basePath;
+}
+
+function readGatewayBasePath(config) {
+  const gateway = config?.gateway;
+  const basePath =
+    readStringAlias(gateway, "dashboardPath", "dashboard_path") ||
+    readStringAlias(gateway?.control_ui, "basePath", "base_path") ||
+    readStringAlias(gateway?.controlUi, "basePath", "base_path");
+
+  return normalizeBasePath(basePath);
 }
 
 function readSkillManifests(skillsDir) {
@@ -144,8 +220,8 @@ function buildMainAgent(agentConfig) {
     role: "main",
     permissionLevel: safeString(agentConfig?.permission_level) || "limited",
     workingDir: safeString(agentConfig?.working_dir),
-    providerRef: "",
-    defaultModel: "",
+    providerRef: safeString(agentConfig?.provider_ref),
+    defaultModel: safeString(agentConfig?.default_model),
     enabled: true,
     active: true,
     skills: safeArray(agentConfig?.skills)
@@ -207,6 +283,23 @@ function buildConfiguredChannels(config) {
 
   return [
     {
+      key: "wechat",
+      enabled: safeBoolean(channels.wechat?.enabled),
+      configured: channelConfiguredWithAliases(channels.wechat, [
+        ["app_id", "appid"],
+        ["app_secret", "secret"],
+        ["token", "verify_token"],
+      ]),
+    },
+    {
+      key: "feishu",
+      enabled: safeBoolean(channels.feishu?.enabled),
+      configured: channelConfiguredWithAliases(channels.feishu, [
+        ["app_id", "appId"],
+        ["app_secret", "appSecret"],
+      ]),
+    },
+    {
       key: "telegram",
       enabled: safeBoolean(channels.telegram?.enabled),
       configured: channelConfigured(channels.telegram, ["bot_token", "chat_id"]),
@@ -235,8 +328,13 @@ function buildConfiguredChannels(config) {
 }
 
 function buildSnapshot() {
-  const config = loadWorkspaceConfig();
-  const skills = readSkillManifests(path.join(repoRoot, "skills"));
+  const { config, configPath } = loadWorkspaceConfig();
+  const skills = readSkillManifests(
+    readConfiguredDir(config, configPath, "skills", path.join(repoRoot, "skills"), ["skillsDir", "dir", "path"], [
+      "skillsDir",
+      "skills_dir",
+    ]),
+  );
   const extensions = readExtensionManifests(path.join(repoRoot, "extensions"));
 
   return {
@@ -259,7 +357,7 @@ function buildSnapshot() {
       subAgents: safeArray(config.orchestrator?.sub_agents).length,
     },
     gateway: {
-      basePath: safeString(config.gateway?.control_ui?.base_path) || "/dashboard",
+      basePath: readGatewayBasePath(config),
       host: safeString(config.gateway?.host) || "127.0.0.1",
       port: Number(config.gateway?.port) || 18789,
       bind: safeString(config.gateway?.bind) || "loopback",

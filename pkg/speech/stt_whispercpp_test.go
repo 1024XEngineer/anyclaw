@@ -700,6 +700,7 @@ JSONEOF
 	p, _ := NewWhisperCPPProvider(
 		WithWhisperCPPModelPath(modelPath),
 		WithWhisperCPPBinaryPath(mockScript),
+		WithWhisperCPPWordTimestamps(true),
 	)
 
 	t.Run("successful transcription with mocked binary", func(t *testing.T) {

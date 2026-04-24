@@ -28,6 +28,7 @@ const (
 type Config struct {
 	Provider  ProviderType
 	APIKey    string
+	SecretKey string
 	BaseURL   string
 	Model     string
 	Dimension int
@@ -84,6 +85,9 @@ func NewProvider(cfg Config) (Provider, error) {
 		opts := []BaiduOption{}
 		if cfg.Model != "" {
 			opts = append(opts, WithBaiduModel(cfg.Model))
+		}
+		if cfg.SecretKey != "" {
+			opts = append(opts, WithBaiduSecretKey(cfg.SecretKey))
 		}
 		return NewBaiduProvider(cfg.APIKey, opts...)
 	case ProviderSiliconFlow:

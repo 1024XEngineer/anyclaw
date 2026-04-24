@@ -10,6 +10,12 @@ import (
 	"sync"
 )
 
+type AudioPlayer interface {
+	Play(ctx context.Context, audio []byte, format AudioFormat) error
+	Stop() error
+	IsPlaying() bool
+}
+
 type LocalAudioPlayer struct {
 	mu         sync.Mutex
 	isPlaying  bool

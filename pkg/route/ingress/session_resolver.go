@@ -170,6 +170,9 @@ func buildSessionCreateOptions(request MainRouteRequest, decision RouteDecision,
 }
 
 func sessionTitle(request MainRouteRequest, decision RouteDecision) string {
+	if title := strings.TrimSpace(request.TitleHint); title != "" {
+		return title
+	}
 	if title := strings.TrimSpace(decision.TitleHint); title != "" {
 		return title
 	}

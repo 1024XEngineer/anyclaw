@@ -1,33 +1,30 @@
 package gateway
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
+	gatewaycommands "github.com/1024XEngineer/anyclaw/pkg/gateway/commands"
 	taskrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
-	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	var req struct {
-		Message   string `json:"message"`
-		SessionID string `json:"session_id"`
-		Title     string `json:"title"`
-		Agent     string `json:"agent"`
-		Assistant string `json:"assistant"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, commandReq, err := s.surfaceService().DecodeHTTPChatSend(r)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
-	if strings.TrimSpace(req.Message) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
+	if err := gatewaycommands.ValidateChatSend(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	dispatch, err := s.commandIntakeService().Dispatch(commandReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	agentName, err := s.mainEntryPolicy().NormalizeRequestedAgent(req.Agent, req.Assistant)
@@ -35,8 +32,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.SessionID) == "" {
-		orgID, projectID, workspaceID := s.resolveResourceSelection(r)
+	if req.SessionID == "" {
+		orgID, projectID, workspaceID := req.OrgID, req.ProjectID, req.WorkspaceID
 		org, project, workspace, err := s.validateResourceSelection(orgID, projectID, workspaceID)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -46,33 +43,34 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_org": org.ID, "required_project": project.ID, "required_workspace": workspace.ID})
 			return
 		}
-		session, err := s.sessions.CreateWithOptions(state.SessionCreateOptions{
-			Title:       req.Title,
-			AgentName:   agentName,
-			Org:         org.ID,
-			Project:     project.ID,
-			Workspace:   workspace.ID,
-			SessionMode: "main",
-			QueueMode:   "fifo",
-		})
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		req.SessionID = session.ID
-		s.appendEvent("session.created", session.ID, sessionCreatedEventPayload(session))
+		req.OrgID = org.ID
+		req.ProjectID = project.ID
+		req.WorkspaceID = workspace.ID
 	}
 
-	response, updatedSession, err := s.runSessionMessage(r.Context(), req.SessionID, req.Title, req.Message)
+	response, updatedSession, err := s.runChatIngressMessage(r.Context(), "api", req, agentName)
 	if err != nil {
 		if errors.Is(err, taskrunner.ErrTaskWaitingApproval) {
-			s.appendAudit(UserFromContext(r.Context()), "chat.send", req.SessionID, map[string]any{"message_length": len(req.Message), "status": "waiting_approval"})
-			writeJSON(w, http.StatusAccepted, s.sessionApprovalResponse(req.SessionID))
+			sessionID := req.SessionID
+			if updatedSession != nil {
+				sessionID = updatedSession.ID
+			}
+			s.appendAudit(UserFromContext(r.Context()), "chat.send", sessionID, map[string]any{
+				"message_length": len(req.Message),
+				"status":         "waiting_approval",
+				"command_kind":   dispatch.Kind,
+				"command_target": dispatch.Target,
+			})
+			writeJSON(w, http.StatusAccepted, s.sessionApprovalResponse(sessionID))
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	s.appendAudit(UserFromContext(r.Context()), "chat.send", updatedSession.ID, map[string]any{"message_length": len(req.Message)})
+	s.appendAudit(UserFromContext(r.Context()), "chat.send", updatedSession.ID, map[string]any{
+		"message_length": len(req.Message),
+		"command_kind":   dispatch.Kind,
+		"command_target": dispatch.Target,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"response": response, "session": updatedSession})
 }

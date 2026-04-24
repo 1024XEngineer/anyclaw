@@ -36,6 +36,7 @@ func runCLIHubCommand(args []string) error {
 		printCLIHubUsage()
 		return nil
 	default:
+		printCLIHubUsage()
 		return fmt.Errorf("unknown clihub command: %s", args[0])
 	}
 }
@@ -44,17 +45,23 @@ func printCLIHubUsage() {
 	fmt.Print(`AnyClaw clihub commands:
 
 Usage:
-  anyclaw clihub search [query] [--category <name>] [--installed] [--json]
-  anyclaw clihub list [--installed] [--runnable] [--limit <n>] [--json]
+  anyclaw clihub search [query] [--category <name>] [--installed] [--limit <n>] [--json] [--workspace <path>]
+  anyclaw clihub list [--installed] [--runnable] [--limit <n>] [--json] [--workspace <path>]
   anyclaw clihub install <name> [--root <path>]
-  anyclaw clihub installed [--json]
-  anyclaw clihub info <name> [--json]
-  anyclaw clihub capabilities [query] [--harness <name>] [--limit <n>] [--json]
-  anyclaw clihub exec <name> [--json=true|false] [--auto-install] [--cwd <path>] [-- <args...>]
+  anyclaw clihub installed [--json] [--workspace <path>]
+  anyclaw clihub info <name> [--json] [--workspace <path>]
+  anyclaw clihub capabilities [query] [--harness <name>] [--limit <n>] [--json] [--workspace <path>]
+  anyclaw clihub exec <name> [--json=true|false] [--auto-install] [--cwd <path>] [--workspace <path>] [-- <args...>]
 
 Flags:
   --root <path>       Explicit CLI-Anything root
   --workspace <path>  Start discovery from this workspace
+  --cwd <path>        Working directory override for installed executables
+
+Notes:
+  clihub install requires an explicit trusted root via --root or ANYCLAW_CLI_ANYTHING_ROOT.
+  Install does not execute catalog shell from roots discovered implicitly from the current workspace.
+  Source harnesses always run from their checkout directory so local module imports resolve correctly.
 `)
 }
 
@@ -238,11 +245,7 @@ func runCLIHubInstall(args []string) error {
 		return fmt.Errorf("usage: anyclaw clihub install <name>")
 	}
 
-	root, err := resolveCLIHubRoot(*rootFlag, *workspaceFlag)
-	if err != nil {
-		return err
-	}
-	cat, err := clihub.Load(root)
+	cat, err := loadTrustedCLIHubInstallCatalog(*rootFlag, *workspaceFlag)
 	if err != nil {
 		return err
 	}
@@ -259,6 +262,30 @@ func runCLIHubInstall(args []string) error {
 	}
 	fmt.Printf("Installed %s\n", item.Name)
 	return nil
+}
+
+func loadTrustedCLIHubInstallCatalog(root string, workspace string) (*clihub.Catalog, error) {
+	if explicitRoot := strings.TrimSpace(root); explicitRoot != "" {
+		cat, err := clihub.Load(explicitRoot)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load CLI-Anything root %q: %w", explicitRoot, err)
+		}
+		return cat, nil
+	}
+
+	if envRoot := strings.TrimSpace(os.Getenv(clihub.EnvRoot)); envRoot != "" {
+		cat, err := clihub.Load(envRoot)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load CLI-Anything root from %s=%q: %w", clihub.EnvRoot, envRoot, err)
+		}
+		return cat, nil
+	}
+
+	if strings.TrimSpace(workspace) != "" {
+		return nil, fmt.Errorf("clihub install requires an explicit trusted root; --workspace only supports read-only discovery, pass --root <path> or set %s", clihub.EnvRoot)
+	}
+
+	return nil, fmt.Errorf("clihub install requires an explicit trusted root; pass --root <path> or set %s", clihub.EnvRoot)
 }
 
 func runCLIHubInfo(args []string) error {
@@ -400,7 +427,7 @@ func runCLIHubExec(args []string) error {
 	fs.SetOutput(os.Stdout)
 	rootFlag := fs.String("root", "", "explicit CLI-Anything root")
 	workspaceFlag := fs.String("workspace", "", "workspace path used for discovery")
-	cwdFlag := fs.String("cwd", "", "optional working directory override")
+	cwdFlag := fs.String("cwd", "", "working directory override for installed executables")
 	autoInstallFlag := fs.Bool("auto-install", false, "install the harness automatically if needed")
 	jsonFlag := fs.Bool("json", true, "inject --json for agent-style machine-readable output")
 	if err := fs.Parse(reorderFlagArgs(flagArgs, map[string]bool{

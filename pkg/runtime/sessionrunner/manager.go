@@ -24,6 +24,8 @@ type Manager struct {
 	events    EventRecorder
 	nowFunc   func() time.Time
 	nextID    func(prefix string) string
+	execute   func(context.Context, *appruntime.MainRuntime, appruntime.ExecutionRequest) (*appruntime.ExecutionResult, error)
+	stream    func(context.Context, *appruntime.MainRuntime, appruntime.ExecutionRequest, func(string)) (*appruntime.ExecutionResult, error)
 }
 
 type RuntimeProvider interface {
@@ -87,6 +89,12 @@ func NewManager(store *state.Store, sessions *state.SessionManager, runtimes Run
 		},
 		nextID: func(prefix string) string {
 			return state.UniqueID(prefix)
+		},
+		execute: func(ctx context.Context, runtime *appruntime.MainRuntime, req appruntime.ExecutionRequest) (*appruntime.ExecutionResult, error) {
+			return runtime.Execute(ctx, req)
+		},
+		stream: func(ctx context.Context, runtime *appruntime.MainRuntime, req appruntime.ExecutionRequest, onChunk func(string)) (*appruntime.ExecutionResult, error) {
+			return runtime.Stream(ctx, req, onChunk)
 		},
 	}
 }
@@ -207,14 +215,17 @@ func (m *Manager) RunChannel(ctx context.Context, req ChannelRunRequest) (*RunRe
 
 	response := ""
 	activities := []agent.ToolActivity(nil)
+	execReq := appruntime.ExecutionRequest{
+		Input:                req.Message,
+		History:              session.History,
+		ReplaceHistory:       true,
+		SessionID:            req.SessionID,
+		Channel:              req.Source,
+		AgentApprovalHook:    m.ToolApprovalHook(session, targetRuntime.Config, ApprovalContext{Message: req.Message, Source: req.Source}),
+		ProtocolApprovalHook: m.ProtocolApprovalHook(session, targetRuntime.Config, ApprovalContext{Message: req.Message, Source: req.Source}),
+	}
 	if req.Streaming {
-		execResult, streamErr := targetRuntime.Stream(ctx, appruntime.ExecutionRequest{
-			Input:          req.Message,
-			History:        session.History,
-			ReplaceHistory: true,
-			SessionID:      req.SessionID,
-			Channel:        req.Source,
-		}, func(chunk string) {
+		execResult, streamErr := m.stream(ctx, targetRuntime, execReq, func(chunk string) {
 			if req.OnChunk != nil {
 				req.OnChunk(chunk)
 			}
@@ -224,22 +235,16 @@ func (m *Manager) RunChannel(ctx context.Context, req ChannelRunRequest) (*RunRe
 			activities = execResult.ToolActivities
 		}
 		if streamErr != nil {
-			return &RunResult{Response: response, Session: session}, streamErr
+			return m.handleChannelExecutionError(req, session, response, activities, streamErr)
 		}
 	} else {
-		execResult, execErr := targetRuntime.Execute(ctx, appruntime.ExecutionRequest{
-			Input:          req.Message,
-			History:        session.History,
-			ReplaceHistory: true,
-			SessionID:      req.SessionID,
-			Channel:        req.Source,
-		})
+		execResult, execErr := m.execute(ctx, targetRuntime, execReq)
 		if execResult != nil {
 			response = execResult.Output
 			activities = execResult.ToolActivities
 		}
 		if execErr != nil {
-			return &RunResult{Response: response, Session: session}, execErr
+			return m.handleChannelExecutionError(req, session, response, activities, execErr)
 		}
 	}
 
@@ -248,6 +253,27 @@ func (m *Manager) RunChannel(ctx context.Context, req ChannelRunRequest) (*RunRe
 		return &RunResult{Response: response, Session: session}, err
 	}
 	return &RunResult{Response: response, Session: updatedSession}, nil
+}
+
+func (m *Manager) handleChannelExecutionError(req ChannelRunRequest, session *state.Session, response string, activities []agent.ToolActivity, runErr error) (*RunResult, error) {
+	persistedSession := session
+	if errors.Is(runErr, ErrTaskWaitingApproval) {
+		var pauseErr *agent.ApprovalPauseError
+		if errors.As(runErr, &pauseErr) {
+			m.persistApprovalResumeState(session, pauseErr)
+		}
+		if pendingSession, persistErr := m.sessions.EnsurePendingUserMessage(req.SessionID, req.Message); persistErr == nil {
+			persistedSession = pendingSession
+		}
+		if len(activities) > 0 && persistedSession != nil {
+			m.RecordToolActivities(persistedSession, activities)
+		}
+		m.updateSessionApprovalPresence(req.SessionID, "")
+		return &RunResult{Response: response, Session: persistedSession}, runErr
+	}
+
+	persistedSession = m.failRun(req.SessionID, req.Message, req.Source, false, persistedSession, runErr)
+	return &RunResult{Response: response, Session: persistedSession}, runErr
 }
 
 func (m *Manager) ToolApprovalHook(session *state.Session, cfg *config.Config, meta ApprovalContext) agent.ToolApprovalHook {

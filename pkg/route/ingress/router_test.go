@@ -68,3 +68,18 @@ func TestRouterDecideAppliesSessionFieldsFromRule(t *testing.T) {
 		t.Fatalf("expected prefixed title, got %q", decision.TitleHint)
 	}
 }
+
+func TestRouterDecidePrefersExplicitTitleHint(t *testing.T) {
+	router := NewRouter(config.RoutingConfig{Mode: "per-chat"})
+
+	decision := router.Decide(RouteRequest{
+		Channel:   "webhook",
+		Source:    "ticket-42",
+		Text:      "please help",
+		TitleHint: "Webhook ticket",
+	})
+
+	if decision.TitleHint != "Webhook ticket" {
+		t.Fatalf("expected explicit title hint, got %q", decision.TitleHint)
+	}
+}

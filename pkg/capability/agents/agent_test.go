@@ -1052,6 +1052,32 @@ func TestBuildSystemPromptHotReloadsBootstrapFiles(t *testing.T) {
 	t.Fatal("expected bootstrap watcher to refresh AGENTS.md content")
 }
 
+func TestShowMemoryUsesMemoryService(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+	if err := mem.Add(memory.MemoryEntry{
+		Type:    memory.TypeFact,
+		Content: "remember this",
+	}); err != nil {
+		t.Fatalf("memory add: %v", err)
+	}
+
+	ag := New(Config{
+		Name:   "assistant",
+		Memory: mem,
+	})
+
+	markdown, err := ag.ShowMemory()
+	if err != nil {
+		t.Fatalf("ShowMemory: %v", err)
+	}
+	if !strings.Contains(markdown, "# Memory") || !strings.Contains(markdown, "remember this") {
+		t.Fatalf("expected markdown memory output, got %q", markdown)
+	}
+}
+
 func TestAgentRunUsesExclusiveSlotToSerializeConcurrentExecutions(t *testing.T) {
 	mem := memory.NewFileMemory(t.TempDir())
 	if err := mem.Init(); err != nil {

@@ -177,6 +177,54 @@ type LivePayload = {
   status: LiveStatus | null;
 };
 
+type SnapshotProvider = {
+  defaultModel: string;
+  enabled: boolean;
+  id: string;
+  isDefault: boolean;
+  name: string;
+  provider: string;
+};
+
+type SnapshotAgent = {
+  active: boolean;
+  defaultModel: string;
+  description: string;
+  enabled: boolean;
+  name: string;
+  permissionLevel: string;
+  providerRef: string;
+  role: string;
+  skills: ReadonlyArray<{ enabled?: boolean; name?: string }>;
+  workingDir: string;
+};
+
+type SnapshotSkill = {
+  description: string;
+  installCommand: string;
+  name: string;
+  registry: string;
+  source: string;
+  version: string;
+};
+
+type SnapshotExtension = {
+  channels: ReadonlyArray<string>;
+  name: string;
+};
+
+type SnapshotConfiguredChannel = {
+  configured: boolean;
+  enabled: boolean;
+  key: string;
+};
+
+const snapshotProviders = workspaceSnapshot.providers as readonly SnapshotProvider[];
+const snapshotAgents = workspaceSnapshot.agents as readonly SnapshotAgent[];
+const snapshotSkills = workspaceSnapshot.skills as readonly SnapshotSkill[];
+const snapshotExtensions = workspaceSnapshot.extensions as readonly SnapshotExtension[];
+const snapshotConfiguredChannels = workspaceSnapshot.configuredChannels as readonly SnapshotConfiguredChannel[];
+
 const channelMeta: Record<string, { name: string; note: string; summary: string }> = {
   wechat: {
     name: "微信",
@@ -288,11 +336,11 @@ function buildProviderRecords(live: LivePayload): ProviderRecord[] {
       .filter((provider) => (provider.id ?? "").trim() !== "")
       .map((provider) => [provider.id!.trim(), provider]),
   );
-  const snapshotMap = new Map<string, (typeof workspaceSnapshot.providers)[number]>(
-    workspaceSnapshot.providers.map((provider) => [provider.id, provider]),
+  const snapshotMap = new Map<string, SnapshotProvider>(
+    snapshotProviders.map((provider) => [provider.id, provider]),
   );
   const orderedIds = [
-    ...workspaceSnapshot.providers.map((provider) => provider.id),
+    ...snapshotProviders.map((provider) => provider.id),
     ...[...liveMap.keys()].filter((id) => !snapshotMap.has(id)),
   ];
 
@@ -322,7 +370,7 @@ function buildAgentRecords(live: LivePayload, providers: ProviderRecord[]): Agen
       .map((agent) => [agent.name!.trim(), agent]),
   );
 
-  const items: AgentRecord[] = workspaceSnapshot.agents.map((agent) => {
+  const items: AgentRecord[] = snapshotAgents.map((agent) => {
     const liveAgent = liveMap.get(agent.name);
     const linkedProvider = providerById.get(agent.providerRef);
     const providerName =
@@ -392,7 +440,7 @@ function buildSkillRecords(live: LivePayload): SkillRecord[] {
       .map((skill) => [skill.name!.trim(), skill]),
   );
 
-  return workspaceSnapshot.skills
+  return snapshotSkills
     .map((skill) => {
       const liveSkill = liveMap.get(skill.name);
 
@@ -437,11 +485,11 @@ function buildChannelRecords(live: LivePayload): ChannelRecord[] {
       .filter((channel) => (channel.name ?? "").trim() !== "")
       .map((channel) => [channel.name!.trim().toLowerCase(), channel]),
   );
-  const configuredMap = new Map<string, (typeof workspaceSnapshot.configuredChannels)[number]>(
-    workspaceSnapshot.configuredChannels.map((channel) => [channel.key, channel]),
+  const configuredMap = new Map<string, SnapshotConfiguredChannel>(
+    snapshotConfiguredChannels.map((channel) => [channel.key, channel]),
   );
   const extensionChannels = new Set<string>(
-    workspaceSnapshot.extensions.flatMap((extension) => [...extension.channels]),
+    snapshotExtensions.flatMap((extension) => [...extension.channels]),
   );
 
   return priorityChannelOrder.map((slug) => {
@@ -586,7 +634,7 @@ function buildOverview(live: LivePayload): WorkspaceOverview {
   const localAgents = buildAgentRecords(live, providers);
   const localSkills = buildSkillRecords(live);
   const priorityChannels = buildChannelRecords(live);
-  const extensionAdapters = workspaceSnapshot.extensions.map((extension) => extension.name);
+  const extensionAdapters = snapshotExtensions.map((extension) => extension.name);
   const runtimeProfile = buildRuntimeProfile(live, providers, localAgents, localSkills);
 
   return {

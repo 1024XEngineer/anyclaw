@@ -96,6 +96,7 @@ func builtinSkillDefinition(seed builtinSkillSeed) skillFileDefinition {
 		Name:           name,
 		Description:    description,
 		Version:        "2.1.0",
+		Category:       strings.TrimSpace(seed.Category),
 		Source:         "builtin",
 		Registry:       "builtin",
 		Homepage:       "https://github.com/1024XEngineer/anyclaw",

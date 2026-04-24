@@ -168,3 +168,104 @@ func TestNewStoreRepairsPendingSessionMessageFromApprovalPayload(t *testing.T) {
 		t.Fatalf("expected restored user message from approval payload, got %#v", lastMessage)
 	}
 }
+
+func TestSessionGroupFieldsRoundTripAcrossReload(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	session := &Session{
+		ID:           "sess-group",
+		Title:        "Group Session",
+		Agent:        "MainAgent",
+		Participants: []string{"MainAgent", "Reviewer"},
+		Org:          "org-1",
+		Project:      "project-1",
+		Workspace:    "workspace-1",
+		ExecutionBinding: SessionExecutionBinding{
+			Agent:     "MainAgent",
+			Org:       "org-1",
+			Project:   "project-1",
+			Workspace: "workspace-1",
+		},
+		GroupKey:     "group-1",
+		IsGroup:      true,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+		LastActiveAt: time.Now().UTC(),
+	}
+	if err := store.SaveSession(session); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	reloaded, err := NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore(reload): %v", err)
+	}
+	stored, ok := reloaded.GetSession("sess-group")
+	if !ok || stored == nil {
+		t.Fatal("expected session to load after reload")
+	}
+	if len(stored.Participants) != 2 {
+		t.Fatalf("expected participants after reload, got %#v", stored.Participants)
+	}
+	if stored.GroupKey != "group-1" {
+		t.Fatalf("expected group key after reload, got %q", stored.GroupKey)
+	}
+	if !stored.IsGroup {
+		t.Fatal("expected group flag after reload")
+	}
+}
+
+func TestRebindSessionsUpdatesExecutionBinding(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	session := &Session{
+		ID:        "sess-rebind",
+		Title:     "Rebind",
+		Agent:     "MainAgent",
+		Org:       "org-old",
+		Project:   "project-old",
+		Workspace: "workspace-1",
+		ExecutionBinding: SessionExecutionBinding{
+			Agent:     "MainAgent",
+			Org:       "org-old",
+			Project:   "project-old",
+			Workspace: "workspace-1",
+		},
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+		LastActiveAt: time.Now().UTC(),
+	}
+	if err := store.SaveSession(session); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	if err := store.RebindSessionsForProject("project-old", "org-new"); err != nil {
+		t.Fatalf("RebindSessionsForProject: %v", err)
+	}
+	stored, ok := store.GetSession("sess-rebind")
+	if !ok || stored == nil {
+		t.Fatal("expected rebound session after project rebind")
+	}
+	if org := SessionExecutionBindingValue(stored).Org; org != "org-new" {
+		t.Fatalf("expected execution org to update, got %q", org)
+	}
+
+	if err := store.RebindSessionsForWorkspace("workspace-1", "project-new", "org-newer"); err != nil {
+		t.Fatalf("RebindSessionsForWorkspace: %v", err)
+	}
+	stored, ok = store.GetSession("sess-rebind")
+	if !ok || stored == nil {
+		t.Fatal("expected rebound session after workspace rebind")
+	}
+	binding := SessionExecutionBindingValue(stored)
+	if binding.Project != "project-new" || binding.Org != "org-newer" {
+		t.Fatalf("expected execution binding to update, got %#v", binding)
+	}
+}

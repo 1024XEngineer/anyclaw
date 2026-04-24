@@ -6,27 +6,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
 )
 
 type Client struct {
-	mu        sync.RWMutex
-	name      string
-	command   string
-	args      []string
-	env       map[string]string
-	transport string
-	tools     []Tool
-	resources []Resource
-	prompts   []Prompt
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	stdout    io.ReadCloser
-	stderr    io.ReadCloser
-	running   bool
-	reqID     atomic.Int64
+	mu         sync.RWMutex
+	name       string
+	command    string
+	args       []string
+	env        map[string]string
+	transport  string
+	tools      []Tool
+	resources  []Resource
+	prompts    []Prompt
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     io.ReadCloser
+	stderr     io.ReadCloser
+	running    bool
+	reqID      atomic.Int64
+	pending    map[int64]chan *Response
+	readerDone chan struct{}
+	readErr    error
 }
 
 type Tool struct {
@@ -76,11 +80,13 @@ type Error struct {
 
 func NewClient(name, command string, args []string, env map[string]string) *Client {
 	c := &Client{
-		name:      name,
-		command:   command,
-		args:      args,
-		env:       env,
-		transport: "stdio",
+		name:       name,
+		command:    command,
+		args:       args,
+		env:        env,
+		transport:  "stdio",
+		pending:    make(map[int64]chan *Response),
+		readerDone: make(chan struct{}),
 	}
 	c.reqID.Store(1)
 	return c
@@ -94,12 +100,8 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	cmd := exec.CommandContext(ctx, c.command, c.args...)
-	var env []string
-	for k, v := range c.env {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-	if len(env) > 0 {
-		cmd.Env = append(cmd.Env, env...)
+	if len(c.env) > 0 {
+		cmd.Env = mergeEnv(os.Environ(), c.env)
 	}
 
 	stdin, err := cmd.StdinPipe()
@@ -124,8 +126,15 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("start MCP server: %w", err)
 	}
 	c.cmd = cmd
-	c.running = true
 
+	c.mu.Lock()
+	c.running = true
+	c.readErr = nil
+	c.pending = make(map[int64]chan *Response)
+	c.readerDone = make(chan struct{})
+	c.mu.Unlock()
+
+	go c.readResponses()
 	go c.readStderr()
 
 	if err := c.initialize(ctx); err != nil {
@@ -171,10 +180,8 @@ func (c *Client) initialize(ctx context.Context) error {
 		return fmt.Errorf("MCP initialize: %s", resp.Error.Message)
 	}
 
-	notifID := c.nextID()
 	return c.sendNotification(Request{
 		JSONRPC: "2.0",
-		ID:      &notifID,
 		Method:  "notifications/initialized",
 	})
 }
@@ -392,15 +399,19 @@ func (c *Client) IsConnected() bool {
 
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.stdin != nil {
-		c.stdin.Close()
-	}
-	if c.cmd != nil && c.running {
-		c.cmd.Process.Kill()
-		c.cmd.Wait()
-	}
+	cmd := c.cmd
+	stdin := c.stdin
+	running := c.running
 	c.running = false
+	c.mu.Unlock()
+
+	if stdin != nil {
+		stdin.Close()
+	}
+	if cmd != nil && running {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}
 	return nil
 }
 
@@ -410,7 +421,13 @@ func (c *Client) sendRequest(ctx context.Context, req Request) (*Response, error
 		c.mu.RUnlock()
 		return nil, fmt.Errorf("MCP server not running")
 	}
+	respCh := make(chan *Response, 1)
+	if req.ID != nil {
+		c.pending[*req.ID] = respCh
+	}
+	readerDone := c.readerDone
 	c.mu.RUnlock()
+	defer c.unregisterPending(req.ID)
 
 	data, err := json.Marshal(req)
 	if err != nil {
@@ -421,19 +438,17 @@ func (c *Client) sendRequest(ctx context.Context, req Request) (*Response, error
 		return nil, fmt.Errorf("write request: %w", err)
 	}
 
-	scanner := bufio.NewScanner(c.stdout)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-	if scanner.Scan() {
-		var resp Response
-		if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-			return nil, fmt.Errorf("parse response: %w", err)
+	select {
+	case resp := <-respCh:
+		if resp == nil {
+			return nil, fmt.Errorf("no response")
 		}
-		return &resp, nil
+		return resp, nil
+	case <-readerDone:
+		return nil, c.connectionReadError()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	return nil, fmt.Errorf("no response")
 }
 
 func (c *Client) sendNotification(req Request) error {
@@ -453,6 +468,90 @@ func (c *Client) readStderr() {
 	for scanner.Scan() {
 		fmt.Fprintf(io.Discard, "[mcp:%s] %s\n", c.name, scanner.Text())
 	}
+}
+
+func (c *Client) readResponses() {
+	defer close(c.readerDone)
+
+	scanner := bufio.NewScanner(c.stdout)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var resp Response
+		if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
+			c.setReadError(fmt.Errorf("parse response: %w", err))
+			return
+		}
+		if resp.ID == nil {
+			continue
+		}
+
+		c.mu.RLock()
+		ch := c.pending[*resp.ID]
+		c.mu.RUnlock()
+		if ch != nil {
+			ch <- &resp
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		c.setReadError(fmt.Errorf("read response: %w", err))
+		return
+	}
+	c.setReadError(fmt.Errorf("no response"))
+}
+
+func (c *Client) unregisterPending(id *int64) {
+	if id == nil {
+		return
+	}
+	c.mu.Lock()
+	delete(c.pending, *id)
+	c.mu.Unlock()
+}
+
+func (c *Client) setReadError(err error) {
+	c.mu.Lock()
+	c.readErr = err
+	c.running = false
+	c.mu.Unlock()
+}
+
+func (c *Client) connectionReadError() error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.readErr != nil {
+		return c.readErr
+	}
+	return fmt.Errorf("MCP server not running")
+}
+
+func mergeEnv(base []string, overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return append([]string(nil), base...)
+	}
+
+	merged := append([]string(nil), base...)
+	indexes := make(map[string]int, len(merged))
+	for i, entry := range merged {
+		for j := 0; j < len(entry); j++ {
+			if entry[j] == '=' {
+				indexes[entry[:j]] = i
+				break
+			}
+		}
+	}
+
+	for key, value := range overrides {
+		entry := fmt.Sprintf("%s=%s", key, value)
+		if idx, ok := indexes[key]; ok {
+			merged[idx] = entry
+			continue
+		}
+		indexes[key] = len(merged)
+		merged = append(merged, entry)
+	}
+
+	return merged
 }
 
 func (c *Client) nextID() int64 {

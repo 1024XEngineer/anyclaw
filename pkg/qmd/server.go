@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -112,8 +113,15 @@ func (s *Server) Start() error {
 	var errs []error
 
 	if s.httpSrv != nil {
+		listener, err := net.Listen("tcp", s.httpSrv.Addr)
+		if err != nil {
+			return fmt.Errorf("qmd: listen http: %w", err)
+		}
+		s.mu.Lock()
+		s.config.HTTPAddr = listener.Addr().String()
+		s.mu.Unlock()
 		go func() {
-			if err := s.httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := s.httpSrv.Serve(listener); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "qmd: http server error: %v\n", err)
 			}
 		}()
@@ -169,6 +177,26 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) Store() *Store {
 	return s.store
+}
+
+func (s *Server) HTTPAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return normalizeHTTPAddr(s.config.HTTPAddr)
+}
+
+func normalizeHTTPAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+
+	host = strings.Trim(host, "[]")
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+
+	return net.JoinHostPort(host, port)
 }
 
 func (s *Server) persistLoop() {

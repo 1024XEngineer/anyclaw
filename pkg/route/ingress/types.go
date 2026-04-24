@@ -4,12 +4,13 @@ import "time"
 
 // RouteRequest is the legacy channel session routing input used by DecideChannel.
 type RouteRequest struct {
-	Channel  string
-	Source   string
-	Text     string
-	ThreadID string
-	IsGroup  bool
-	GroupID  string
+	Channel   string
+	Source    string
+	Text      string
+	ThreadID  string
+	IsGroup   bool
+	GroupID   string
+	TitleHint string
 }
 
 // SessionRoute describes where an inbound message should land. It is limited
@@ -56,12 +57,14 @@ type DeliveryHint struct {
 type RouteHint struct {
 	RequestedAgentName string
 	RequestedSessionID string
+	TitleHint          string
 }
 
 // IngressRoutingEntry is the trusted route-layer input passed from gateway to route.
 type IngressRoutingEntry struct {
 	MessageID  string
 	Text       string
+	TitleHint  string
 	Actor      MessageActor
 	Scope      MessageScope
 	Delivery   DeliveryHint
@@ -73,6 +76,7 @@ type IngressRoutingEntry struct {
 type MainRouteRequest struct {
 	MessageID    string
 	Text         string
+	TitleHint    string
 	Actor        MessageActor
 	Scope        MessageScope
 	DeliveryHint DeliveryHint

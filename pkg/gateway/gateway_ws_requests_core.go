@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	gatewaygovernance "github.com/1024XEngineer/anyclaw/pkg/gateway/governance"
 )
 
 func (c *openClawWSConn) handleCoreWSRequest(ctx context.Context, frame openClawWSFrame, method string) (bool, error) {
@@ -11,9 +13,9 @@ func (c *openClawWSConn) handleCoreWSRequest(ctx context.Context, frame openClaw
 	case "connect":
 		return true, c.handleWSConnect(frame)
 	case "ping":
-		return true, c.writeResponse(frame.ID, true, map[string]any{"pong": time.Now().UTC().Format(time.RFC3339)}, "")
+		return true, c.writeResponse(frame.ID, true, c.server.controlPlaneService().Ping(time.Now()), "")
 	case "methods.list":
-		return true, c.writeResponse(frame.ID, true, map[string]any{"methods": openClawWSMethods}, "")
+		return true, c.writeResponse(frame.ID, true, c.server.controlPlaneService().MethodsList(), "")
 	case "status", "status.get":
 		if err := c.requirePermission("status.read"); err != nil {
 			return true, err
@@ -23,7 +25,7 @@ func (c *openClawWSConn) handleCoreWSRequest(ctx context.Context, frame openClaw
 		if err := c.requirePermission("status.read"); err != nil {
 			return true, err
 		}
-		return true, c.writeResponse(frame.ID, true, c.server.runtimeGovernanceAPI().Snapshot(), "")
+		return true, c.writeResponse(frame.ID, true, c.server.controlPlaneRuntimeAPI().Snapshot(), "")
 	case "events.list":
 		if err := c.requirePermission("events.read"); err != nil {
 			return true, err
@@ -35,13 +37,13 @@ func (c *openClawWSConn) handleCoreWSRequest(ctx context.Context, frame openClaw
 			return true, err
 		}
 		c.startEventStream()
-		return true, c.writeResponse(frame.ID, true, map[string]any{"subscribed": true}, "")
+		return true, c.writeResponse(frame.ID, true, c.server.controlPlaneService().Subscription(true), "")
 	case "events.unsubscribe":
 		if err := c.requirePermission("events.read"); err != nil {
 			return true, err
 		}
 		c.stopEventStream()
-		return true, c.writeResponse(frame.ID, true, map[string]any{"subscribed": false}, "")
+		return true, c.writeResponse(frame.ID, true, c.server.controlPlaneService().Subscription(false), "")
 	case "chat.send":
 		if err := c.requirePermission("chat.send"); err != nil {
 			return true, err
@@ -61,18 +63,23 @@ func (c *openClawWSConn) handleWSConnect(frame openClawWSFrame) error {
 	if provided == "" || provided != c.challenge {
 		return c.writeResponse(frame.ID, false, nil, "challenge verification failed")
 	}
+	if _, err := c.server.governanceService().AuthorizeConnection(c.contextWithUser(), gatewaygovernance.ConnectionRequest{
+		ConnectionID: c.challenge,
+		Protocol:     c.transport.Protocol,
+		Path:         c.transport.Path,
+		ClientID:     c.transport.ClientID,
+		Metadata: map[string]string{
+			"method": "connect",
+		},
+	}); err != nil {
+		return c.writeResponse(frame.ID, false, nil, err.Error())
+	}
 	connectedAt := time.Now().UTC()
 	c.connMu.Lock()
 	c.connected = true
 	c.connectedAt = connectedAt
 	c.connMu.Unlock()
-	return c.writeResponse(frame.ID, true, map[string]any{
-		"status":       "connected",
-		"protocol":     "openclaw.gateway.v1",
-		"connected_at": connectedAt.Format(time.RFC3339),
-		"user":         c.userSummary(),
-		"methods":      openClawWSMethods,
-	}, "")
+	return c.writeResponse(frame.ID, true, c.server.controlPlaneService().ConnectAck(connectedAt, c.userSummary()), "")
 }
 
 func (c *openClawWSConn) requireConfigRead() error {

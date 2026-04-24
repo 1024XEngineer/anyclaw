@@ -205,6 +205,39 @@ func TestBatchProcessorTimeout(t *testing.T) {
 	}
 }
 
+func TestBatchProcessorWithProviderRejectsInvalidBatchResult(t *testing.T) {
+	provider := &mockProviderBatch{
+		dim:             4,
+		batchEmbeddings: [][][]float32{{{1, 2, 3, 4}}},
+	}
+	mgr, _ := NewManager([]Provider{provider}, nil)
+	bp := NewBatchProcessor(mgr, BatchConfig{
+		ChunkSize: 3,
+		Timeout:   time.Minute,
+	})
+
+	ctx := context.Background()
+	result, err := bp.ProcessWithProvider(ctx, []string{"a", "b", "c"}, 0)
+	if err != nil {
+		t.Fatalf("batch process with provider: %v", err)
+	}
+
+	if result.Succeeded != 0 {
+		t.Fatalf("expected 0 succeeded, got %d", result.Succeeded)
+	}
+	if result.Failed != 3 {
+		t.Fatalf("expected 3 failed, got %d", result.Failed)
+	}
+	if len(result.Errors) != 3 {
+		t.Fatalf("expected 3 errors, got %d", len(result.Errors))
+	}
+	for i, emb := range result.Embeddings {
+		if emb != nil {
+			t.Fatalf("expected nil embedding at index %d when batch result is invalid", i)
+		}
+	}
+}
+
 func TestBatchProcessorRetry(t *testing.T) {
 	provider := &mockProviderBatch{dim: 4, failUntil: 2}
 	mgr, _ := NewManager([]Provider{provider}, nil)
@@ -228,11 +261,13 @@ func TestBatchProcessorRetry(t *testing.T) {
 }
 
 type mockProviderBatch struct {
-	dim         int
-	failIndices map[int]bool
-	failUntil   int
-	callCount   atomic.Int32
-	delay       time.Duration
+	dim             int
+	failIndices     map[int]bool
+	failUntil       int
+	callCount       atomic.Int32
+	delay           time.Duration
+	batchEmbeddings [][][]float32
+	batchCalls      atomic.Int32
 }
 
 func (m *mockProviderBatch) Embed(ctx context.Context, text string) ([]float32, error) {
@@ -261,6 +296,11 @@ func (m *mockProviderBatch) Embed(ctx context.Context, text string) ([]float32, 
 }
 
 func (m *mockProviderBatch) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	call := int(m.batchCalls.Add(1)) - 1
+	if call < len(m.batchEmbeddings) {
+		return m.batchEmbeddings[call], nil
+	}
+
 	var results [][]float32
 	for _, text := range texts {
 		emb, err := m.Embed(ctx, text)

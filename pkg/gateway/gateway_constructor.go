@@ -76,7 +76,7 @@ func newDevicePairing(mainRuntime *runtime.MainRuntime) *appsecurity.DevicePairi
 
 func newOpenAICompatHandler(server *Server, mainRuntime *runtime.MainRuntime) *openaicompat.Handler {
 	return openaicompat.NewHandler(
-		func(requestedModel string) (*runtime.App, string, error) {
+		func(requestedModel string) (openaicompat.ChatRuntime, string, error) {
 			if err := server.ensureDefaultWorkspace(); err != nil {
 				return nil, "", err
 			}

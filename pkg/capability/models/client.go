@@ -127,7 +127,7 @@ func newHTTPClient(proxyURL string) *http.Client {
 
 	if proxyURL != "" {
 		if proxyURL == "system" {
-			// Use system proxy
+			transport.Proxy = http.ProxyFromEnvironment
 		} else {
 			transport.Proxy = func(req *http.Request) (*url.URL, error) {
 				return url.Parse(proxyURL)
@@ -382,7 +382,7 @@ func extractOpenAICompatibleContent(raw json.RawMessage) string {
 }
 
 func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
-	url := "https://api.anthropic.com/v1/messages"
+	url := fmt.Sprintf("%s/messages", strings.TrimRight(c.baseURL, "/"))
 
 	filteredMessages, systemPrompt := serializeMessagesAnthropic(messages)
 
@@ -442,7 +442,7 @@ func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools 
 }
 
 func (c *client) chatAnthropic(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
-	url := "https://api.anthropic.com/v1/messages"
+	url := fmt.Sprintf("%s/messages", strings.TrimRight(c.baseURL, "/"))
 
 	filteredMessages, systemPrompt := serializeMessagesAnthropic(messages)
 
@@ -598,10 +598,10 @@ func (w *ClientWrapper) Name() string {
 }
 
 func (w *ClientWrapper) SwitchProvider(provider string) error {
-	w.provider = normalizeProvider(provider)
-	if w.baseURL == "" {
+	if w.baseURL == getDefaultBaseURL(w.provider) {
 		w.baseURL = getDefaultBaseURL(provider)
 	}
+	w.provider = normalizeProvider(provider)
 	return w.initClient()
 }
 
@@ -615,12 +615,14 @@ func (w *ClientWrapper) SetAPIKey(apiKey string) error {
 	return w.initClient()
 }
 
-func (w *ClientWrapper) SetTemperature(temp float64) {
+func (w *ClientWrapper) SetTemperature(temp float64) error {
 	w.temperature = temp
+	return w.initClient()
 }
 
-func (w *ClientWrapper) SetBaseURL(url string) {
+func (w *ClientWrapper) SetBaseURL(url string) error {
 	w.baseURL = url
+	return w.initClient()
 }
 
 func serializeMessagesOpenAI(messages []Message) []map[string]any {

@@ -70,8 +70,12 @@ func (b *ContextBridge) TransferDocuments(ctx context.Context, sourceScopeID, ta
 		return nil, fmt.Errorf("source or target boundary not found")
 	}
 
-	if !b.manager.CanShareContext(sourceBoundary.Scope.AgentID, targetBoundary.Scope.AgentID, namespace) {
+	policy := b.manager.sharingPolicy(sourceBoundary.Scope.AgentID, targetBoundary.Scope.AgentID, namespace)
+	if policy == nil {
 		return nil, fmt.Errorf("context sharing not allowed from %s to %s for namespace %s", sourceScopeID, targetScopeID, namespace)
+	}
+	if policy.RequireApproval {
+		return nil, fmt.Errorf("context sharing from %s to %s for namespace %s requires approval", sourceScopeID, targetScopeID, namespace)
 	}
 
 	sourceEngine, ok := b.manager.GetEngine(sourceScopeID)
@@ -102,6 +106,10 @@ func (b *ContextBridge) TransferDocuments(ctx context.Context, sourceScopeID, ta
 	}
 
 	for _, docID := range docIDs {
+		if !policyAllowsContextKey(policy, docID) {
+			continue
+		}
+
 		doc, err := sourceEngine.GetDocument(ctx, docID)
 		if err != nil {
 			continue
@@ -144,8 +152,12 @@ func (b *ContextBridge) TransferKeyValues(sourceScopeID, targetScopeID string, k
 		return nil, fmt.Errorf("source or target boundary not found")
 	}
 
-	if !b.manager.CanShareContext(sourceBoundary.Scope.AgentID, targetBoundary.Scope.AgentID, namespace) {
+	policy := b.manager.sharingPolicy(sourceBoundary.Scope.AgentID, targetBoundary.Scope.AgentID, namespace)
+	if policy == nil {
 		return nil, fmt.Errorf("context sharing not allowed from %s to %s for namespace %s", sourceScopeID, targetScopeID, namespace)
+	}
+	if policy.RequireApproval {
+		return nil, fmt.Errorf("context sharing from %s to %s for namespace %s requires approval", sourceScopeID, targetScopeID, namespace)
 	}
 
 	sourceKV, ok := b.manager.GetKVEngine(sourceScopeID)
@@ -176,6 +188,10 @@ func (b *ContextBridge) TransferKeyValues(sourceScopeID, targetScopeID string, k
 
 	ctx := context.Background()
 	for _, key := range keys {
+		if !policyAllowsContextKey(policy, key) {
+			continue
+		}
+
 		value, err := sourceKV.Get(ctx, key)
 		if err != nil {
 			continue
@@ -206,8 +222,12 @@ func (b *ContextBridge) ShareAllContext(sourceScopeID, targetScopeID string, nam
 		return nil, fmt.Errorf("source or target boundary not found")
 	}
 
-	if !b.manager.CanShareContext(sourceBoundary.Scope.AgentID, targetBoundary.Scope.AgentID, namespace) {
+	policy := b.manager.sharingPolicy(sourceBoundary.Scope.AgentID, targetBoundary.Scope.AgentID, namespace)
+	if policy == nil {
 		return nil, fmt.Errorf("context sharing not allowed from %s to %s for namespace %s", sourceScopeID, targetScopeID, namespace)
+	}
+	if policy.RequireApproval {
+		return nil, fmt.Errorf("context sharing from %s to %s for namespace %s requires approval", sourceScopeID, targetScopeID, namespace)
 	}
 
 	sourceEngine, ok := b.manager.GetEngine(sourceScopeID)
@@ -241,6 +261,10 @@ func (b *ContextBridge) ShareAllContext(sourceScopeID, targetScopeID string, nam
 	ctx := context.Background()
 
 	for _, doc := range docs {
+		if !policyAllowsContextKey(policy, doc.ID) {
+			continue
+		}
+
 		if namespace != "" {
 			if ns, ok := doc.Metadata["namespace"].(string); !ok || ns != namespace {
 				continue
@@ -268,11 +292,18 @@ func (b *ContextBridge) ShareAllContext(sourceScopeID, targetScopeID string, nam
 	if sourceKV, ok := b.manager.GetKVEngine(sourceScopeID); ok {
 		if targetKV, ok := b.manager.GetKVEngine(targetScopeID); ok {
 			for _, kvCtx := range sourceKV.List() {
+				if !policyAllowsContextKey(policy, kvCtx.Key) {
+					continue
+				}
 				if namespace != "" && kvCtx.Metadata["namespace"] != namespace {
 					continue
 				}
 				newKey := fmt.Sprintf("shared_%s_%s", sourceScopeID, kvCtx.Key)
-				targetKV.Set(ctx, newKey, kvCtx.Value)
+				if err := targetKV.Set(ctx, newKey, kvCtx.Value); err != nil {
+					transfer.Status = TransferStatusFailed
+					transfer.Error = fmt.Sprintf("failed to set key %s: %v", kvCtx.Key, err)
+					return transfer, nil
+				}
 				transfer.KeyValues[newKey] = kvCtx.Value
 			}
 		}
@@ -425,10 +456,15 @@ func (a *ContextAggregator) CrossScopeSearch(scopeIDs []string, query string, na
 			continue
 		}
 
+		filters := map[string]any(nil)
+		if namespace != "" {
+			filters = map[string]any{"namespace": namespace}
+		}
+
 		results, err := engine.Search(ctx, query, ctxpkg.SearchOptions{
 			TopK:      topK,
 			Threshold: 0.1,
-			Filters:   map[string]any{"namespace": namespace},
+			Filters:   filters,
 		})
 		if err != nil {
 			continue
@@ -445,7 +481,7 @@ func (a *ContextAggregator) CrossScopeSearch(scopeIDs []string, query string, na
 		}
 	}
 
-	if len(allResults) > topK {
+	if topK > 0 && len(allResults) > topK {
 		allResults = allResults[:topK]
 	}
 
@@ -487,8 +523,15 @@ func (s *ContextSync) SyncContext(sourceScopeID, targetScopeID string, namespace
 		return fmt.Errorf("source or target boundary not found")
 	}
 
-	if !s.manager.CanShareContext(sourceBoundary.Scope.AgentID, targetBoundary.Scope.AgentID, namespace) {
+	policy := s.manager.sharingPolicy(sourceBoundary.Scope.AgentID, targetBoundary.Scope.AgentID, namespace)
+	if policy == nil {
 		return fmt.Errorf("context sharing not allowed from %s to %s for namespace %s", sourceScopeID, targetScopeID, namespace)
+	}
+	if policy.RequireApproval {
+		return fmt.Errorf("context sharing from %s to %s for namespace %s requires approval", sourceScopeID, targetScopeID, namespace)
+	}
+	if sourceBoundary.Visibility == ContextVisibilityPrivate {
+		return fmt.Errorf("source context is private")
 	}
 
 	sourceEngine, ok := s.manager.GetEngine(sourceScopeID)
@@ -505,6 +548,10 @@ func (s *ContextSync) SyncContext(sourceScopeID, targetScopeID string, namespace
 	ctx := context.Background()
 
 	for _, doc := range docs {
+		if !policyAllowsContextKey(policy, doc.ID) {
+			continue
+		}
+
 		if namespace != "" {
 			if ns, ok := doc.Metadata["namespace"].(string); !ok || ns != namespace {
 				continue
@@ -523,12 +570,17 @@ func (s *ContextSync) SyncContext(sourceScopeID, targetScopeID string, namespace
 		newDoc.Metadata["synced_from"] = sourceScopeID
 		newDoc.Metadata["synced_at"] = time.Now().Format(time.RFC3339)
 
-		targetEngine.AddDocument(ctx, newDoc)
+		if err := targetEngine.AddDocument(ctx, newDoc); err != nil {
+			return fmt.Errorf("failed to add synced document %s: %w", doc.ID, err)
+		}
 	}
 
 	if sourceKV, ok := s.manager.GetKVEngine(sourceScopeID); ok {
 		if targetKV, ok := s.manager.GetKVEngine(targetScopeID); ok {
 			for _, kvCtx := range sourceKV.List() {
+				if !policyAllowsContextKey(policy, kvCtx.Key) {
+					continue
+				}
 				if namespace != "" && kvCtx.Metadata["namespace"] != namespace {
 					continue
 				}
@@ -538,7 +590,9 @@ func (s *ContextSync) SyncContext(sourceScopeID, targetScopeID string, namespace
 					continue
 				}
 
-				targetKV.Set(ctx, kvCtx.Key, kvCtx.Value)
+				if err := targetKV.Set(ctx, kvCtx.Key, kvCtx.Value); err != nil {
+					return fmt.Errorf("failed to set synced key %s: %w", kvCtx.Key, err)
+				}
 			}
 		}
 	}

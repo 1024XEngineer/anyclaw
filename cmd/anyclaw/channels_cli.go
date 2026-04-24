@@ -125,14 +125,19 @@ func configuredChannelStatuses(cfg *config.Config) []inputlayer.Status {
 
 	registry, err := plugin.NewRegistry(cfg.Plugins)
 	if err == nil {
+		runnablePluginChannels := map[string]bool{}
+		for _, runner := range registry.ChannelRunners(cfg.Plugins.Dir) {
+			name := strings.ToLower(strings.TrimSpace(runner.Manifest.Name))
+			if name == "" {
+				continue
+			}
+			runnablePluginChannels[name] = true
+		}
 		for _, manifest := range registry.List() {
 			if manifest.Builtin || manifest.Channel == nil {
 				continue
 			}
-			name := strings.TrimSpace(manifest.Channel.Name)
-			if name == "" {
-				name = strings.TrimSpace(manifest.Name)
-			}
+			name := strings.TrimSpace(manifest.Name)
 			if name == "" {
 				continue
 			}
@@ -140,7 +145,13 @@ func configuredChannelStatuses(cfg *config.Config) []inputlayer.Status {
 			if _, exists := items[lower]; exists {
 				continue
 			}
-			items[lower] = inputlayer.Status{Name: name, Enabled: manifest.Enabled}
+
+			status := inputlayer.Status{Name: name, Enabled: manifest.Enabled}
+			if manifest.Enabled && !runnablePluginChannels[lower] {
+				status.Enabled = false
+				status.LastError = "unavailable under current plugin execution policy"
+			}
+			items[lower] = status
 		}
 	}
 

@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	gatewaysurface "github.com/1024XEngineer/anyclaw/pkg/gateway/surface"
 	"github.com/1024XEngineer/anyclaw/pkg/state"
 	"github.com/gorilla/websocket"
 )
@@ -27,6 +28,7 @@ type openClawWSConn struct {
 	connected   bool
 	connMu      sync.RWMutex
 	challenge   string
+	transport   gatewaysurface.TransportRef
 	eventStream chan *state.Event
 	closed      chan struct{}
 	closeOnce   sync.Once

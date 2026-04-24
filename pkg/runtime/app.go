@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -75,6 +76,7 @@ type MainRuntime struct {
 	Orchestrator   *orchestrator.Orchestrator
 	Delegation     *DelegationService
 	QMD            *qmd.Client
+	qmdServer      *qmd.Server
 	SecretsManager *secrets.ActivationManager
 	SecretsStore   *secrets.Store
 	WorkDir        string
@@ -228,4 +230,25 @@ func (a *MainRuntime) NewCronExecutor() *runtimeschedule.AgentExecutor {
 		return nil
 	}
 	return runtimeschedule.NewAgentExecutor(a.Agent, a.Orchestrator)
+}
+
+func (a *MainRuntime) Close() error {
+	if a == nil {
+		return nil
+	}
+
+	var errs []error
+	if a.Memory != nil {
+		if err := a.Memory.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if a.qmdServer != nil {
+		if err := a.qmdServer.Shutdown(context.Background()); err != nil {
+			errs = append(errs, err)
+		}
+		a.qmdServer = nil
+	}
+
+	return errors.Join(errs...)
 }

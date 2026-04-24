@@ -100,7 +100,7 @@ func runConfigSet(args []string) error {
 	if !ok {
 		return fmt.Errorf("config root must remain an object")
 	}
-	if err := validateConfigDocument(root); err != nil {
+	if err := validateConfigDocument(*configPath, root); err != nil {
 		return err
 	}
 	if err := saveConfigDocument(*configPath, root); err != nil {
@@ -141,7 +141,7 @@ func runConfigUnset(args []string) error {
 	if !ok {
 		return fmt.Errorf("config root must remain an object")
 	}
-	if err := validateConfigDocument(root); err != nil {
+	if err := validateConfigDocument(*configPath, root); err != nil {
 		return err
 	}
 	if err := saveConfigDocument(*configPath, root); err != nil {
@@ -182,7 +182,7 @@ func runConfigValidate(args []string) error {
 		}
 		return err
 	}
-	if err := validateConfigDocument(doc); err != nil {
+	if err := validateConfigDocument(*configPath, doc); err != nil {
 		if *jsonOut {
 			_ = writePrettyJSON(map[string]any{
 				"ok":    false,
@@ -217,7 +217,8 @@ Usage:
 }
 
 func loadRawConfigDocument(path string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
+	resolvedPath := config.ResolveConfigPath(path)
+	data, err := os.ReadFile(resolvedPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return map[string]any{}, nil
@@ -230,7 +231,7 @@ func loadRawConfigDocument(path string) (map[string]any, error) {
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("failed to parse config file %q: %w", path, err)
+		return nil, fmt.Errorf("failed to parse config file %q: %w", resolvedPath, err)
 	}
 	if doc == nil {
 		doc = map[string]any{}
@@ -239,7 +240,7 @@ func loadRawConfigDocument(path string) (map[string]any, error) {
 }
 
 func loadEffectiveConfigDocument(path string) (map[string]any, error) {
-	cfg, err := config.Load(path)
+	cfg, err := config.Load(config.ResolveConfigPath(path))
 	if err != nil {
 		return nil, err
 	}
@@ -255,30 +256,52 @@ func loadEffectiveConfigDocument(path string) (map[string]any, error) {
 }
 
 func saveConfigDocument(path string, doc map[string]any) error {
+	resolvedPath := config.ResolveConfigPath(path)
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err
 	}
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
+	if dir := filepath.Dir(resolvedPath); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(resolvedPath, data, 0o644)
 }
 
-func validateConfigDocument(doc map[string]any) error {
-	cfg := config.DefaultConfig()
-	if len(doc) > 0 {
-		data, err := json.Marshal(doc)
-		if err != nil {
-			return err
-		}
-		if err := json.Unmarshal(data, cfg); err != nil {
-			return fmt.Errorf("config parse failed: %w", err)
+func validateConfigDocument(configPath string, doc map[string]any) error {
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+
+	resolvedPath := config.ResolveConfigPath(configPath)
+	tempDir := ""
+	if dir := filepath.Dir(resolvedPath); dir != "" && dir != "." {
+		if info, statErr := os.Stat(dir); statErr == nil && info.IsDir() {
+			tempDir = dir
 		}
 	}
-	return cfg.Validate()
+
+	tempFile, err := os.CreateTemp(tempDir, filepath.Base(resolvedPath)+".validate-*.json")
+	if err != nil {
+		return err
+	}
+	tempPath := tempFile.Name()
+	defer func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath)
+	}()
+
+	if _, err := tempFile.Write(data); err != nil {
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
+
+	_, err = config.LoadPersisted(tempPath)
+	return err
 }
 
 func writeConfigValue(value any) error {

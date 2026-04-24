@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
 	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
@@ -42,7 +43,8 @@ func runPluginCommand(args []string) error {
 func runPluginNew(args []string) error {
 	fs := flag.NewFlagSet("plugin new", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
-	kind := fs.String("kind", "tool", "plugin kind: tool|ingress|channel|app|node|surface")
+	configPath := fs.String("config", "anyclaw.json", "path to config file")
+	kind := fs.String("kind", "tool", "plugin kind: tool|ingress|channel|node|surface")
 	name := fs.String("name", "", "plugin name")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -50,7 +52,16 @@ func runPluginNew(args []string) error {
 	if strings.TrimSpace(*name) == "" {
 		return fmt.Errorf("--name is required")
 	}
-	return scaffoldPlugin(*name, *kind)
+	safeName, err := normalizePluginName(*name)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	pluginRoot := config.ResolvePath(*configPath, cfg.Plugins.Dir)
+	return scaffoldPlugin(pluginRoot, safeName, *kind)
 }
 
 type pluginDoctorIssue struct {
@@ -66,7 +77,6 @@ Usage:
   anyclaw plugin new --name my-plugin --kind tool
   anyclaw plugin new --name my-ingress --kind ingress
   anyclaw plugin new --name my-channel --kind channel
-  anyclaw plugin new --name my-app --kind app
   anyclaw plugin new --name my-node --kind node
   anyclaw plugin new --name my-surface --kind surface
   anyclaw plugin list
@@ -77,11 +87,8 @@ Usage:
 `)
 }
 
-func scaffoldPlugin(name string, kind string) error {
-	pluginDir := filepath.Join("plugins", name)
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
-		return err
-	}
+func scaffoldPlugin(pluginRoot string, name string, kind string) error {
+	pluginDir := filepath.Join(pluginRoot, name)
 	manifest := map[string]any{
 		"name":            name,
 		"version":         "1.0.0",
@@ -118,46 +125,6 @@ func scaffoldPlugin(name string, kind string) error {
 			"description": "Example channel plugin",
 		}
 		manifest["permissions"] = []string{"tool:exec", "net:out"}
-	case "app":
-		manifest["app"] = map[string]any{
-			"name":         name,
-			"description":  "Example desktop app connector",
-			"transport":    "desktop",
-			"platforms":    []string{"windows"},
-			"capabilities": []string{"desktop-control", "typing", "hotkeys", "screenshots", "vision", "ocr"},
-			"desktop": map[string]any{
-				"launch_command":         "notepad.exe",
-				"window_title":           "Notepad",
-				"focus_strategy":         "title-contains",
-				"detection_hints":        []string{"Untitled - Notepad"},
-				"requires_host_reviewed": true,
-			},
-			"actions": []map[string]any{
-				{
-					"name":        "run",
-					"description": "Run the desktop app action",
-					"kind":        "execute",
-					"input_schema": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"task": map[string]any{"type": "string"},
-						},
-						"required": []string{"task"},
-					},
-				},
-			},
-			"workflows": []map[string]any{
-				{
-					"name":        "draft-note",
-					"description": "Launch the app and draft a quick note",
-					"action":      "run",
-					"tags":        []string{"drafting", "text"},
-					"defaults": map[string]any{
-						"task": "Draft a short note in the app window.",
-					},
-				},
-			},
-		}
 	case "node":
 		manifest["node"] = map[string]any{
 			"name":         name,
@@ -188,6 +155,9 @@ func scaffoldPlugin(name string, kind string) error {
 	default:
 		return fmt.Errorf("unsupported plugin kind: %s", kind)
 	}
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
@@ -213,6 +183,45 @@ func scaffoldPlugin(name string, kind string) error {
 	return nil
 }
 
+func normalizePluginName(name string) (string, error) {
+	raw := strings.TrimSpace(name)
+	if raw == "" {
+		return "", fmt.Errorf("--name is required")
+	}
+	if filepath.IsAbs(raw) || strings.Contains(raw, "/") || strings.Contains(raw, "\\") {
+		return "", fmt.Errorf("plugin name must not contain path separators")
+	}
+	if raw == "." || raw == ".." {
+		return "", fmt.Errorf("plugin name must not be %q", raw)
+	}
+
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(raw) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+			lastDash = false
+		case r == '-' || r == '_' || unicode.IsSpace(r):
+			if !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		default:
+			if !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		return "", fmt.Errorf("plugin name must contain letters or numbers")
+	}
+	return slug, nil
+}
+
 func scriptNameForKind(kind string) string {
 	switch kind {
 	case "tool":
@@ -221,8 +230,6 @@ func scriptNameForKind(kind string) string {
 		return "ingress.py"
 	case "channel":
 		return "channel.py"
-	case "app":
-		return "app.py"
 	case "node":
 		return "node.py"
 	case "surface":
@@ -240,8 +247,6 @@ func pluginScript(kind string) string {
 		return "import json, os\ninput_data = json.loads(os.environ.get('ANYCLAW_PLUGIN_INPUT', '{}'))\nprint(json.dumps({'ok': True, 'received': input_data}))\n"
 	case "channel":
 		return "import json\nprint(json.dumps([{'source': 'example-user', 'message': 'hello from channel plugin'}]))\n"
-	case "app":
-		return "import json, os\npayload = json.loads(os.environ.get('ANYCLAW_PLUGIN_INPUT', '{}'))\nprint(json.dumps({'protocol': 'anyclaw.app.desktop.v1', 'summary': 'Example desktop connector plan executed.', 'steps': [{'tool': 'desktop_open', 'label': 'Launch app', 'input': {'target': 'notepad.exe', 'kind': 'app'}, 'retry': 1, 'wait_after_ms': 400}, {'label': 'Focus editor window', 'target': {'title': 'Notepad'}, 'action': 'focus', 'retry': 2, 'retry_delay_ms': 300, 'continue_on_error': True}, {'label': 'Type task text', 'target': {'title': 'Notepad', 'control_type': 'document'}, 'value': payload.get('input', {}).get('task', 'hello from AnyClaw')}] }))\n"
 	case "node":
 		return "import json, os\npayload = json.loads(os.environ.get('ANYCLAW_PLUGIN_INPUT', '{}'))\nprint(json.dumps({'ok': True, 'node': 'example', 'action': 'capture-status', 'received': payload}))\n"
 	case "surface":

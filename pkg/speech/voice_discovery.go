@@ -68,6 +68,7 @@ func DefaultDeviceDiscoveryConfig() DeviceDiscoveryConfig {
 
 type DeviceDiscovery struct {
 	mu        sync.Mutex
+	wg        sync.WaitGroup
 	cfg       DeviceDiscoveryConfig
 	devices   map[string]*DeviceInfo
 	conn      *net.UDPConn
@@ -112,7 +113,6 @@ func NewDeviceDiscovery(cfg DeviceDiscoveryConfig) *DeviceDiscovery {
 	return &DeviceDiscovery{
 		cfg:     cfg,
 		devices: make(map[string]*DeviceInfo),
-		doneCh:  make(chan struct{}),
 	}
 }
 
@@ -136,6 +136,8 @@ func (d *DeviceDiscovery) Start() error {
 	}
 
 	d.conn = conn
+	done := make(chan struct{})
+	d.doneCh = done
 	d.isRunning = true
 
 	d.localInfo = DeviceInfo{
@@ -149,8 +151,9 @@ func (d *DeviceDiscovery) Start() error {
 		Metadata:     make(map[string]string),
 	}
 
-	go d.listenLoop()
-	go d.announceLoop()
+	d.wg.Add(2)
+	go d.listenLoop(conn, done)
+	go d.announceLoop(done)
 
 	d.mu.Unlock()
 
@@ -161,41 +164,51 @@ func (d *DeviceDiscovery) Start() error {
 
 func (d *DeviceDiscovery) Stop() error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	if !d.isRunning {
+		d.mu.Unlock()
 		return nil
 	}
 
 	d.isRunning = false
-	close(d.doneCh)
-	d.doneCh = make(chan struct{})
+	conn := d.conn
+	done := d.doneCh
+	d.conn = nil
+	d.mu.Unlock()
 
-	if d.conn != nil {
-		d.conn.Close()
-		d.conn = nil
+	if conn != nil {
+		_ = conn.Close()
 	}
+
+	if done != nil {
+		close(done)
+	}
+
+	d.wg.Wait()
+
+	d.mu.Lock()
+	if d.doneCh == done {
+		d.doneCh = nil
+	}
+	d.mu.Unlock()
 
 	return nil
 }
 
-func (d *DeviceDiscovery) listenLoop() {
+func (d *DeviceDiscovery) listenLoop(conn *net.UDPConn, done <-chan struct{}) {
+	defer d.wg.Done()
+
 	buf := make([]byte, 4096)
 
 	for {
-		d.mu.Lock()
-		conn := d.conn
-		isRunning := d.isRunning
-		d.mu.Unlock()
-
-		if !isRunning || conn == nil {
+		if conn == nil {
 			return
 		}
 
 		n, remoteAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			select {
-			case <-d.doneCh:
+			case <-done:
 				return
 			default:
 				continue
@@ -251,25 +264,19 @@ func (d *DeviceDiscovery) listenLoop() {
 	}
 }
 
-func (d *DeviceDiscovery) announceLoop() {
+func (d *DeviceDiscovery) announceLoop(done <-chan struct{}) {
+	defer d.wg.Done()
+
 	ticker := time.NewTicker(d.cfg.AnnounceInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			d.mu.Lock()
-			isRunning := d.isRunning
-			d.mu.Unlock()
-
-			if !isRunning {
-				return
-			}
-
 			d.broadcastMessage(discoveryMsgAnnounce)
 			d.pruneStaleDevices()
 
-		case <-d.doneCh:
+		case <-done:
 			return
 		}
 	}

@@ -13,6 +13,8 @@ const tabs = [
   { label: "工作室", to: "/studio" },
 ];
 
+const AUTO_SCROLL_THRESHOLD_PX = 96;
+
 function formatMessageTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -299,6 +301,8 @@ export function ChatHomePage() {
     setDraft,
   } = useWebChat(activeAgentName, data.runtimeProfile.workspace);
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const autoScrollOnNextRenderRef = useRef(false);
   const scrollFadeTimerRef = useRef<number | null>(null);
   const setupPromptedRef = useRef(false);
 
@@ -312,7 +316,15 @@ export function ChatHomePage() {
     const viewport = messagesViewportRef.current;
     if (!viewport) return;
 
+    const updateStickiness = () => {
+      const distanceFromBottom = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+      shouldStickToBottomRef.current = distanceFromBottom <= AUTO_SCROLL_THRESHOLD_PX;
+    };
+
+    updateStickiness();
+
     const markScrolling = () => {
+      updateStickiness();
       viewport.dataset.scrolling = "true";
 
       if (scrollFadeTimerRef.current !== null) {
@@ -341,10 +353,20 @@ export function ChatHomePage() {
     const viewport = messagesViewportRef.current;
     if (!viewport) return;
 
+    if (isSending) {
+      autoScrollOnNextRenderRef.current = true;
+    }
+
+    const shouldAutoScroll = autoScrollOnNextRenderRef.current || shouldStickToBottomRef.current;
+    if (!shouldAutoScroll) return;
+
     viewport.scrollTo({
       behavior: "smooth",
       top: viewport.scrollHeight,
     });
+
+    shouldStickToBottomRef.current = true;
+    autoScrollOnNextRenderRef.current = false;
   }, [isSending, messages]);
 
   return (

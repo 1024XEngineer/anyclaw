@@ -71,7 +71,7 @@ func (m *SessionManager) CreateWithOptions(opts SessionCreateOptions) (*Session,
 		ID:           m.nextID(),
 		Title:        opts.Title,
 		Agent:        primaryAgent,
-		Participants: nil,
+		Participants: append([]string(nil), participants...),
 		Org:          opts.Org,
 		Project:      opts.Project,
 		Workspace:    opts.Workspace,
@@ -97,8 +97,8 @@ func (m *SessionManager) CreateWithOptions(opts SessionCreateOptions) (*Session,
 		ConversationKey: strings.TrimSpace(opts.ConversationKey),
 		TransportMeta:   cloneStringMap(opts.TransportMeta),
 		ParentSessionID: opts.ParentSessionID,
-		GroupKey:        "",
-		IsGroup:         false,
+		GroupKey:        strings.TrimSpace(opts.GroupKey),
+		IsGroup:         opts.IsGroup,
 		Presence:        "idle",
 		Typing:          false,
 		LastActiveAt:    now,
@@ -291,7 +291,24 @@ func (m *SessionManager) BindConversationKey(sessionID string, conversationKey s
 	if !ok {
 		return nil, fmt.Errorf("session not found: %s", sessionID)
 	}
-	session.ConversationKey = strings.TrimSpace(conversationKey)
+	conversationKey = strings.TrimSpace(conversationKey)
+	if conversationKey != "" {
+		for _, existing := range m.store.ListSessions() {
+			if existing == nil || existing.ID == session.ID {
+				continue
+			}
+			if strings.TrimSpace(existing.ConversationKey) != conversationKey {
+				continue
+			}
+			existing.ConversationKey = ""
+			existing.UpdatedAt = m.nowFunc()
+			existing.LastActiveAt = existing.UpdatedAt
+			if err := m.store.SaveSession(existing); err != nil {
+				return nil, err
+			}
+		}
+	}
+	session.ConversationKey = conversationKey
 	session.UpdatedAt = m.nowFunc()
 	session.LastActiveAt = session.UpdatedAt
 	if err := m.store.SaveSession(session); err != nil {
@@ -431,9 +448,7 @@ func cloneSession(session *Session) *Session {
 	clone := *session
 	normalizeSessionExecutionBinding(&clone)
 	clone.TransportMeta = cloneStringMap(session.TransportMeta)
-	clone.Participants = nil
-	clone.GroupKey = ""
-	clone.IsGroup = false
+	clone.Participants = append([]string(nil), session.Participants...)
 	clone.History = append([]HistoryMessage(nil), session.History...)
 	clone.Messages = cloneSessionMessages(session.Messages)
 	if len(clone.Messages) == 0 && len(clone.History) > 0 {

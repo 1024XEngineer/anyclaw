@@ -79,7 +79,7 @@ func AdvanceBootstrapRitual(dir string, userInput string, opts BootstrapRitualOp
 	trimmedInput := strings.TrimSpace(userInput)
 
 	if state.CurrentIndex == 0 && trimmedInput == "" && !state.AwaitingAnswer {
-		return askBootstrapQuestion(dir, state)
+		return askBootstrapQuestion(dir, state, opts)
 	}
 
 	if !state.AwaitingAnswer {
@@ -89,11 +89,11 @@ func AdvanceBootstrapRitual(dir string, userInput string, opts BootstrapRitualOp
 		if err := saveBootstrapState(dir, state); err != nil {
 			return nil, err
 		}
-		return askBootstrapQuestion(dir, state)
+		return askBootstrapQuestion(dir, state, opts)
 	}
 
 	if trimmedInput == "" {
-		result, err := currentBootstrapQuestion(state)
+		result, err := currentBootstrapQuestion(state, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -129,7 +129,7 @@ func AdvanceBootstrapRitual(dir string, userInput string, opts BootstrapRitualOp
 	if err := saveBootstrapState(dir, state); err != nil {
 		return nil, err
 	}
-	result, err := askBootstrapQuestion(dir, state)
+	result, err := askBootstrapQuestion(dir, state, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +141,7 @@ func BootstrapPending(dir string) bool {
 	return fileExists(filepath.Join(strings.TrimSpace(dir), "BOOTSTRAP.md"))
 }
 
-func askBootstrapQuestion(dir string, state *BootstrapState) (*BootstrapAdvanceResult, error) {
+func askBootstrapQuestion(dir string, state *BootstrapState, opts BootstrapRitualOptions) (*BootstrapAdvanceResult, error) {
 	if state == nil {
 		state = defaultBootstrapState()
 	}
@@ -150,14 +150,14 @@ func askBootstrapQuestion(dir string, state *BootstrapState) (*BootstrapAdvanceR
 	if err := saveBootstrapState(dir, state); err != nil {
 		return nil, err
 	}
-	return currentBootstrapQuestion(state)
+	return currentBootstrapQuestion(state, opts)
 }
 
-func currentBootstrapQuestion(state *BootstrapState) (*BootstrapAdvanceResult, error) {
+func currentBootstrapQuestion(state *BootstrapState, opts BootstrapRitualOptions) (*BootstrapAdvanceResult, error) {
 	if state.CurrentIndex < 0 || state.CurrentIndex >= len(bootstrapQuestions) {
 		return nil, fmt.Errorf("bootstrap question index out of range")
 	}
-	intro := "Hello. I am AnyClaw, a local execution-oriented AI assistant.\n\nI can help with files, code search, commands, browser automation, desktop control, channel integrations, and repeatable workflows.\n\nThis workspace is brand new, so I need a quick setup before we start."
+	intro := bootstrapIntro(opts)
 	if state.CurrentIndex > 0 {
 		intro = ""
 	}
@@ -166,6 +166,18 @@ func currentBootstrapQuestion(state *BootstrapState) (*BootstrapAdvanceResult, e
 		return &BootstrapAdvanceResult{Active: true, Response: prompt}, nil
 	}
 	return &BootstrapAdvanceResult{Active: true, Response: intro + "\n\n" + prompt}, nil
+}
+
+func bootstrapIntro(opts BootstrapRitualOptions) string {
+	name := strings.TrimSpace(opts.AgentName)
+	if name == "" {
+		name = "AnyClaw"
+	}
+	description := strings.TrimSpace(opts.AgentDescription)
+	if description == "" {
+		description = "Execution-oriented local AI assistant."
+	}
+	return fmt.Sprintf("Hello. I am %s, %s.\n\nThis workspace is brand new, so I need a quick setup before we start.", name, description)
 }
 
 func finalizeBootstrap(dir string, state *BootstrapState, opts BootstrapRitualOptions) error {

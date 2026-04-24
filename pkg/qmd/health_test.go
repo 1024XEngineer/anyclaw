@@ -227,7 +227,7 @@ func TestSupervisorForceRestart(t *testing.T) {
 }
 
 func TestSupervisorRestartCallbacks(t *testing.T) {
-	var healthyCalled bool
+	healthyCh := make(chan struct{}, 1)
 
 	sup := NewSupervisor(func() (*Server, error) {
 		return NewServer(ServerConfig{HTTPAddr: ":19892"}), nil
@@ -237,7 +237,10 @@ func TestSupervisorRestartCallbacks(t *testing.T) {
 		OnRestart: func(attempt int, delay time.Duration) {
 		},
 		OnHealthy: func() {
-			healthyCalled = true
+			select {
+			case healthyCh <- struct{}{}:
+			default:
+			}
 		},
 	})
 
@@ -245,16 +248,15 @@ func TestSupervisorRestartCallbacks(t *testing.T) {
 	sup.Start(ctx)
 	defer sup.Stop(ctx)
 
-	time.Sleep(500 * time.Millisecond)
-
-	if !healthyCalled {
-		t.Error("expected OnHealthy callback")
+	select {
+	case <-healthyCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected OnHealthy callback")
 	}
 }
 
 func TestSupervisorUnhealthyCallback(t *testing.T) {
-	var unhealthyCalled bool
-	var report HealthReport
+	reportCh := make(chan HealthReport, 1)
 
 	sup := NewSupervisor(func() (*Server, error) {
 		s := NewServer(ServerConfig{HTTPAddr: ":19893"})
@@ -265,8 +267,10 @@ func TestSupervisorUnhealthyCallback(t *testing.T) {
 		HealthCheckInterval: 200 * time.Millisecond,
 		UnhealthyThreshold:  1,
 		OnUnhealthy: func(r HealthReport) {
-			unhealthyCalled = true
-			report = r
+			select {
+			case reportCh <- r:
+			default:
+			}
 		},
 	})
 
@@ -278,10 +282,11 @@ func TestSupervisorUnhealthyCallback(t *testing.T) {
 	sup.Start(ctx)
 	defer sup.Stop(ctx)
 
-	time.Sleep(500 * time.Millisecond)
-
-	if !unhealthyCalled {
-		t.Error("expected OnUnhealthy callback")
+	var report HealthReport
+	select {
+	case report = <-reportCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected OnUnhealthy callback")
 	}
 	if report.Status != HealthUnhealthy {
 		t.Errorf("expected unhealthy report, got %s", report.Status)

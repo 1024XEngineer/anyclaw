@@ -62,7 +62,7 @@ func TestNewTargetAppAppliesAgentProfileProviderAndPreservesWorkspaceOverride(t 
 	if err != nil {
 		t.Fatalf("NewTargetApp: %v", err)
 	}
-	t.Cleanup(func() { app.Memory.Close() })
+	t.Cleanup(func() { _ = app.Close() })
 
 	absWorkspacePath, err := filepath.Abs(workspacePath)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestNewTargetAppResolvesImplicitMainAgentProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTargetApp: %v", err)
 	}
-	t.Cleanup(func() { app.Memory.Close() })
+	t.Cleanup(func() { _ = app.Close() })
 
 	absProfileWorkingDir, err := filepath.Abs(filepath.Join(tempDir, "workflows", "go-expert"))
 	if err != nil {
@@ -220,7 +220,7 @@ func TestNewTargetAppAutoCompletesBootstrapWhenAgentProfileAlreadyConfigured(t *
 	if err != nil {
 		t.Fatalf("NewTargetApp: %v", err)
 	}
-	t.Cleanup(func() { app.Memory.Close() })
+	t.Cleanup(func() { _ = app.Close() })
 
 	if _, err := os.Stat(filepath.Join(app.WorkingDir, "BOOTSTRAP.md")); !os.IsNotExist(err) {
 		t.Fatalf("expected BOOTSTRAP.md to be removed for configured workspace, stat err=%v", err)

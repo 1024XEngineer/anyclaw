@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,10 +9,16 @@ import (
 	"time"
 
 	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
-	appRuntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
-type RuntimeResolver func(requestedModel string) (*appRuntime.App, string, error)
+type ChatRuntime interface {
+	Chat(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition) (*llm.Response, error)
+	StreamChat(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, onChunk func(string)) error
+}
+
+type chatRuntime = ChatRuntime
+
+type RuntimeResolver func(requestedModel string) (ChatRuntime, string, error)
 type ModelCatalog func() []string
 
 type Handler struct {
@@ -294,7 +301,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleChatStream(w http.ResponseWriter, r *http.Request, targetApp *appRuntime.App, resolvedModel string, messages []llm.Message, toolDefs []llm.ToolDefinition) {
+func (h *Handler) handleChatStream(w http.ResponseWriter, r *http.Request, targetApp ChatRuntime, resolvedModel string, messages []llm.Message, toolDefs []llm.ToolDefinition) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -351,7 +358,7 @@ func (h *Handler) handleChatStream(w http.ResponseWriter, r *http.Request, targe
 	flusher.Flush()
 }
 
-func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, targetApp *appRuntime.App, resolvedModel string, messages []llm.Message, toolDefs []llm.ToolDefinition) {
+func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, targetApp ChatRuntime, resolvedModel string, messages []llm.Message, toolDefs []llm.ToolDefinition) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -403,7 +410,7 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 	flusher.Flush()
 }
 
-func (h *Handler) resolveTarget(requestedModel string) (*appRuntime.App, string, error) {
+func (h *Handler) resolveTarget(requestedModel string) (ChatRuntime, string, error) {
 	if h.resolveRuntime == nil {
 		return nil, "", fmt.Errorf("runtime resolver is not configured")
 	}

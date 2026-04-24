@@ -119,8 +119,11 @@ func (m *Manager) Embed(ctx context.Context, text string) ([]float32, error) {
 		return cached, nil
 	}
 
+	start := m.currentProviderIndex()
 	var lastErr error
-	for i, provider := range m.providers {
+	for offset := range m.providers {
+		i := (start + offset) % len(m.providers)
+		provider := m.providers[i]
 		embedding, err := provider.Embed(ctx, text)
 		if err == nil {
 			m.mu.Lock()
@@ -133,6 +136,19 @@ func (m *Manager) Embed(ctx context.Context, text string) ([]float32, error) {
 	}
 
 	return nil, fmt.Errorf("embedding: all providers failed, last error: %w", lastErr)
+}
+
+func (m *Manager) currentProviderIndex() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if len(m.providers) == 0 {
+		return 0
+	}
+	if m.current < 0 || m.current >= len(m.providers) {
+		return 0
+	}
+	return m.current
 }
 
 func (m *Manager) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {

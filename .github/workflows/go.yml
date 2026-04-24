@@ -1,0 +1,40 @@
+name: Test
+on:
+  push:
+    branches:
+      - "**"
+      - "!dependabot/**"
+      - "!xgopilot/**"
+  pull_request:
+    branches: [ "**" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go:
+          - 1.25.x
+          - 1.26.x
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      - name: Download Go modules
+        run: go mod download
+      - name: Test Go code
+        run: go test -v -race -covermode atomic -coverprofile coverage.out ./...
+      - name: Upload code coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
+          disable_search: true
+          files: coverage.out

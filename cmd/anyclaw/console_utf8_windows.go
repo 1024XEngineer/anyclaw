@@ -27,12 +27,12 @@ var (
 func configureConsoleUTF8Platform() {
 	r, _, err := procSetConsoleCP.Call(uintptr(utf8CodePage))
 	if r == 0 {
-		printWarn("SetConsoleCP failed: %v (console may not support full UTF-8)", err)
+		printConsoleUTF8Warning("SetConsoleCP failed: %v (console may not support full UTF-8)", err)
 	}
 
 	r, _, err = procSetConsoleOutputCP.Call(uintptr(utf8CodePage))
 	if r == 0 {
-		printWarn("SetConsoleOutputCP failed: %v (console may not support full UTF-8)", err)
+		printConsoleUTF8Warning("SetConsoleOutputCP failed: %v (console may not support full UTF-8)", err)
 	}
 
 	enableANSIColors(os.Stdout.Fd())
