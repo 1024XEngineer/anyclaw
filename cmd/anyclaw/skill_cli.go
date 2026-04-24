@@ -288,12 +288,27 @@ func parseSkillInstallRef(name string) (string, string, string, bool) {
 	if len(parts) != 3 {
 		return "", "", "", false
 	}
-	for _, part := range parts {
-		if strings.TrimSpace(part) == "" {
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if !isSafeSkillInstallSegment(part) {
 			return "", "", "", false
 		}
+		parts[i] = part
 	}
 	return parts[0], parts[1], parts[2], true
+}
+
+func isSafeSkillInstallSegment(part string) bool {
+	if part == "" || part == "." || part == ".." {
+		return false
+	}
+	if strings.Contains(part, "/") || strings.Contains(part, "\\") {
+		return false
+	}
+	if filepath.IsAbs(part) || filepath.VolumeName(part) != "" {
+		return false
+	}
+	return true
 }
 
 func resolveSkillSource(source string) (string, string, bool) {

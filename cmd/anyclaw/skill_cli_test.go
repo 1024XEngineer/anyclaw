@@ -305,6 +305,26 @@ func TestSkillCLIInstallValidationAndHelpers(t *testing.T) {
 	}
 }
 
+func TestParseSkillInstallRefRejectsTraversalSegments(t *testing.T) {
+	clearSkillCLIEnv(t)
+
+	for _, raw := range []string{
+		"acme/repo/..",
+		"acme/repo/.",
+		"acme/repo/..\\..\\tmp\\pwn",
+		"acme/repo/C:\\tmp\\pwn",
+		"acme/repo/C:tmp",
+	} {
+		if _, _, _, ok := parseSkillInstallRef(raw); ok {
+			t.Fatalf("expected install ref %q to be rejected", raw)
+		}
+	}
+
+	if owner, repo, skillName, ok := parseSkillInstallRef("acme/demo-repo/demo-skill"); !ok || owner != "acme" || repo != "demo-repo" || skillName != "demo-skill" {
+		t.Fatalf("expected valid install ref to pass, got owner=%q repo=%q skill=%q ok=%v", owner, repo, skillName, ok)
+	}
+}
+
 func withSkillSearchStub(t *testing.T, stub func(context.Context, string, int) ([]skills.SkillSearchResult, error)) {
 	t.Helper()
 	original := searchRemoteSkills
