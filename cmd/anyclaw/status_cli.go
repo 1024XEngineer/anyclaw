@@ -300,7 +300,9 @@ func runApprovalsGet(args []string) error {
 
 	path := "/approvals"
 	if trimmed := strings.TrimSpace(*status); trimmed != "" {
-		path += "?status=" + trimmed
+		query := url.Values{}
+		query.Set("status", trimmed)
+		path += "?" + query.Encode()
 	}
 
 	var approvals []approvalListItem

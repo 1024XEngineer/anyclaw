@@ -375,17 +375,21 @@ func TestRunSessionsCommandSupportsWorkspaceFilter(t *testing.T) {
 func TestRunApprovalsCommandDefaultsToGetJSON(t *testing.T) {
 	clearModelsCLIEnv(t)
 
+	const approvalStatus = "pending review&ops"
 	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.String() != "/approvals?status=pending" {
-			t.Fatalf("unexpected path: %s", r.URL.String())
+		if r.URL.Path != "/approvals" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("status"); got != approvalStatus {
+			t.Fatalf("unexpected status query: %q", got)
 		}
 		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{
 				"id":           "ap-1",
 				"tool_name":    "run_command",
 				"action":       "exec",
-				"status":       "pending",
+				"status":       approvalStatus,
 				"requested_at": now.Format(time.RFC3339),
 			},
 		})
@@ -394,7 +398,7 @@ func TestRunApprovalsCommandDefaultsToGetJSON(t *testing.T) {
 
 	configPath := writeStatusCLIConfig(t, server.URL, "approval-token")
 	stdout, _, err := captureCLIOutput(t, func() error {
-		return runApprovalsCommand([]string{"--config", configPath, "--json"})
+		return runApprovalsCommand([]string{"--config", configPath, "--json", "--status", approvalStatus})
 	})
 	if err != nil {
 		t.Fatalf("runApprovalsCommand default get: %v", err)
