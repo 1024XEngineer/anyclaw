@@ -1,6 +1,6 @@
 import { Bot, FolderKanban, ShieldCheck, Sparkles, Waypoints, X } from "lucide-react";
+import { Link } from "react-router-dom";
 
-import { useShellStore } from "@/features/shell/useShellStore";
 import { useWorkspaceOverview } from "@/features/workspace/useWorkspaceOverview";
 
 type AgentDrawerProps = {
@@ -9,7 +9,6 @@ type AgentDrawerProps = {
 
 export function AgentDrawer({ onClose }: AgentDrawerProps) {
   const { data } = useWorkspaceOverview();
-  const openSettings = useShellStore((state) => state.openSettings);
   const runtimeProfile = data.runtimeProfile;
   const activeAgent = data.localAgents.find((agent) => agent.active) ?? data.localAgents[0];
   const highlights = [
@@ -167,26 +166,20 @@ export function AgentDrawer({ onClose }: AgentDrawerProps) {
         </section>
 
         <footer className="mt-5 flex flex-col gap-3 sm:flex-row">
-          <button
+          <Link
             className="shell-button h-12 justify-center px-5 text-base font-medium"
-            onClick={() => {
-              onClose();
-              openSettings("skills");
-            }}
-            type="button"
+            onClick={onClose}
+            to="/market"
           >
-            查看 Skill
-          </button>
-          <button
+            查看市场
+          </Link>
+          <Link
             className="chip-button justify-center px-5"
-            onClick={() => {
-              onClose();
-              openSettings("channels");
-            }}
-            type="button"
+            onClick={onClose}
+            to="/channels"
           >
             查看渠道
-          </button>
+          </Link>
         </footer>
       </div>
     </section>
