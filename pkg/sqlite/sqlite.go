@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 type Config struct {
