@@ -2,31 +2,19 @@ package vec
 
 import (
 	"context"
-	"database/sql"
+	"math"
 	"testing"
-
-	_ "modernc.org/sqlite"
-	_ "modernc.org/sqlite/vec"
 )
 
 func setupVecStore(t *testing.T) *VecStore {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("failed to open db: %v", err)
-	}
-
-	t.Cleanup(func() {
-		db.Close()
-	})
-
 	vs := NewVecStore(VecStoreConfig{
-		DB:         db,
-		TableName:  "test_vectors",
-		Dimensions: 4,
-		Distance:   DistanceCosine,
-		Metadata:   []string{"category", "source"},
+		TableName:   "test_vectors",
+		Dimensions:  4,
+		Distance:    DistanceCosine,
+		Metadata:    []string{"category", "source"},
+		PersistPath: t.TempDir(),
 	})
 
 	if err := vs.Init(context.Background()); err != nil {
@@ -111,12 +99,11 @@ func TestVecStoreSearch(t *testing.T) {
 	vs := setupVecStore(t)
 	ctx := context.Background()
 
-	vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
-	vs.Insert(ctx, 2, []float32{0.11, 0.21, 0.31, 0.41}, nil)
-	vs.Insert(ctx, 3, []float32{0.9, 0.8, 0.7, 0.6}, nil)
+	_ = vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
+	_ = vs.Insert(ctx, 2, []float32{0.11, 0.21, 0.31, 0.41}, nil)
+	_ = vs.Insert(ctx, 3, []float32{0.9, 0.8, 0.7, 0.6}, nil)
 
-	queryVec := []float32{0.1, 0.2, 0.3, 0.4}
-	results, err := vs.Search(ctx, queryVec, 10)
+	results, err := vs.Search(ctx, []float32{0.1, 0.2, 0.3, 0.4}, 10)
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
@@ -124,9 +111,11 @@ func TestVecStoreSearch(t *testing.T) {
 	if len(results) != 3 {
 		t.Errorf("expected 3 results, got %d", len(results))
 	}
-
 	if results[0].RowID != 1 {
 		t.Errorf("expected first result rowid 1, got %d", results[0].RowID)
+	}
+	if results[0].Distance > 0.001 {
+		t.Errorf("expected first result distance near 0, got %f", results[0].Distance)
 	}
 }
 
@@ -134,12 +123,11 @@ func TestVecStoreSearchWithThreshold(t *testing.T) {
 	vs := setupVecStore(t)
 	ctx := context.Background()
 
-	vs.Insert(ctx, 1, []float32{0.5, 0.5, 0.5, 0.5}, nil)
-	vs.Insert(ctx, 2, []float32{0.51, 0.51, 0.51, 0.51}, nil)
-	vs.Insert(ctx, 3, []float32{0.1, 0.2, 0.3, 0.4}, nil)
+	_ = vs.Insert(ctx, 1, []float32{0.5, 0.5, 0.5, 0.5}, nil)
+	_ = vs.Insert(ctx, 2, []float32{0.51, 0.51, 0.51, 0.51}, nil)
+	_ = vs.Insert(ctx, 3, []float32{0.1, 0.2, 0.3, 0.4}, nil)
 
-	queryVec := []float32{0.5, 0.5, 0.5, 0.5}
-	results, err := vs.SearchWithFilter(ctx, queryVec, 10, 0.01, nil)
+	results, err := vs.SearchWithFilter(ctx, []float32{0.5, 0.5, 0.5, 0.5}, 10, 0.01, nil)
 	if err != nil {
 		t.Fatalf("search with threshold failed: %v", err)
 	}
@@ -147,9 +135,28 @@ func TestVecStoreSearchWithThreshold(t *testing.T) {
 	if len(results) < 1 {
 		t.Errorf("expected at least 1 result, got %d", len(results))
 	}
-
 	if results[0].Distance > 0.01 {
 		t.Errorf("expected distance <= 0.01, got %f", results[0].Distance)
+	}
+}
+
+func TestVecStoreSearchWithMetadataFilter(t *testing.T) {
+	vs := setupVecStore(t)
+	ctx := context.Background()
+
+	_ = vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{"category": "a"})
+	_ = vs.Insert(ctx, 2, []float32{0.1, 0.2, 0.3, 0.41}, map[string]string{"category": "b"})
+
+	results, err := vs.SearchWithFilter(ctx, []float32{0.1, 0.2, 0.3, 0.4}, 10, 0, map[string]string{"category": "b"})
+	if err != nil {
+		t.Fatalf("search with metadata filter failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 filtered result, got %d", len(results))
+	}
+	if results[0].RowID != 2 {
+		t.Errorf("expected rowid 2, got %d", results[0].RowID)
 	}
 }
 
@@ -158,7 +165,8 @@ func TestVecStoreGet(t *testing.T) {
 	ctx := context.Background()
 
 	meta := map[string]string{"category": "test", "source": "unit"}
-	vs.Insert(ctx, 42, []float32{0.1, 0.2, 0.3, 0.4}, meta)
+	raw := []float32{0.1, 0.2, 0.3, 0.4}
+	_ = vs.Insert(ctx, 42, raw, meta)
 
 	item, err := vs.Get(ctx, 42)
 	if err != nil {
@@ -168,11 +176,10 @@ func TestVecStoreGet(t *testing.T) {
 	if item.RowID != 42 {
 		t.Errorf("expected rowid 42, got %d", item.RowID)
 	}
-
 	if len(item.Vector) != 4 {
 		t.Errorf("expected 4 dimensions, got %d", len(item.Vector))
 	}
-
+	assertVectorApproxEqual(t, item.Vector, normalized(raw))
 	if item.Metadata["category"] != "test" {
 		t.Errorf("expected category test, got %s", item.Metadata["category"])
 	}
@@ -182,7 +189,7 @@ func TestVecStoreDelete(t *testing.T) {
 	vs := setupVecStore(t)
 	ctx := context.Background()
 
-	vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
+	_ = vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
 
 	count, _ := vs.Count(ctx)
 	if count != 1 {
@@ -203,7 +210,7 @@ func TestVecStoreUpdateVector(t *testing.T) {
 	vs := setupVecStore(t)
 	ctx := context.Background()
 
-	vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
+	_ = vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
 
 	newVec := []float32{0.9, 0.8, 0.7, 0.6}
 	if err := vs.UpdateVector(ctx, 1, newVec); err != nil {
@@ -215,18 +222,14 @@ func TestVecStoreUpdateVector(t *testing.T) {
 		t.Fatalf("get after update failed: %v", err)
 	}
 
-	for i := range newVec {
-		if item.Vector[i] != newVec[i] {
-			t.Errorf("vector[%d] expected %f, got %f", i, newVec[i], item.Vector[i])
-		}
-	}
+	assertVectorApproxEqual(t, item.Vector, normalized(newVec))
 }
 
 func TestVecStoreUpdateMetadata(t *testing.T) {
 	vs := setupVecStore(t)
 	ctx := context.Background()
 
-	vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{
+	_ = vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, map[string]string{
 		"category": "old",
 		"source":   "old",
 	})
@@ -254,8 +257,8 @@ func TestVecStoreList(t *testing.T) {
 	vs := setupVecStore(t)
 	ctx := context.Background()
 
-	vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
-	vs.Insert(ctx, 2, []float32{0.5, 0.6, 0.7, 0.8}, nil)
+	_ = vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
+	_ = vs.Insert(ctx, 2, []float32{0.5, 0.6, 0.7, 0.8}, nil)
 
 	items, err := vs.List(ctx, 10)
 	if err != nil {
@@ -264,6 +267,9 @@ func TestVecStoreList(t *testing.T) {
 
 	if len(items) != 2 {
 		t.Errorf("expected 2 items, got %d", len(items))
+	}
+	if items[0].RowID != 1 || items[1].RowID != 2 {
+		t.Errorf("expected sorted items by id, got %+v", items)
 	}
 }
 
@@ -278,6 +284,19 @@ func TestVecStoreDimensionMismatch(t *testing.T) {
 
 	if _, err := vs.Search(ctx, []float32{0.1, 0.2}, 10); err == nil {
 		t.Error("expected dimension mismatch error on search")
+	}
+}
+
+func TestVecStoreUnsupportedL2(t *testing.T) {
+	vs := NewVecStore(VecStoreConfig{
+		TableName:   "l2_vectors",
+		Dimensions:  4,
+		Distance:    DistanceL2,
+		PersistPath: t.TempDir(),
+	})
+
+	if err := vs.Init(context.Background()); err == nil {
+		t.Fatal("expected unsupported l2 error")
 	}
 }
 
@@ -337,14 +356,15 @@ func TestVecStoreUpsert(t *testing.T) {
 	vs := setupVecStore(t)
 	ctx := context.Background()
 
-	vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
+	_ = vs.Insert(ctx, 1, []float32{0.1, 0.2, 0.3, 0.4}, nil)
 
 	count, _ := vs.Count(ctx)
 	if count != 1 {
 		t.Fatalf("expected 1 vector after first insert")
 	}
 
-	vs.Insert(ctx, 1, []float32{0.5, 0.6, 0.7, 0.8}, nil)
+	updated := []float32{0.5, 0.6, 0.7, 0.8}
+	_ = vs.Insert(ctx, 1, updated, nil)
 
 	count, _ = vs.Count(ctx)
 	if count != 1 {
@@ -356,7 +376,39 @@ func TestVecStoreUpsert(t *testing.T) {
 		t.Fatalf("get after upsert failed: %v", err)
 	}
 
-	if len(item.Vector) != 4 || item.Vector[0] != 0.5 {
-		t.Errorf("expected vector updated, got %v", item.Vector)
+	assertVectorApproxEqual(t, item.Vector, normalized(updated))
+}
+
+func normalized(v []float32) []float32 {
+	out := make([]float32, len(v))
+	copy(out, v)
+
+	var sum float64
+	for _, value := range out {
+		sum += float64(value * value)
+	}
+	if sum == 0 {
+		return out
+	}
+
+	norm := float32(math.Sqrt(sum))
+	for i := range out {
+		out[i] /= norm
+	}
+	return out
+}
+
+func assertVectorApproxEqual(t *testing.T, got, want []float32) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("vector length mismatch: %d vs %d", len(got), len(want))
+	}
+
+	for i := range want {
+		diff := math.Abs(float64(got[i] - want[i]))
+		if diff > 1e-5 {
+			t.Fatalf("vector[%d] expected %f, got %f", i, want[i], got[i])
+		}
 	}
 }

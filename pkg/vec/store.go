@@ -1,12 +1,19 @@
 package vec
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"encoding/gob"
 	"fmt"
 	"math"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
+
+	chromem "github.com/philippgille/chromem-go"
 )
 
 type DistanceMetric string
@@ -16,22 +23,32 @@ const (
 	DistanceL2     DistanceMetric = "l2"
 )
 
+const vecBackendVersion = "chromem-go"
+
 type VecStore struct {
-	db         *sql.DB
-	tableName  string
-	dimensions int
-	distance   DistanceMetric
-	metadata   []string
-	auxColumns []string
+	legacyDB    *sql.DB
+	tableName   string
+	dimensions  int
+	distance    DistanceMetric
+	metadata    []string
+	auxColumns  []string
+	persistPath string
+	compress    bool
+
+	mu         sync.Mutex
+	chromemDB  *chromem.DB
+	collection *chromem.Collection
 }
 
 type VecStoreConfig struct {
-	DB         *sql.DB
-	TableName  string
-	Dimensions int
-	Distance   DistanceMetric
-	Metadata   []string
-	AuxColumns []string
+	DB          *sql.DB
+	TableName   string
+	Dimensions  int
+	Distance    DistanceMetric
+	Metadata    []string
+	AuxColumns  []string
+	PersistPath string
+	Compress    bool
 }
 
 func NewVecStore(cfg VecStoreConfig) *VecStore {
@@ -39,159 +56,81 @@ func NewVecStore(cfg VecStoreConfig) *VecStore {
 		cfg.Distance = DistanceCosine
 	}
 	return &VecStore{
-		db:         cfg.DB,
-		tableName:  cfg.TableName,
-		dimensions: cfg.Dimensions,
-		distance:   cfg.Distance,
-		metadata:   cfg.Metadata,
-		auxColumns: cfg.AuxColumns,
+		legacyDB:    cfg.DB,
+		tableName:   cfg.TableName,
+		dimensions:  cfg.Dimensions,
+		distance:    cfg.Distance,
+		metadata:    append([]string(nil), cfg.Metadata...),
+		auxColumns:  append([]string(nil), cfg.AuxColumns...),
+		persistPath: strings.TrimSpace(cfg.PersistPath),
+		compress:    cfg.Compress,
 	}
 }
 
 func (vs *VecStore) Init(ctx context.Context) error {
-	if err := vs.enableVec(ctx); err != nil {
-		return err
-	}
-	return vs.createTable(ctx)
-}
-
-func (vs *VecStore) enableVec(ctx context.Context) error {
-	var version string
-	err := vs.db.QueryRowContext(ctx, "SELECT vec_version()").Scan(&version)
-	if err != nil {
-		return fmt.Errorf("sqlite-vec not available (requires modernc.org/sqlite/vec): %w", err)
-	}
-	return nil
-}
-
-func (vs *VecStore) createTable(ctx context.Context) error {
-	sql := vs.buildCreateTableSQL()
-	_, err := vs.db.ExecContext(ctx, sql)
-	if err != nil {
-		return fmt.Errorf("create vec0 table: %w", err)
-	}
-	return nil
-}
-
-func (vs *VecStore) buildCreateTableSQL() string {
-	cols := []string{
-		fmt.Sprintf("vector float[%d] distance=%s", vs.dimensions, vs.distance),
-	}
-
-	for _, meta := range vs.metadata {
-		cols = append(cols, fmt.Sprintf("+%s text", meta))
-	}
-
-	for _, aux := range vs.auxColumns {
-		cols = append(cols, fmt.Sprintf("#%s text", aux))
-	}
-
-	return fmt.Sprintf(
-		"CREATE VIRTUAL TABLE IF NOT EXISTS %s USING vec0(%s)",
-		vs.tableName,
-		strings.Join(cols, ", "),
-	)
+	_, err := vs.ensureCollection(ctx, true)
+	return err
 }
 
 func (vs *VecStore) Insert(ctx context.Context, id any, vector []float32, metadata map[string]string) error {
-	if len(vector) != vs.dimensions {
-		return fmt.Errorf("vector dimension mismatch: expected %d, got %d", vs.dimensions, len(vector))
+	col, err := vs.ensureCollection(ctx, true)
+	if err != nil {
+		return err
+	}
+	if err := vs.validateVector(vector); err != nil {
+		return err
 	}
 
-	vs.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", vs.tableName), id)
-
-	cols := []string{"rowid", "vector"}
-	args := []any{id, vectorToBlob(vector)}
-
-	for _, key := range vs.metadata {
-		val := ""
-		if metadata != nil {
-			val = metadata[key]
-		}
-		cols = append(cols, key)
-		args = append(args, val)
+	docID, err := normalizeID(id)
+	if err != nil {
+		return err
 	}
 
-	placeholders := make([]string, len(cols))
-	for i := range cols {
-		placeholders[i] = "?"
-	}
-
-	query := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES (%s)",
-		vs.tableName,
-		strings.Join(cols, ", "),
-		strings.Join(placeholders, ", "),
-	)
-
-	_, err := vs.db.ExecContext(ctx, query, args...)
+	err = col.AddDocument(ctx, chromem.Document{
+		ID:        docID,
+		Metadata:  sanitizeMetadata(vs.metadata, metadata),
+		Embedding: cloneVector(vector),
+	})
 	if err != nil {
 		return fmt.Errorf("insert vector: %w", err)
 	}
+
 	return nil
 }
 
 func (vs *VecStore) InsertBatch(ctx context.Context, items []VecItem) error {
-	tx, err := vs.db.BeginTx(ctx, nil)
+	if len(items) == 0 {
+		return nil
+	}
+
+	col, err := vs.ensureCollection(ctx, true)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
 
-	cols := []string{"rowid", "vector"}
-	for _, key := range vs.metadata {
-		cols = append(cols, key)
-	}
-
-	placeholders := make([]string, len(cols))
-	for i := range cols {
-		placeholders[i] = "?"
-	}
-
-	query := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES (%s)",
-		vs.tableName,
-		strings.Join(cols, ", "),
-		strings.Join(placeholders, ", "),
-	)
-
-	delQuery := fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", vs.tableName)
-
-	stmt, err := tx.PrepareContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
-	}
-	defer stmt.Close()
-
-	delStmt, err := tx.PrepareContext(ctx, delQuery)
-	if err != nil {
-		return fmt.Errorf("prepare delete: %w", err)
-	}
-	defer delStmt.Close()
-
+	docs := make([]chromem.Document, 0, len(items))
 	for _, item := range items {
-		if len(item.Vector) != vs.dimensions {
-			return fmt.Errorf("vector dimension mismatch for id %v: expected %d, got %d",
-				item.ID, vs.dimensions, len(item.Vector))
+		if err := vs.validateVector(item.Vector); err != nil {
+			return fmt.Errorf("vector dimension mismatch for id %v: %w", item.ID, err)
 		}
 
-		delStmt.ExecContext(ctx, item.ID)
-
-		args := []any{item.ID, vectorToBlob(item.Vector)}
-		for _, key := range vs.metadata {
-			val := ""
-			if item.Metadata != nil {
-				val = item.Metadata[key]
-			}
-			args = append(args, val)
+		docID, err := normalizeID(item.ID)
+		if err != nil {
+			return err
 		}
 
-		if _, err := stmt.ExecContext(ctx, args...); err != nil {
-			return fmt.Errorf("insert item %v: %w", item.ID, err)
-		}
+		docs = append(docs, chromem.Document{
+			ID:        docID,
+			Metadata:  sanitizeMetadata(vs.metadata, item.Metadata),
+			Embedding: cloneVector(item.Vector),
+		})
 	}
 
-	return tx.Commit()
+	if err := col.AddDocuments(ctx, docs, 1); err != nil {
+		return fmt.Errorf("insert batch: %w", err)
+	}
+
+	return nil
 }
 
 func (vs *VecStore) Search(ctx context.Context, queryVector []float32, limit int) ([]VecSearchResult, error) {
@@ -199,133 +138,98 @@ func (vs *VecStore) Search(ctx context.Context, queryVector []float32, limit int
 }
 
 func (vs *VecStore) SearchWithFilter(ctx context.Context, queryVector []float32, limit int, threshold float64, metadataFilter map[string]string) ([]VecSearchResult, error) {
-	if len(queryVector) != vs.dimensions {
-		return nil, fmt.Errorf("query vector dimension mismatch: expected %d, got %d", vs.dimensions, len(queryVector))
+	col, err := vs.ensureCollection(ctx, false)
+	if err != nil {
+		return nil, err
 	}
-
+	if err := vs.validateVector(queryVector); err != nil {
+		return nil, fmt.Errorf("query vector dimension mismatch: %w", err)
+	}
 	if limit <= 0 {
 		limit = 10
 	}
 
-	selectCols := "SELECT rowid, distance"
-	for _, meta := range vs.metadata {
-		selectCols += fmt.Sprintf(", %s", meta)
+	count := col.Count()
+	if count == 0 {
+		return nil, nil
+	}
+	if limit > count {
+		limit = count
 	}
 
-	query := fmt.Sprintf(
-		"%s FROM %s WHERE vector MATCH ? AND k = ?",
-		selectCols,
-		vs.tableName,
-	)
-
-	args := []any{vectorToBlob(queryVector), limit}
-
-	if threshold > 0 {
-		query += " AND distance <= ?"
-		args = append(args, threshold)
-	}
-
-	rows, err := vs.db.QueryContext(ctx, query, args...)
+	results, err := col.QueryEmbedding(ctx, cloneVector(queryVector), limit, metadataFilter, nil)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
-	defer rows.Close()
 
-	var results []VecSearchResult
-	for rows.Next() {
-		var r VecSearchResult
-		var dist float64
-		var rowID int64
-		scanArgs := []any{&rowID, &dist}
-
-		metaVals := make([]any, len(vs.metadata))
-		for i := range vs.metadata {
-			metaVals[i] = new(string)
-			scanArgs = append(scanArgs, metaVals[i])
-		}
-
-		if err := rows.Scan(scanArgs...); err != nil {
+	out := make([]VecSearchResult, 0, len(results))
+	for _, result := range results {
+		distance := 1.0 - float64(result.Similarity)
+		if threshold > 0 && distance > threshold {
 			continue
 		}
 
-		r.RowID = rowID
-		r.ID = rowID
-		r.Distance = dist
-
-		if len(vs.metadata) > 0 {
-			r.Metadata = make(map[string]any)
-			for i, key := range vs.metadata {
-				if sv, ok := metaVals[i].(*string); ok {
-					r.Metadata[key] = *sv
-				}
-			}
-		}
-
-		results = append(results, r)
+		rowID, typedID := decodeID(result.ID)
+		out = append(out, VecSearchResult{
+			RowID:    rowID,
+			ID:       typedID,
+			Distance: distance,
+			Metadata: metadataToAny(result.Metadata),
+		})
 	}
 
-	return results, nil
+	return out, nil
 }
 
 func (vs *VecStore) Get(ctx context.Context, id any) (*VecItem, error) {
-	selectCols := "SELECT rowid, vector"
-	for _, meta := range vs.metadata {
-		selectCols += fmt.Sprintf(", %s", meta)
+	col, err := vs.ensureCollection(ctx, false)
+	if err != nil {
+		return nil, err
 	}
 
-	query := fmt.Sprintf("%s FROM %s WHERE rowid = ?", selectCols, vs.tableName)
-
-	row := vs.db.QueryRowContext(ctx, query, id)
-
-	var item VecItem
-	var vecBlob []byte
-	scanArgs := []any{&item.RowID, &vecBlob}
-
-	metaVals := make([]any, len(vs.metadata))
-	for i := range vs.metadata {
-		metaVals[i] = new(string)
-		scanArgs = append(scanArgs, metaVals[i])
+	docID, err := normalizeID(id)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := row.Scan(scanArgs...); err != nil {
+	doc, err := col.GetByID(ctx, docID)
+	if err != nil {
 		return nil, fmt.Errorf("get vector item: %w", err)
 	}
 
-	item.ID = item.RowID
-	item.Vector = blobToVector(vecBlob)
-
-	if len(vs.metadata) > 0 {
-		item.Metadata = make(map[string]string)
-		for i, key := range vs.metadata {
-			if sv, ok := metaVals[i].(*string); ok {
-				item.Metadata[key] = *sv
-			}
-		}
-	}
-
+	item := vecItemFromDocument(doc)
 	return &item, nil
 }
 
 func (vs *VecStore) Delete(ctx context.Context, id any) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE rowid = ?", vs.tableName)
-	_, err := vs.db.ExecContext(ctx, query, id)
+	col, err := vs.ensureCollection(ctx, false)
 	if err != nil {
+		return err
+	}
+
+	docID, err := normalizeID(id)
+	if err != nil {
+		return err
+	}
+
+	if err := col.Delete(ctx, nil, nil, docID); err != nil {
 		return fmt.Errorf("delete vector item: %w", err)
 	}
+
 	return nil
 }
 
 func (vs *VecStore) UpdateVector(ctx context.Context, id any, vector []float32) error {
-	if len(vector) != vs.dimensions {
-		return fmt.Errorf("vector dimension mismatch: expected %d, got %d", vs.dimensions, len(vector))
+	if err := vs.validateVector(vector); err != nil {
+		return err
 	}
 
-	query := fmt.Sprintf("UPDATE %s SET vector = ? WHERE rowid = ?", vs.tableName)
-	_, err := vs.db.ExecContext(ctx, query, vectorToBlob(vector), id)
+	item, err := vs.Get(ctx, id)
 	if err != nil {
-		return fmt.Errorf("update vector: %w", err)
+		return err
 	}
-	return nil
+
+	return vs.Insert(ctx, item.ID, vector, item.Metadata)
 }
 
 func (vs *VecStore) UpdateMetadata(ctx context.Context, id any, metadata map[string]string) error {
@@ -333,90 +237,134 @@ func (vs *VecStore) UpdateMetadata(ctx context.Context, id any, metadata map[str
 		return nil
 	}
 
-	setClauses := make([]string, 0, len(metadata))
-	args := make([]any, 0, len(metadata)+1)
+	item, err := vs.Get(ctx, id)
+	if err != nil {
+		return err
+	}
 
+	if item.Metadata == nil {
+		item.Metadata = make(map[string]string)
+	}
 	for _, key := range vs.metadata {
-		if val, ok := metadata[key]; ok {
-			setClauses = append(setClauses, fmt.Sprintf("%s = ?", key))
-			args = append(args, val)
+		if value, ok := metadata[key]; ok {
+			item.Metadata[key] = value
 		}
 	}
 
-	if len(setClauses) == 0 {
-		return nil
-	}
-
-	args = append(args, id)
-	query := fmt.Sprintf("UPDATE %s SET %s WHERE rowid = ?", vs.tableName, strings.Join(setClauses, ", "))
-
-	_, err := vs.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("update metadata: %w", err)
-	}
-	return nil
+	return vs.Insert(ctx, item.ID, item.Vector, item.Metadata)
 }
 
 func (vs *VecStore) Count(ctx context.Context) (int64, error) {
-	var count int64
-	err := vs.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", vs.tableName)).Scan(&count)
+	col, err := vs.ensureCollection(ctx, false)
 	if err != nil {
 		return 0, err
 	}
-	return count, nil
+	return int64(col.Count()), nil
 }
 
 func (vs *VecStore) List(ctx context.Context, limit int) ([]VecItem, error) {
-	query := fmt.Sprintf("SELECT rowid, vector FROM %s", vs.tableName)
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
+	_ = ctx
 
-	rows, err := vs.db.QueryContext(ctx, query)
+	db, err := vs.ensureDB()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	if _, err := vs.ensureCollection(context.Background(), false); err != nil {
+		return nil, err
+	}
 
-	var items []VecItem
-	for rows.Next() {
-		var item VecItem
-		var vecBlob []byte
-		if err := rows.Scan(&item.RowID, &vecBlob); err != nil {
+	var buf bytes.Buffer
+	if err := db.ExportToWriter(&buf, false, "", vs.tableName); err != nil {
+		return nil, fmt.Errorf("export collection: %w", err)
+	}
+
+	type persistenceCollection struct {
+		Name      string
+		Metadata  map[string]string
+		Documents map[string]*chromem.Document
+	}
+	persistenceDB := struct {
+		Collections map[string]*persistenceCollection
+	}{}
+
+	if err := gob.NewDecoder(&buf).Decode(&persistenceDB); err != nil {
+		return nil, fmt.Errorf("decode collection export: %w", err)
+	}
+
+	pc, ok := persistenceDB.Collections[vs.tableName]
+	if !ok || len(pc.Documents) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]string, 0, len(pc.Documents))
+	for id := range pc.Documents {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	if limit > 0 && limit < len(ids) {
+		ids = ids[:limit]
+	}
+
+	items := make([]VecItem, 0, len(ids))
+	for _, id := range ids {
+		doc := pc.Documents[id]
+		if doc == nil {
 			continue
 		}
-		item.ID = item.RowID
-		item.Vector = blobToVector(vecBlob)
-		items = append(items, item)
+		items = append(items, vecItemFromDocument(*doc))
 	}
 
 	return items, nil
 }
 
+func (vs *VecStore) Drop(ctx context.Context) error {
+	_ = ctx
+
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+
+	if err := vs.validateTableName(); err != nil {
+		return err
+	}
+
+	if vs.chromemDB == nil {
+		db, err := vs.openDB()
+		if err != nil {
+			return err
+		}
+		vs.chromemDB = db
+	}
+
+	if err := vs.chromemDB.DeleteCollection(vs.tableName); err != nil {
+		return fmt.Errorf("drop vector collection: %w", err)
+	}
+
+	vs.collection = nil
+	return nil
+}
+
 func (vs *VecStore) VecVersion(ctx context.Context) (string, error) {
-	var version string
-	err := vs.db.QueryRowContext(ctx, "SELECT vec_version()").Scan(&version)
-	return version, err
+	_, err := vs.ensureCollection(ctx, false)
+	if err != nil {
+		return "", err
+	}
+	return vecBackendVersion, nil
 }
 
 func (vs *VecStore) TableInfo(ctx context.Context) (*VecTableInfo, error) {
-	var info VecTableInfo
-	info.TableName = vs.tableName
-	info.Dimensions = vs.dimensions
-	info.Distance = string(vs.distance)
-
 	count, err := vs.Count(ctx)
 	if err != nil {
 		return nil, err
 	}
-	info.VectorCount = count
 
-	var vecVersion string
-	if err := vs.db.QueryRowContext(ctx, "SELECT vec_version()").Scan(&vecVersion); err == nil {
-		info.VecVersion = vecVersion
-	}
-
-	return &info, nil
+	return &VecTableInfo{
+		TableName:   vs.tableName,
+		Dimensions:  vs.dimensions,
+		Distance:    string(vs.distance),
+		VectorCount: count,
+		VecVersion:  vecBackendVersion,
+	}, nil
 }
 
 type VecItem struct {
@@ -439,6 +387,205 @@ type VecTableInfo struct {
 	Distance    string `json:"distance"`
 	VectorCount int64  `json:"vector_count"`
 	VecVersion  string `json:"vec_version"`
+}
+
+func (vs *VecStore) ensureDB() (*chromem.DB, error) {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+	return vs.ensureDBLocked()
+}
+
+func (vs *VecStore) ensureDBLocked() (*chromem.DB, error) {
+	if vs.chromemDB != nil {
+		return vs.chromemDB, nil
+	}
+
+	db, err := vs.openDB()
+	if err != nil {
+		return nil, err
+	}
+
+	vs.chromemDB = db
+	return db, nil
+}
+
+func (vs *VecStore) openDB() (*chromem.DB, error) {
+	if vs.persistPath == "" {
+		return chromem.NewDB(), nil
+	}
+
+	db, err := chromem.NewPersistentDB(vs.persistPath, vs.compress)
+	if err != nil {
+		return nil, fmt.Errorf("open chromem db: %w", err)
+	}
+
+	return db, nil
+}
+
+func (vs *VecStore) ensureCollection(ctx context.Context, create bool) (*chromem.Collection, error) {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+
+	if err := vs.validateTableName(); err != nil {
+		return nil, err
+	}
+	if err := vs.validateDistance(); err != nil {
+		return nil, err
+	}
+	if create {
+		if err := vs.validateDimensions(); err != nil {
+			return nil, err
+		}
+	}
+
+	if vs.collection != nil {
+		return vs.collection, nil
+	}
+
+	db, err := vs.ensureDBLocked()
+	if err != nil {
+		return nil, err
+	}
+
+	collection := db.GetCollection(vs.tableName, nil)
+	if collection == nil {
+		if !create {
+			return nil, fmt.Errorf("vector collection %q not found", vs.tableName)
+		}
+
+		collection, err = db.CreateCollection(vs.tableName, vs.collectionMetadata(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("create vector collection: %w", err)
+		}
+	}
+
+	vs.collection = collection
+	return collection, nil
+}
+
+func (vs *VecStore) collectionMetadata() map[string]string {
+	return map[string]string{
+		"distance":   string(vs.distance),
+		"dimensions": strconv.Itoa(vs.dimensions),
+		"backend":    vecBackendVersion,
+	}
+}
+
+func (vs *VecStore) validateTableName() error {
+	if strings.TrimSpace(vs.tableName) == "" {
+		return fmt.Errorf("table name is required")
+	}
+	return nil
+}
+
+func (vs *VecStore) validateDimensions() error {
+	if vs.dimensions <= 0 {
+		return fmt.Errorf("dimensions must be positive")
+	}
+	return nil
+}
+
+func (vs *VecStore) validateDistance() error {
+	switch vs.distance {
+	case "", DistanceCosine:
+		return nil
+	case DistanceL2:
+		return fmt.Errorf("distance metric %q is unsupported by %s", vs.distance, vecBackendVersion)
+	default:
+		return fmt.Errorf("distance metric %q is unsupported", vs.distance)
+	}
+}
+
+func (vs *VecStore) validateVector(vector []float32) error {
+	if err := vs.validateDistance(); err != nil {
+		return err
+	}
+	if err := vs.validateDimensions(); err != nil {
+		return err
+	}
+	if len(vector) != vs.dimensions {
+		return fmt.Errorf("expected %d, got %d", vs.dimensions, len(vector))
+	}
+	return nil
+}
+
+func sanitizeMetadata(allowed []string, metadata map[string]string) map[string]string {
+	if len(allowed) == 0 {
+		if metadata == nil {
+			return nil
+		}
+		return cloneMetadata(metadata)
+	}
+
+	clean := make(map[string]string, len(allowed))
+	for _, key := range allowed {
+		clean[key] = metadata[key]
+	}
+	return clean
+}
+
+func cloneVector(v []float32) []float32 {
+	if v == nil {
+		return nil
+	}
+	out := make([]float32, len(v))
+	copy(out, v)
+	return out
+}
+
+func cloneMetadata(metadata map[string]string) map[string]string {
+	if metadata == nil {
+		return nil
+	}
+	out := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
+}
+
+func metadataToAny(metadata map[string]string) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		out[key] = value
+	}
+	return out
+}
+
+func normalizeID(id any) (string, error) {
+	if id == nil {
+		return "", fmt.Errorf("id is required")
+	}
+
+	switch value := id.(type) {
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return "", fmt.Errorf("id is required")
+		}
+		return value, nil
+	default:
+		return fmt.Sprint(id), nil
+	}
+}
+
+func decodeID(id string) (int64, any) {
+	if rowID, err := strconv.ParseInt(id, 10, 64); err == nil {
+		return rowID, rowID
+	}
+	return 0, id
+}
+
+func vecItemFromDocument(doc chromem.Document) VecItem {
+	rowID, id := decodeID(doc.ID)
+	return VecItem{
+		RowID:    rowID,
+		ID:       id,
+		Vector:   cloneVector(doc.Embedding),
+		Metadata: cloneMetadata(doc.Metadata),
+	}
 }
 
 func vectorToBlob(v []float32) []byte {

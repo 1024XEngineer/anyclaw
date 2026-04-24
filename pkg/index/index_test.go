@@ -2,32 +2,28 @@ package index
 
 import (
 	"context"
-	"database/sql"
 	"sync/atomic"
 	"testing"
 
-	_ "modernc.org/sqlite"
-	_ "modernc.org/sqlite/vec"
+	"github.com/1024XEngineer/anyclaw/pkg/sqlite"
 )
 
 func setupIndexManager(t *testing.T) (*IndexManager, *mockEmbedder) {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sqlite.Open(sqlite.InMemoryConfig())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
 
 	embedder := &mockEmbedder{dim: 4}
-
-	im := NewIndexManager(db, embedder)
+	im := NewIndexManager(db, embedder, WithVectorDir(t.TempDir()))
 	if err := im.Init(context.Background()); err != nil {
 		t.Fatalf("init index manager: %v", err)
 	}
-
-	t.Cleanup(func() {
-		db.Close()
-	})
 
 	return im, embedder
 }
@@ -57,23 +53,28 @@ func TestCreateIndex(t *testing.T) {
 	}
 }
 
+func TestCreateIndexRejectsL2(t *testing.T) {
+	im, _ := setupIndexManager(t)
+	ctx := context.Background()
+
+	if _, err := im.Create(ctx, Config{
+		Name:       "l2_index",
+		Dimensions: 4,
+		Distance:   "l2",
+	}); err == nil {
+		t.Fatal("expected l2 unsupported error")
+	}
+}
+
 func TestCreateDuplicateIndex(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	_, err := im.Create(ctx, Config{
-		Name:       "dup",
-		Dimensions: 4,
-	})
-	if err != nil {
+	if _, err := im.Create(ctx, Config{Name: "dup", Dimensions: 4}); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
 
-	_, err = im.Create(ctx, Config{
-		Name:       "dup",
-		Dimensions: 4,
-	})
-	if err == nil {
+	if _, err := im.Create(ctx, Config{Name: "dup", Dimensions: 4}); err == nil {
 		t.Error("expected error for duplicate index")
 	}
 }
@@ -82,7 +83,7 @@ func TestGetIndex(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{
+	_, _ = im.Create(ctx, Config{
 		Name:       "get_test",
 		Dimensions: 4,
 		Metadata:   []string{"tag"},
@@ -102,9 +103,9 @@ func TestListIndexes(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{Name: "idx1", Dimensions: 4})
-	im.Create(ctx, Config{Name: "idx2", Dimensions: 4})
-	im.Create(ctx, Config{Name: "idx3", Dimensions: 8})
+	_, _ = im.Create(ctx, Config{Name: "idx1", Dimensions: 4})
+	_, _ = im.Create(ctx, Config{Name: "idx2", Dimensions: 4})
+	_, _ = im.Create(ctx, Config{Name: "idx3", Dimensions: 8})
 
 	indexes := im.List()
 	if len(indexes) != 3 {
@@ -116,7 +117,7 @@ func TestUpdateIndex(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{
+	_, _ = im.Create(ctx, Config{
 		Name:       "update_test",
 		Dimensions: 4,
 		Metadata:   []string{"old"},
@@ -139,12 +140,9 @@ func TestUpdateIndexDimensionChange(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{Name: "dim_test", Dimensions: 4})
+	_, _ = im.Create(ctx, Config{Name: "dim_test", Dimensions: 4})
 
-	_, err := im.Update(ctx, "dim_test", Config{
-		Dimensions: 8,
-	})
-	if err == nil {
+	if _, err := im.Update(ctx, "dim_test", Config{Dimensions: 8}); err == nil {
 		t.Error("expected error when changing dimensions")
 	}
 }
@@ -153,7 +151,7 @@ func TestDeleteIndex(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{Name: "del_test", Dimensions: 4})
+	_, _ = im.Create(ctx, Config{Name: "del_test", Dimensions: 4})
 
 	indexes := im.List()
 	if len(indexes) != 1 {
@@ -174,8 +172,7 @@ func TestDeleteNonExistentIndex(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	err := im.Delete(ctx, "nonexistent")
-	if err == nil {
+	if err := im.Delete(ctx, "nonexistent"); err == nil {
 		t.Error("expected error for non-existent index")
 	}
 }
@@ -184,7 +181,7 @@ func TestIndexWithVectors(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{
+	_, _ = im.Create(ctx, Config{
 		Name:       "vec_index",
 		Dimensions: 4,
 		Distance:   "cosine",
@@ -224,7 +221,7 @@ func TestIndexWithEmbedding(t *testing.T) {
 	im, embedder := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{
+	_, _ = im.Create(ctx, Config{
 		Name:       "embed_index",
 		Dimensions: 4,
 	})
@@ -251,7 +248,7 @@ func TestIndexMixedVectorsAndText(t *testing.T) {
 	im, embedder := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{
+	_, _ = im.Create(ctx, Config{
 		Name:       "mixed_index",
 		Dimensions: 4,
 	})
@@ -279,7 +276,7 @@ func TestSearch(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{
+	_, _ = im.Create(ctx, Config{
 		Name:       "search_index",
 		Dimensions: 4,
 		Distance:   "cosine",
@@ -291,7 +288,7 @@ func TestSearch(t *testing.T) {
 		{ID: 3, Vector: []float32{0.9, 0.8, 0.7, 0.6}},
 	}
 
-	im.Index(ctx, "search_index", items, nil)
+	_, _ = im.Index(ctx, "search_index", items, nil)
 
 	results, err := im.Search(ctx, "search_index", []float32{0.1, 0.2, 0.3, 0.4}, 10)
 	if err != nil {
@@ -301,13 +298,16 @@ func TestSearch(t *testing.T) {
 	if len(results) != 3 {
 		t.Errorf("expected 3 results, got %d", len(results))
 	}
+	if results[0].RowID != 1 {
+		t.Errorf("expected rowid 1 first, got %d", results[0].RowID)
+	}
 }
 
 func TestSearchByText(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{
+	_, _ = im.Create(ctx, Config{
 		Name:       "text_search_index",
 		Dimensions: 4,
 	})
@@ -317,7 +317,7 @@ func TestSearchByText(t *testing.T) {
 		{ID: 2, Vector: []float32{0.5, 0.6, 0.7, 0.8}},
 	}
 
-	im.Index(ctx, "text_search_index", items, nil)
+	_, _ = im.Index(ctx, "text_search_index", items, nil)
 
 	results, err := im.SearchByText(ctx, "text_search_index", "query", 10)
 	if err != nil {
@@ -333,8 +333,7 @@ func TestSearchNonExistentIndex(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	_, err := im.Search(ctx, "nonexistent", []float32{0.1, 0.2}, 10)
-	if err == nil {
+	if _, err := im.Search(ctx, "nonexistent", []float32{0.1, 0.2}, 10); err == nil {
 		t.Error("expected error for non-existent index")
 	}
 }
@@ -343,7 +342,7 @@ func TestRemoveVectors(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{Name: "remove_index", Dimensions: 4})
+	_, _ = im.Create(ctx, Config{Name: "remove_index", Dimensions: 4})
 
 	items := []IndexItem{
 		{ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4}},
@@ -351,7 +350,7 @@ func TestRemoveVectors(t *testing.T) {
 		{ID: 3, Vector: []float32{0.9, 1.0, 0.1, 0.2}},
 	}
 
-	im.Index(ctx, "remove_index", items, nil)
+	_, _ = im.Index(ctx, "remove_index", items, nil)
 
 	removed, err := im.RemoveVectors(ctx, "remove_index", []any{1, 2})
 	if err != nil {
@@ -372,14 +371,14 @@ func TestRebuildIndex(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{Name: "rebuild_index", Dimensions: 4})
+	_, _ = im.Create(ctx, Config{Name: "rebuild_index", Dimensions: 4})
 
 	items := []IndexItem{
 		{ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4}},
 		{ID: 2, Vector: []float32{0.5, 0.6, 0.7, 0.8}},
 	}
 
-	im.Index(ctx, "rebuild_index", items, nil)
+	_, _ = im.Index(ctx, "rebuild_index", items, nil)
 
 	var progressCalled bool
 	result, err := im.Rebuild(ctx, "rebuild_index", func(p Progress) {
@@ -400,43 +399,48 @@ func TestRebuildIndex(t *testing.T) {
 	if info.VectorCount != 0 {
 		t.Errorf("expected vector count 0 after rebuild, got %d", info.VectorCount)
 	}
-
-	_ = result
+	if result.IndexName != "rebuild_index" {
+		t.Errorf("expected rebuild result index name, got %s", result.IndexName)
+	}
 }
 
 func TestRebuildNonExistentIndex(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	_, err := im.Rebuild(ctx, "nonexistent", nil)
-	if err == nil {
+	if _, err := im.Rebuild(ctx, "nonexistent", nil); err == nil {
 		t.Error("expected error for non-existent index rebuild")
 	}
 }
 
 func TestIndexMetaPersistence(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sqlite.Open(sqlite.InMemoryConfig())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
+	vecDir := t.TempDir()
 	embedder := &mockEmbedder{dim: 4}
-	im := NewIndexManager(db, embedder)
+	im := NewIndexManager(db, embedder, WithVectorDir(vecDir))
 
 	ctx := context.Background()
 	if err := im.Init(ctx); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 
-	im.Create(ctx, Config{
+	if _, err := im.Create(ctx, Config{
 		Name:       "persist_test",
 		Dimensions: 4,
 		Distance:   "cosine",
 		Metadata:   []string{"tag1", "tag2"},
-	})
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
 
-	im2 := NewIndexManager(db, embedder)
+	im2 := NewIndexManager(db, embedder, WithVectorDir(vecDir))
 	if err := im2.Init(ctx); err != nil {
 		t.Fatalf("re-init: %v", err)
 	}
@@ -461,14 +465,13 @@ func TestIndexNotReady(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
 
-	im.Create(ctx, Config{Name: "not_ready", Dimensions: 4})
+	_, _ = im.Create(ctx, Config{Name: "not_ready", Dimensions: 4})
 
 	im.mu.Lock()
 	im.indexes["not_ready"].Status = StatusError
 	im.mu.Unlock()
 
-	_, err := im.Index(ctx, "not_ready", []IndexItem{{ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4}}}, nil)
-	if err == nil {
+	if _, err := im.Index(ctx, "not_ready", []IndexItem{{ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4}}}, nil); err == nil {
 		t.Error("expected error for non-ready index")
 	}
 }
