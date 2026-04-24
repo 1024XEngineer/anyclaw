@@ -10,7 +10,50 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/config"
 )
 
+func clearModelsCLIEnv(t *testing.T) {
+	t.Helper()
+
+	for _, key := range []string{
+		"OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY",
+		"LLM_PROVIDER",
+		"LLM_MODEL",
+		"LLM_BASE_URL",
+		"ANYCLAW_GATEWAY_HOST",
+		"ANYCLAW_GATEWAY_BIND",
+		"ANYCLAW_GATEWAY_PORT",
+		"ANYCLAW_TELEGRAM_BOT_TOKEN",
+		"ANYCLAW_TELEGRAM_CHAT_ID",
+		"ANYCLAW_SLACK_BOT_TOKEN",
+		"ANYCLAW_SLACK_APP_TOKEN",
+		"ANYCLAW_SLACK_DEFAULT_CHANNEL",
+		"ANYCLAW_DISCORD_BOT_TOKEN",
+		"ANYCLAW_DISCORD_DEFAULT_CHANNEL",
+		"ANYCLAW_DISCORD_API_BASE_URL",
+		"ANYCLAW_DISCORD_GUILD_ID",
+		"ANYCLAW_DISCORD_PUBLIC_KEY",
+		"ANYCLAW_DISCORD_USE_GATEWAY_WS",
+		"ANYCLAW_WHATSAPP_ACCESS_TOKEN",
+		"ANYCLAW_WHATSAPP_PHONE_NUMBER_ID",
+		"ANYCLAW_WHATSAPP_VERIFY_TOKEN",
+		"ANYCLAW_WHATSAPP_APP_SECRET",
+		"ANYCLAW_WHATSAPP_DEFAULT_RECIPIENT",
+		"ANYCLAW_SIGNAL_BASE_URL",
+		"ANYCLAW_SIGNAL_NUMBER",
+		"ANYCLAW_SIGNAL_DEFAULT_RECIPIENT",
+		"ANYCLAW_SIGNAL_BEARER_TOKEN",
+		"ANYCLAW_API_TOKEN",
+		"ANYCLAW_WEBHOOK_SECRET",
+		"ANYCLAW_RATE_LIMIT_RPM",
+		"ANYCLAW_PLUGIN_EXEC_TIMEOUT",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestRunAnyClawCLIRoutesModelsDefaultStatus(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
@@ -42,6 +85,8 @@ func TestRunAnyClawCLIRoutesModelsDefaultStatus(t *testing.T) {
 }
 
 func TestRunModelsSetUpdatesDefaultProviderModel(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.Providers = []config.ProviderProfile{
 		{
@@ -88,6 +133,8 @@ func TestRunModelsSetUpdatesDefaultProviderModel(t *testing.T) {
 }
 
 func TestRunModelsSetUsesEffectiveDefaultProviderProfile(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.Providers = []config.ProviderProfile{
 		{
@@ -137,6 +184,8 @@ func TestRunModelsSetUsesEffectiveDefaultProviderProfile(t *testing.T) {
 }
 
 func TestRunModelsSetDoesNotPersistEnvOverrides(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.LLM.Provider = "openai"
 	cfg.LLM.Model = "gpt-4o-mini"
@@ -192,6 +241,8 @@ func TestRunModelsSetDoesNotPersistEnvOverrides(t *testing.T) {
 }
 
 func TestRunModelsStatusJSON(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.Providers = []config.ProviderProfile{
 		{
@@ -241,6 +292,8 @@ func TestRunModelsStatusJSON(t *testing.T) {
 }
 
 func TestRunModelsStatusAppliesDefaultProviderProfile(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.Providers = []config.ProviderProfile{
 		{
@@ -280,6 +333,8 @@ func TestRunModelsStatusAppliesDefaultProviderProfile(t *testing.T) {
 }
 
 func TestRunModelsStatusTextWithoutProfiles(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.LLM.Provider = "ollama"
 	cfg.LLM.Model = "llama3.2"
@@ -301,6 +356,8 @@ func TestRunModelsStatusTextWithoutProfiles(t *testing.T) {
 }
 
 func TestRunModelsStatusTextWithProfiles(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.LLM.Provider = "openai"
 	cfg.LLM.Model = "gpt-4o-mini"
@@ -350,6 +407,8 @@ func TestRunModelsStatusTextWithProfiles(t *testing.T) {
 }
 
 func TestRunModelsListSupportsJSONFilterAndTextCatalog(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.LLM.Provider = "openai"
 	cfg.LLM.Model = "gpt-4o-mini"
@@ -407,6 +466,8 @@ func TestRunModelsListSupportsJSONFilterAndTextCatalog(t *testing.T) {
 }
 
 func TestRunModelsListUsesEffectiveDefaultProvider(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.Providers = []config.ProviderProfile{
 		{
@@ -457,6 +518,8 @@ func TestRunModelsListUsesEffectiveDefaultProvider(t *testing.T) {
 }
 
 func TestRunModelsCommandUnknownPrintsUsage(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	stdout, _, err := captureCLIOutput(t, func() error {
 		return runModelsCommand([]string{"unknown"})
 	})
@@ -469,6 +532,8 @@ func TestRunModelsCommandUnknownPrintsUsage(t *testing.T) {
 }
 
 func TestRunModelsSetValidatesInput(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	if err := runModelsSet(nil); err == nil || !strings.Contains(err.Error(), "usage: anyclaw models set <model>") {
 		t.Fatalf("expected usage error for missing model, got %v", err)
 	}
@@ -483,6 +548,8 @@ func TestRunModelsSetValidatesInput(t *testing.T) {
 }
 
 func TestModelHelpers(t *testing.T) {
+	clearModelsCLIEnv(t)
+
 	cfg := config.DefaultConfig()
 	cfg.LLM.Provider = "openai"
 	cfg.LLM.Model = "gpt-4o-mini"
