@@ -30,6 +30,8 @@ func runAnyClawCLI(args []string) error {
 		return runMCPCommand(args[1:])
 	case "models":
 		return runModelsCommand(args[1:])
+	case "config":
+		return runConfigCommand(args[1:])
 	case "plugin":
 		return runPluginCommand(args[1:])
 	case "channels":
@@ -61,6 +63,7 @@ func printCLIUsage() {
 Usage:
   anyclaw mcp <subcommand>            Run MCP-related commands
   anyclaw models <subcommand>         Run model management commands
+  anyclaw config <subcommand>         Run config management commands
   anyclaw plugin <subcommand>         Run plugin management commands
   anyclaw channels <subcommand>       Run channels management commands
   anyclaw status [options]            Show gateway runtime status
