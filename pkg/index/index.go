@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/1024XEngineer/anyclaw/pkg/embedding"
+	"github.com/1024XEngineer/anyclaw/pkg/sqlite"
 	"github.com/1024XEngineer/anyclaw/pkg/vec"
 )
 
@@ -68,21 +71,43 @@ type Progress struct {
 
 type ProgressFunc func(p Progress)
 
+type Option func(*IndexManager)
+
+func WithVectorDir(path string) Option {
+	return func(im *IndexManager) {
+		im.vecDir = path
+	}
+}
+
 type IndexManager struct {
-	db        *sql.DB
+	db        *sqlite.DB
 	embedder  embedding.Provider
 	indexes   map[string]*IndexInfo
 	metaTable string
+	vecDir    string
 	mu        sync.RWMutex
 }
 
-func NewIndexManager(db *sql.DB, embedder embedding.Provider) *IndexManager {
-	return &IndexManager{
+func NewIndexManager(db *sqlite.DB, embedder embedding.Provider, opts ...Option) *IndexManager {
+	im := &IndexManager{
 		db:        db,
 		embedder:  embedder,
 		indexes:   make(map[string]*IndexInfo),
 		metaTable: "vector_index_meta",
 	}
+
+	for _, opt := range opts {
+		opt(im)
+	}
+
+	if im.vecDir == "" && db != nil {
+		im.vecDir = db.SidecarDir("vec")
+	}
+	if im.vecDir == "" {
+		im.vecDir = filepath.Join(os.TempDir(), fmt.Sprintf("anyclaw-vec-%d", time.Now().UnixNano()))
+	}
+
+	return im
 }
 
 func (im *IndexManager) Init(ctx context.Context) error {
@@ -136,10 +161,10 @@ func (im *IndexManager) loadIndexes(ctx context.Context) error {
 
 		info.Status = Status(statusStr)
 		if metaJSON != "" {
-			json.Unmarshal([]byte(metaJSON), &info.Metadata)
+			_ = json.Unmarshal([]byte(metaJSON), &info.Metadata)
 		}
 		if auxJSON != "" {
-			json.Unmarshal([]byte(auxJSON), &info.AuxColumns)
+			_ = json.Unmarshal([]byte(auxJSON), &info.AuxColumns)
 		}
 		if errStr.Valid {
 			info.Error = errStr.String
@@ -162,14 +187,18 @@ func (im *IndexManager) Create(ctx context.Context, cfg Config) (*IndexInfo, err
 	}
 
 	tableName := cfg.TableNameOrDefault()
+	distance := cfg.Distance
+	if distance == "" {
+		distance = vec.DistanceCosine
+	}
 
 	info := &IndexInfo{
 		Name:       cfg.Name,
 		TableName:  tableName,
 		Dimensions: cfg.Dimensions,
-		Distance:   string(cfg.Distance),
-		Metadata:   cfg.Metadata,
-		AuxColumns: cfg.AuxColumns,
+		Distance:   string(distance),
+		Metadata:   append([]string(nil), cfg.Metadata...),
+		AuxColumns: append([]string(nil), cfg.AuxColumns...),
 		Status:     StatusCreating,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
@@ -179,24 +208,19 @@ func (im *IndexManager) Create(ctx context.Context, cfg Config) (*IndexInfo, err
 		return nil, err
 	}
 
-	vs := vec.NewVecStore(vec.VecStoreConfig{
-		DB:         im.db,
-		TableName:  tableName,
-		Dimensions: cfg.Dimensions,
-		Distance:   cfg.Distance,
-		Metadata:   cfg.Metadata,
-		AuxColumns: cfg.AuxColumns,
-	})
-
+	vs := im.newVecStore(info)
 	if err := vs.Init(ctx); err != nil {
 		info.Status = StatusError
 		info.Error = err.Error()
-		im.saveIndexMeta(ctx, info)
-		return nil, fmt.Errorf("create vector table: %w", err)
+		_ = im.saveIndexMeta(ctx, info)
+		return nil, fmt.Errorf("create vector collection: %w", err)
 	}
 
 	info.Status = StatusReady
-	im.saveIndexMeta(ctx, info)
+	info.Error = ""
+	if err := im.saveIndexMeta(ctx, info); err != nil {
+		return nil, err
+	}
 	im.indexes[cfg.Name] = info
 
 	return info, nil
@@ -213,32 +237,35 @@ func (im *IndexManager) Update(ctx context.Context, name string, cfg Config) (*I
 
 	info.Status = StatusUpdating
 	info.UpdatedAt = time.Now()
-	im.saveIndexMeta(ctx, info)
+	_ = im.saveIndexMeta(ctx, info)
 
-	if cfg.Dimensions != info.Dimensions {
+	if cfg.Dimensions != 0 && cfg.Dimensions != info.Dimensions {
 		info.Status = StatusError
 		info.Error = "cannot change dimensions of existing index"
-		im.saveIndexMeta(ctx, info)
+		_ = im.saveIndexMeta(ctx, info)
 		return nil, fmt.Errorf("cannot change dimensions: existing=%d, requested=%d", info.Dimensions, cfg.Dimensions)
 	}
 
 	if cfg.Distance != "" && cfg.Distance != vec.DistanceMetric(info.Distance) {
 		info.Status = StatusError
 		info.Error = "cannot change distance metric of existing index"
-		im.saveIndexMeta(ctx, info)
+		_ = im.saveIndexMeta(ctx, info)
 		return nil, fmt.Errorf("cannot change distance metric")
 	}
 
 	if len(cfg.Metadata) > 0 {
-		info.Metadata = cfg.Metadata
+		info.Metadata = append([]string(nil), cfg.Metadata...)
 	}
 	if len(cfg.AuxColumns) > 0 {
-		info.AuxColumns = cfg.AuxColumns
+		info.AuxColumns = append([]string(nil), cfg.AuxColumns...)
 	}
 
 	info.Status = StatusReady
+	info.Error = ""
 	info.UpdatedAt = time.Now()
-	im.saveIndexMeta(ctx, info)
+	if err := im.saveIndexMeta(ctx, info); err != nil {
+		return nil, err
+	}
 	im.indexes[name] = info
 
 	return info, nil
@@ -255,18 +282,16 @@ func (im *IndexManager) Delete(ctx context.Context, name string) error {
 
 	info.Status = StatusDeleting
 	info.UpdatedAt = time.Now()
-	im.saveIndexMeta(ctx, info)
+	_ = im.saveIndexMeta(ctx, info)
 
-	_, err := im.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", info.TableName))
-	if err != nil {
+	if err := im.newVecStore(info).Drop(ctx); err != nil {
 		info.Status = StatusError
 		info.Error = err.Error()
-		im.saveIndexMeta(ctx, info)
-		return fmt.Errorf("drop table: %w", err)
+		_ = im.saveIndexMeta(ctx, info)
+		return err
 	}
 
-	_, err = im.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE name = ?", im.metaTable), name)
-	if err != nil {
+	if _, err := im.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE name = ?", im.metaTable), name); err != nil {
 		return fmt.Errorf("delete meta: %w", err)
 	}
 
@@ -283,8 +308,7 @@ func (im *IndexManager) Get(name string) (*IndexInfo, error) {
 		return nil, fmt.Errorf("index %q not found", name)
 	}
 
-	count, err := im.countVectors(context.Background(), info.TableName)
-	if err == nil {
+	if count, err := im.countVectors(context.Background(), info); err == nil {
 		info.VectorCount = count
 	}
 
@@ -295,7 +319,7 @@ func (im *IndexManager) List() []*IndexInfo {
 	im.mu.RLock()
 	defer im.mu.RUnlock()
 
-	var result []*IndexInfo
+	result := make([]*IndexInfo, 0, len(im.indexes))
 	for _, info := range im.indexes {
 		result = append(result, info)
 	}
@@ -310,24 +334,18 @@ func (im *IndexManager) Index(ctx context.Context, indexName string, items []Ind
 	if !exists {
 		return nil, fmt.Errorf("index %q not found", indexName)
 	}
-
 	if info.Status != StatusReady {
 		return nil, fmt.Errorf("index %q is not ready (status: %s)", indexName, info.Status)
 	}
 
 	im.mu.Lock()
 	info.Status = StatusUpdating
-	im.saveIndexMeta(ctx, info)
+	info.Error = ""
+	_ = im.saveIndexMeta(ctx, info)
 	im.mu.Unlock()
 
 	start := time.Now()
-	vs := vec.NewVecStore(vec.VecStoreConfig{
-		DB:         im.db,
-		TableName:  info.TableName,
-		Dimensions: info.Dimensions,
-		Distance:   vec.DistanceMetric(info.Distance),
-		Metadata:   info.Metadata,
-	})
+	vs := im.newVecStore(info)
 
 	result := &IndexResult{
 		IndexName: indexName,
@@ -392,11 +410,16 @@ func (im *IndexManager) Index(ctx context.Context, indexName string, items []Ind
 
 		processed := end
 		elapsed := time.Since(start)
-		rate := float64(processed) / elapsed.Seconds()
-		remaining := len(items) - processed
-		eta := time.Duration(float64(remaining)/rate) * time.Second
+		eta := time.Duration(0)
+		if processed > 0 && elapsed > 0 {
+			rate := float64(processed) / elapsed.Seconds()
+			if rate > 0 {
+				remaining := len(items) - processed
+				eta = time.Duration(float64(remaining)/rate) * time.Second
+			}
+		}
 
-		if progress != nil {
+		if progress != nil && len(batch) > 0 {
 			progress(Progress{
 				Total:     len(items),
 				Processed: processed,
@@ -414,10 +437,11 @@ func (im *IndexManager) Index(ctx context.Context, indexName string, items []Ind
 
 	im.mu.Lock()
 	info.Status = StatusReady
+	info.Error = ""
 	info.UpdatedAt = time.Now()
-	count, _ := im.countVectors(ctx, info.TableName)
+	count, _ := im.countVectors(ctx, info)
 	info.VectorCount = count
-	im.saveIndexMeta(ctx, info)
+	_ = im.saveIndexMeta(ctx, info)
 	im.mu.Unlock()
 
 	if progress != nil {
@@ -443,11 +467,7 @@ func (im *IndexManager) RemoveVectors(ctx context.Context, indexName string, ids
 		return 0, fmt.Errorf("index %q not found", indexName)
 	}
 
-	vs := vec.NewVecStore(vec.VecStoreConfig{
-		DB:        im.db,
-		TableName: info.TableName,
-	})
-
+	vs := im.newVecStore(info)
 	removed := 0
 	for _, id := range ids {
 		if err := vs.Delete(ctx, id); err == nil {
@@ -457,9 +477,9 @@ func (im *IndexManager) RemoveVectors(ctx context.Context, indexName string, ids
 
 	im.mu.Lock()
 	info.UpdatedAt = time.Now()
-	count, _ := im.countVectors(ctx, info.TableName)
+	count, _ := im.countVectors(ctx, info)
 	info.VectorCount = count
-	im.saveIndexMeta(ctx, info)
+	_ = im.saveIndexMeta(ctx, info)
 	im.mu.Unlock()
 
 	return removed, nil
@@ -476,43 +496,37 @@ func (im *IndexManager) Rebuild(ctx context.Context, indexName string, progress 
 
 	im.mu.Lock()
 	info.Status = StatusRebuilding
+	info.Error = ""
 	info.UpdatedAt = time.Now()
-	im.saveIndexMeta(ctx, info)
+	_ = im.saveIndexMeta(ctx, info)
 	im.mu.Unlock()
 
-	_, err := im.db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", info.TableName))
-	if err != nil {
+	vs := im.newVecStore(info)
+	if err := vs.Drop(ctx); err != nil {
 		im.mu.Lock()
 		info.Status = StatusError
 		info.Error = err.Error()
-		im.saveIndexMeta(ctx, info)
+		_ = im.saveIndexMeta(ctx, info)
 		im.mu.Unlock()
-		return nil, fmt.Errorf("drop table for rebuild: %w", err)
+		return nil, err
 	}
-
-	vs := vec.NewVecStore(vec.VecStoreConfig{
-		DB:         im.db,
-		TableName:  info.TableName,
-		Dimensions: info.Dimensions,
-		Distance:   vec.DistanceMetric(info.Distance),
-		Metadata:   info.Metadata,
-		AuxColumns: info.AuxColumns,
-	})
-
 	if err := vs.Init(ctx); err != nil {
 		im.mu.Lock()
 		info.Status = StatusError
 		info.Error = err.Error()
-		im.saveIndexMeta(ctx, info)
+		_ = im.saveIndexMeta(ctx, info)
 		im.mu.Unlock()
-		return nil, fmt.Errorf("recreate table: %w", err)
+		return nil, fmt.Errorf("recreate collection: %w", err)
 	}
+
+	completedAt := time.Now()
 
 	im.mu.Lock()
 	info.Status = StatusReady
-	info.UpdatedAt = time.Now()
+	info.Error = ""
+	info.UpdatedAt = completedAt
 	info.VectorCount = 0
-	im.saveIndexMeta(ctx, info)
+	_ = im.saveIndexMeta(ctx, info)
 	im.mu.Unlock()
 
 	if progress != nil {
@@ -525,8 +539,8 @@ func (im *IndexManager) Rebuild(ctx context.Context, indexName string, progress 
 
 	return &IndexResult{
 		IndexName:   indexName,
-		CompletedAt: time.Now(),
-		Duration:    time.Since(time.Now()),
+		CompletedAt: completedAt,
+		Duration:    0,
 	}, nil
 }
 
@@ -539,15 +553,7 @@ func (im *IndexManager) Search(ctx context.Context, indexName string, queryVecto
 		return nil, fmt.Errorf("index %q not found", indexName)
 	}
 
-	vs := vec.NewVecStore(vec.VecStoreConfig{
-		DB:         im.db,
-		TableName:  info.TableName,
-		Dimensions: info.Dimensions,
-		Distance:   vec.DistanceMetric(info.Distance),
-		Metadata:   info.Metadata,
-	})
-
-	return vs.Search(ctx, queryVector, limit)
+	return im.newVecStore(info).Search(ctx, queryVector, limit)
 }
 
 func (im *IndexManager) SearchByText(ctx context.Context, indexName string, queryText string, limit int) ([]vec.VecSearchResult, error) {
@@ -578,10 +584,19 @@ func (im *IndexManager) saveIndexMeta(ctx context.Context, info *IndexInfo) erro
 	return err
 }
 
-func (im *IndexManager) countVectors(ctx context.Context, tableName string) (int64, error) {
-	var count int64
-	err := im.db.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)).Scan(&count)
-	return count, err
+func (im *IndexManager) countVectors(ctx context.Context, info *IndexInfo) (int64, error) {
+	return im.newVecStore(info).Count(ctx)
+}
+
+func (im *IndexManager) newVecStore(info *IndexInfo) *vec.VecStore {
+	return vec.NewVecStore(vec.VecStoreConfig{
+		TableName:   info.TableName,
+		Dimensions:  info.Dimensions,
+		Distance:    vec.DistanceMetric(info.Distance),
+		Metadata:    info.Metadata,
+		AuxColumns:  info.AuxColumns,
+		PersistPath: im.vecDir,
+	})
 }
 
 type IndexItem struct {

@@ -3,41 +3,47 @@ package api
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	_ "modernc.org/sqlite"
-	_ "modernc.org/sqlite/vec"
-
 	"github.com/1024XEngineer/anyclaw/pkg/index"
+	"github.com/1024XEngineer/anyclaw/pkg/sqlite"
 )
 
 func setupTestServer(t *testing.T) (*Server, *mockEmbedder) {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sqlite.Open(sqlite.InMemoryConfig())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
 
 	embedder := &mockEmbedder{dim: 4}
-	im := index.NewIndexManager(db, embedder)
-	im.Init(context.Background())
+	im := index.NewIndexManager(db, embedder, index.WithVectorDir(t.TempDir()))
+	if err := im.Init(context.Background()); err != nil {
+		t.Fatalf("init index manager: %v", err)
+	}
 
-	im.Create(context.Background(), index.Config{
+	if _, err := im.Create(context.Background(), index.Config{
 		Name:       "test_index",
 		Dimensions: 4,
 		Distance:   "cosine",
-	})
+	}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
 
-	im.Index(context.Background(), "test_index", []index.IndexItem{
+	if _, err := im.Index(context.Background(), "test_index", []index.IndexItem{
 		{ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4}},
 		{ID: 2, Vector: []float32{0.5, 0.6, 0.7, 0.8}},
 		{ID: 3, Vector: []float32{0.9, 1.0, 0.1, 0.2}},
-	}, nil)
+	}, nil); err != nil {
+		t.Fatalf("index vectors: %v", err)
+	}
 
 	server := NewServer(ServerConfig{
 		IndexMgr: im,
