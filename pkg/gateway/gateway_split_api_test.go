@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/extensions/mcp"
 	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
 	gatewayauth "github.com/1024XEngineer/anyclaw/pkg/gateway/auth"
 )
@@ -97,6 +98,12 @@ func TestSplitAPIs_ConfigUsersRolesAndTasks(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("DELETE /auth/users = %d body=%s", rec.Code, rec.Body.String())
 		}
+
+		rec = httptest.NewRecorder()
+		server.handleUsers(rec, newAdminRequest(http.MethodPost, "/auth/users", `{"name":"bad-user","token":"token-3","permission_overrides":["unknown"]}`))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST /auth/users invalid permission = %d body=%s", rec.Code, rec.Body.String())
+		}
 	})
 
 	t.Run("roles api", func(t *testing.T) {
@@ -117,6 +124,12 @@ func TestSplitAPIs_ConfigUsersRolesAndTasks(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET /auth/roles/impact = %d", rec.Code)
 		}
+
+		rec = httptest.NewRecorder()
+		server.handleRoles(rec, newAdminRequest(http.MethodDelete, "/auth/roles?name=missing", ""))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("DELETE /auth/roles missing = %d body=%s", rec.Code, rec.Body.String())
+		}
 	})
 
 	t.Run("tasks api", func(t *testing.T) {
@@ -124,6 +137,12 @@ func TestSplitAPIs_ConfigUsersRolesAndTasks(t *testing.T) {
 		server.handleV2Tasks(rec, newAdminRequest(http.MethodGet, "/v2/tasks", ""))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET /v2/tasks = %d", rec.Code)
+		}
+
+		rec = httptest.NewRecorder()
+		server.handleV2Tasks(rec, newAdminRequest(http.MethodPost, "/v2/tasks", `{`))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST /v2/tasks = %d body=%s", rec.Code, rec.Body.String())
 		}
 
 		rec = httptest.NewRecorder()
@@ -168,6 +187,23 @@ func TestSplitAPIs_MarketMCPProvidersAndBindings(t *testing.T) {
 			t.Fatalf("GET /market/plugins/history = %d body=%s", rec.Code, rec.Body.String())
 		}
 
+		for _, path := range []string{
+			"/market/plugins/plugin-1/update",
+			"/market/plugins/plugin-1/uninstall",
+			"/market/plugins/plugin-1/rollback?version=v1",
+			"/market/plugins/plugin-1/versions",
+		} {
+			method := http.MethodPost
+			if strings.Contains(path, "versions") {
+				method = http.MethodGet
+			}
+			rec = httptest.NewRecorder()
+			server.handleMarketPluginAction(rec, newAdminRequest(method, path, ""))
+			if rec.Code == 0 {
+				t.Fatalf("unexpected market action status for %s", path)
+			}
+		}
+
 		rec = httptest.NewRecorder()
 		server.handleMarketInstalled(rec, newAdminRequest(http.MethodGet, "/market/installed", ""))
 		if rec.Code != http.StatusOK {
@@ -201,10 +237,23 @@ func TestSplitAPIs_MarketMCPProvidersAndBindings(t *testing.T) {
 			t.Fatalf("POST /mcp/call invalid json = %d", rec.Code)
 		}
 
+		server.mcpRegistry = mcp.NewRegistry()
+		rec = httptest.NewRecorder()
+		server.handleMCPCall(rec, newAdminRequest(http.MethodPost, "/mcp/call", `{}`))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST /mcp/call missing target = %d body=%s", rec.Code, rec.Body.String())
+		}
+
 		rec = httptest.NewRecorder()
 		server.handleMCPServerAction(rec, newAdminRequest(http.MethodGet, "/mcp/servers/", ""))
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("GET /mcp/servers/ missing name = %d", rec.Code)
+		}
+
+		rec = httptest.NewRecorder()
+		server.handleMCPServerAction(rec, newAdminRequest(http.MethodGet, "/mcp/servers/missing", ""))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("GET /mcp/servers/missing = %d body=%s", rec.Code, rec.Body.String())
 		}
 	})
 
@@ -213,6 +262,12 @@ func TestSplitAPIs_MarketMCPProvidersAndBindings(t *testing.T) {
 		server.handleProviders(rec, newAdminRequest(http.MethodGet, "/providers", ""))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET /providers = %d", rec.Code)
+		}
+
+		rec = httptest.NewRecorder()
+		server.handleProviderUpsert(rec, newAdminRequest(http.MethodPost, "/providers", `{`))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST /providers invalid body = %d body=%s", rec.Code, rec.Body.String())
 		}
 
 		rec = httptest.NewRecorder()
@@ -225,6 +280,12 @@ func TestSplitAPIs_MarketMCPProvidersAndBindings(t *testing.T) {
 		server.handleProviderDelete(rec, newAdminRequest(http.MethodDelete, "/providers?id=provider-2", ""))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("DELETE /providers = %d body=%s", rec.Code, rec.Body.String())
+		}
+
+		rec = httptest.NewRecorder()
+		server.handleProviderDelete(rec, newAdminRequest(http.MethodDelete, "/providers?id=missing", ""))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("DELETE /providers missing = %d body=%s", rec.Code, rec.Body.String())
 		}
 
 		provider := config.ProviderProfile{ID: "provider-3"}
@@ -273,6 +334,12 @@ func TestSplitAPIs_MarketMCPProvidersAndBindings(t *testing.T) {
 		server.handleAgents(rec, newAdminRequest(http.MethodGet, "/agents", ""))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET /agents = %d", rec.Code)
+		}
+
+		rec = httptest.NewRecorder()
+		server.handleAgents(rec, newAdminRequest(http.MethodDelete, "/agents?name=missing", ""))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("DELETE /agents missing = %d body=%s", rec.Code, rec.Body.String())
 		}
 
 		payload := bytes.NewBufferString(`{"name":"helper-2","provider_ref":"provider-1"}`)
