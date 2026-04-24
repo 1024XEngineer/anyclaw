@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -206,7 +207,9 @@ func runSessionsCommand(args []string) error {
 
 	path := "/sessions"
 	if strings.TrimSpace(*workspace) != "" {
-		path += "?workspace=" + strings.TrimSpace(*workspace)
+		query := url.Values{}
+		query.Set("workspace", strings.TrimSpace(*workspace))
+		path += "?" + query.Encode()
 	}
 
 	var sessions []sessionListItem

@@ -338,16 +338,21 @@ func TestRunSessionsCommandFiltersActiveSessions(t *testing.T) {
 func TestRunSessionsCommandSupportsWorkspaceFilter(t *testing.T) {
 	clearModelsCLIEnv(t)
 
+	const workspace = "demo team&A"
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.String() != "/sessions?workspace=demo" {
-			t.Fatalf("unexpected path: %s", r.URL.String())
+		if r.URL.Path != "/sessions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("workspace"); got != workspace {
+			t.Fatalf("unexpected workspace query: %q", got)
 		}
 		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{
 				"id":            "sess-1",
 				"title":         "Demo Session",
 				"agent":         "main",
-				"workspace":     "demo",
+				"workspace":     workspace,
 				"message_count": 2,
 				"updated_at":    "2026-04-24T10:00:00Z",
 			},
@@ -357,12 +362,12 @@ func TestRunSessionsCommandSupportsWorkspaceFilter(t *testing.T) {
 
 	configPath := writeStatusCLIConfig(t, server.URL, "secret-token")
 	stdout, _, err := captureCLIOutput(t, func() error {
-		return runSessionsCommand([]string{"--config", configPath, "--workspace", "demo"})
+		return runSessionsCommand([]string{"--config", configPath, "--workspace", workspace})
 	})
 	if err != nil {
 		t.Fatalf("runSessionsCommand workspace: %v", err)
 	}
-	if !strings.Contains(stdout, "workspace=demo") {
+	if !strings.Contains(stdout, "workspace="+workspace) {
 		t.Fatalf("expected workspace in output, got %q", stdout)
 	}
 }
