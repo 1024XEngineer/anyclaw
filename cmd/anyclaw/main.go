@@ -29,6 +29,8 @@ func runAnyClawCLI(args []string) error {
 		return runModelsCommand(args[1:])
 	case "plugin":
 		return runPluginCommand(args[1:])
+	case "skill", "skills":
+		return runSkillCommand(args[1:])
 	default:
 		printCLIUsage()
 		return fmt.Errorf("unknown command: %s", args[0])
@@ -41,6 +43,7 @@ Usage:
   anyclaw mcp <subcommand>            Run MCP-related commands
   anyclaw models <subcommand>         Run model management commands
   anyclaw plugin <subcommand>         Run plugin management commands
+  anyclaw skill <subcommand>          Run skill management commands
 `)
 }
 
