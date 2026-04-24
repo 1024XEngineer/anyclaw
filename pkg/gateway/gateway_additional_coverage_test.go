@@ -203,6 +203,12 @@ func TestGatewayAdditionalCoverage_ChatV2AndHelpers(t *testing.T) {
 
 	server.chatModule = fakeChatManager{}
 	rec = httptest.NewRecorder()
+	server.handleV2Chat(rec, newAdminRequest(http.MethodPost, "/v2/chat", `{"agent_name":"helper","message":"hello"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v2/chat = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
 	server.handleV2ChatSessions(rec, newAdminRequest(http.MethodGet, "/v2/chat/sessions", ""))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /v2/chat/sessions = %d", rec.Code)
@@ -212,5 +218,22 @@ func TestGatewayAdditionalCoverage_ChatV2AndHelpers(t *testing.T) {
 	server.handleV2ChatSessionByID(rec, newAdminRequest(http.MethodDelete, "/v2/chat/sessions/demo", ""))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("DELETE /v2/chat/sessions/id = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	server.store.AppendTask(&state.Task{ID: "task-1", Workspace: "default", Status: "queued", Assistant: "helper"})
+	rec = httptest.NewRecorder()
+	server.handleV2Tasks(rec, newAdminRequest(http.MethodGet, "/v2/tasks?workspace=default&status=queued&assistant=helper", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /v2/tasks filtered = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.handleV2TaskByID(rec, newAdminRequest(http.MethodGet, "/v2/tasks/", ""))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("GET /v2/tasks/ = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	if _, _, _, err := server.v2TaskHierarchy(newAdminRequest(http.MethodGet, "/v2/tasks", ""), "missing-session"); err == nil {
+		t.Fatal("expected missing session hierarchy error")
 	}
 }
