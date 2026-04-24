@@ -3,14 +3,15 @@ module github.com/1024XEngineer/anyclaw
 go 1.25.0
 
 require (
+	github.com/anyclaw/anyclaw v0.0.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/anyclaw/anyclaw v0.0.0
 	github.com/chromedp/cdproto v0.0.0-20240801214329-3f85d328b335
 	github.com/chromedp/chromedp v0.10.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/philippgille/chromem-go v0.7.0
 	github.com/wailsapp/wails/v2 v2.11.0
 	golang.org/x/sys v0.42.0
 	golang.org/x/text v0.22.0
