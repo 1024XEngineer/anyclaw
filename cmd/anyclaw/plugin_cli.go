@@ -43,6 +43,7 @@ func runPluginCommand(args []string) error {
 func runPluginNew(args []string) error {
 	fs := flag.NewFlagSet("plugin new", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
+	configPath := fs.String("config", "anyclaw.json", "path to config file")
 	kind := fs.String("kind", "tool", "plugin kind: tool|ingress|channel|app|node|surface")
 	name := fs.String("name", "", "plugin name")
 	if err := fs.Parse(args); err != nil {
@@ -55,7 +56,12 @@ func runPluginNew(args []string) error {
 	if err != nil {
 		return err
 	}
-	return scaffoldPlugin(safeName, *kind)
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	pluginRoot := config.ResolvePath(*configPath, cfg.Plugins.Dir)
+	return scaffoldPlugin(pluginRoot, safeName, *kind)
 }
 
 type pluginDoctorIssue struct {
@@ -82,8 +88,8 @@ Usage:
 `)
 }
 
-func scaffoldPlugin(name string, kind string) error {
-	pluginDir := filepath.Join("plugins", name)
+func scaffoldPlugin(pluginRoot string, name string, kind string) error {
+	pluginDir := filepath.Join(pluginRoot, name)
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 		return err
 	}

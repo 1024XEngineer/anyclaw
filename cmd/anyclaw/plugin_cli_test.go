@@ -24,7 +24,7 @@ func TestScaffoldPluginSupportsNodeKind(t *testing.T) {
 		_ = os.Chdir(wd)
 	}()
 
-	if err := scaffoldPlugin("demo-node", "node"); err != nil {
+	if err := scaffoldPlugin("plugins", "demo-node", "node"); err != nil {
 		t.Fatalf("scaffoldPlugin node: %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestScaffoldPluginSupportsSurfaceKind(t *testing.T) {
 		_ = os.Chdir(wd)
 	}()
 
-	if err := scaffoldPlugin("demo-surface", "surface"); err != nil {
+	if err := scaffoldPlugin("plugins", "demo-surface", "surface"); err != nil {
 		t.Fatalf("scaffoldPlugin surface: %v", err)
 	}
 
@@ -162,6 +162,39 @@ func TestRunPluginCommandNewScaffoldsCodexManifest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join("plugins", "demo-tool", ".codex-plugin", "plugin.json")); err != nil {
 		t.Fatalf("expected codex plugin manifest: %v", err)
+	}
+}
+
+func TestRunPluginCommandNewUsesConfiguredPluginDir(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	tempDir := t.TempDir()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Chdir tempDir: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(wd)
+	}()
+
+	cfg := config.DefaultConfig()
+	cfg.Plugins.Dir = filepath.Join("custom", "plugins")
+	configPath := filepath.Join(tempDir, "configs", "anyclaw.json")
+	if err := cfg.Save(configPath); err != nil {
+		t.Fatalf("Save config: %v", err)
+	}
+
+	if err := runPluginCommand([]string{"new", "--config", configPath, "--name", "demo-tool", "--kind", "tool"}); err != nil {
+		t.Fatalf("runPluginCommand new with config: %v", err)
+	}
+
+	customDir := filepath.Join(tempDir, "configs", "custom", "plugins", "demo-tool")
+	if _, err := os.Stat(filepath.Join(customDir, ".codex-plugin", "plugin.json")); err != nil {
+		t.Fatalf("expected codex plugin manifest in configured dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, "plugins", "demo-tool")); !os.IsNotExist(err) {
+		t.Fatalf("expected default plugins dir to remain unused, got %v", err)
 	}
 }
 
