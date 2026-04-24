@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -37,6 +38,8 @@ func runAnyClawCLI(args []string) error {
 		return runDoctorCommand(args[1:])
 	case "onboard", "setup":
 		return runOnboardCommand(args[1:])
+	case "gateway":
+		return runGatewayCommand(context.Background(), args[1:])
 	default:
 		printCLIUsage()
 		return fmt.Errorf("unknown command: %s", args[0])
@@ -52,6 +55,7 @@ Usage:
   anyclaw skill <subcommand>          Run skill management commands
   anyclaw doctor [options]            Run configuration diagnostics
   anyclaw onboard/setup [options]     Run first-run model onboarding
+  anyclaw gateway <subcommand>        Run gateway management commands
 `)
 }
 
