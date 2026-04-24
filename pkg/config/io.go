@@ -10,6 +10,14 @@ import (
 )
 
 func Load(path string) (*Config, error) {
+	return load(path, true)
+}
+
+func LoadPersisted(path string) (*Config, error) {
+	return load(path, false)
+}
+
+func load(path string, includeEnvOverrides bool) (*Config, error) {
 	cfg := DefaultConfig()
 
 	data, err := os.ReadFile(path)
@@ -28,7 +36,9 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
-	applyEnvOverrides(cfg)
+	if includeEnvOverrides {
+		applyEnvOverrides(cfg)
+	}
 	normalizeLoadedConfig(cfg)
 
 	if err := cfg.Validate(); err != nil {

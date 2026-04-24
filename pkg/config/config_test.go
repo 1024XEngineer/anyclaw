@@ -351,6 +351,35 @@ func TestEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadPersistedSkipsEnvOverrides(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("OPENAI_API_KEY", "test-key-123")
+	t.Setenv("LLM_PROVIDER", "anthropic")
+	t.Setenv("LLM_MODEL", "claude-sonnet-4-7")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	cfg := DefaultConfig()
+	cfg.LLM.Provider = "openai"
+	cfg.LLM.Model = "gpt-4o-mini"
+	data, _ := json.MarshalIndent(cfg, "", "  ")
+	os.WriteFile(path, data, 0o644)
+
+	loaded, err := LoadPersisted(path)
+	if err != nil {
+		t.Fatalf("loading persisted config should succeed: %v", err)
+	}
+	if loaded.LLM.APIKey != "" {
+		t.Fatalf("expected API key to stay empty without env overrides, got %q", loaded.LLM.APIKey)
+	}
+	if loaded.LLM.Provider != "openai" {
+		t.Fatalf("expected provider from file, got %q", loaded.LLM.Provider)
+	}
+	if loaded.LLM.Model != "gpt-4o-mini" {
+		t.Fatalf("expected model from file, got %q", loaded.LLM.Model)
+	}
+}
+
 func TestSaveAndReload(t *testing.T) {
 	clearConfigEnv(t)
 

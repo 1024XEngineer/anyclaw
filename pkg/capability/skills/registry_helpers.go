@@ -141,6 +141,9 @@ func writeSkillFile(skillDir string, definition skillFileDefinition) error {
 
 func installSkillDefinition(destDir string, skillName string, definition skillFileDefinition) error {
 	skillDir := filepath.Join(destDir, skillName)
+	if !pathWithinBase(destDir, skillDir) {
+		return fmt.Errorf("skill install path must stay within destination directory")
+	}
 	return writeSkillFile(skillDir, definition)
 }
 
