@@ -248,6 +248,20 @@ func TestRegistryHelperMarshalAndWriteHelpers(t *testing.T) {
 	}
 }
 
+func TestInstallSkillDefinitionRejectsTraversal(t *testing.T) {
+	dir := t.TempDir()
+	definition := skillFileDefinition{
+		Name:        "writer",
+		Description: "Writes docs",
+		Version:     "1.0.0",
+		Prompts:     map[string]string{"system": "Write clearly."},
+	}
+
+	if err := installSkillDefinition(dir, filepath.Join("..", "escape"), definition); err == nil {
+		t.Fatal("expected traversal install to be rejected")
+	}
+}
+
 func TestDoRemoteRequestRejectsBadURL(t *testing.T) {
 	client := newRemoteClient(time.Second)
 	if _, err := doRemoteRequest(context.Background(), client, "://bad"); err == nil {

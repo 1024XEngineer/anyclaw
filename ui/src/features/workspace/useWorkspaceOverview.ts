@@ -195,7 +195,7 @@ type SnapshotAgent = {
   permissionLevel: string;
   providerRef: string;
   role: string;
-  skills: Array<{ enabled?: boolean; name?: string }>;
+  skills: ReadonlyArray<{ enabled?: boolean; name?: string }>;
   workingDir: string;
 };
 
@@ -209,7 +209,7 @@ type SnapshotSkill = {
 };
 
 type SnapshotExtension = {
-  channels: string[];
+  channels: ReadonlyArray<string>;
   name: string;
 };
 
@@ -219,45 +219,11 @@ type SnapshotConfiguredChannel = {
   key: string;
 };
 
-type SnapshotWorkspace = {
-  agent: {
-    description: string;
-    language: string;
-    name: string;
-    permissionLevel: string;
-    workDir: string;
-    workingDir: string;
-  };
-  agents: SnapshotAgent[];
-  configuredChannels: SnapshotConfiguredChannel[];
-  extensions: SnapshotExtension[];
-  gateway: {
-    host: string;
-    port: number;
-  };
-  generatedAt: string;
-  orchestrator: {
-    enabled: boolean;
-    maxConcurrentAgents: number;
-    retryCount: number;
-  };
-  providers: SnapshotProvider[];
-  security: {
-    defaultDenyDM: boolean;
-    mentionGate: boolean;
-  };
-  skills: SnapshotSkill[];
-};
-
-const snapshot = workspaceSnapshot as unknown as SnapshotWorkspace;
-
-export function resolveSkillEnabled(liveSkill?: LiveSkill) {
-  return liveSkill?.enabled ?? liveSkill?.loaded ?? true;
-}
-
-export function resolveSkillLoaded(liveSkill?: LiveSkill) {
-  return liveSkill?.loaded ?? true;
-}
+const snapshotProviders = workspaceSnapshot.providers as readonly SnapshotProvider[];
+const snapshotAgents = workspaceSnapshot.agents as readonly SnapshotAgent[];
+const snapshotSkills = workspaceSnapshot.skills as readonly SnapshotSkill[];
+const snapshotExtensions = workspaceSnapshot.extensions as readonly SnapshotExtension[];
+const snapshotConfiguredChannels = workspaceSnapshot.configuredChannels as readonly SnapshotConfiguredChannel[];
 
 const channelMeta: Record<string, { name: string; note: string; summary: string }> = {
   wechat: {
@@ -321,10 +287,6 @@ function fallbackAgentDescription(name: string) {
   return `${name} 已存在于当前仓库结构中，后续可以继续接入更细的实时状态。`;
 }
 
-function fallbackSkillDescription(name: string) {
-  return `${name} 已经存在于本地技能目录中。`;
-}
-
 function normalizeLanguage(language: string) {
   if (language.toUpperCase() === "CN") return "中文";
   if (language.toUpperCase() === "EN") return "English";
@@ -368,28 +330,6 @@ async function fetchLivePayload(): Promise<LivePayload> {
   };
 }
 
-export function mergeOverviewAgentNames(liveAgents: Array<{ name?: string }>) {
-  const snapshotNames = snapshot.agents.map((agent) => agent.name);
-  const liveNames = [...new Set(
-    liveAgents
-      .map((agent) => agent.name?.trim() ?? "")
-      .filter((name) => name !== ""),
-  )];
-
-  return [...snapshotNames, ...liveNames.filter((name) => !snapshotNames.includes(name))];
-}
-
-export function mergeOverviewSkillNames(liveSkills: Array<{ name?: string }>) {
-  const snapshotNames = snapshot.skills.map((skill) => skill.name);
-  const liveNames = [...new Set(
-    liveSkills
-      .map((skill) => skill.name?.trim() ?? "")
-      .filter((name) => name !== ""),
-  )];
-
-  return [...snapshotNames, ...liveNames.filter((name) => !snapshotNames.includes(name))];
-}
-
 function buildProviderRecords(live: LivePayload): ProviderRecord[] {
   const liveMap = new Map(
     live.providers
@@ -397,10 +337,10 @@ function buildProviderRecords(live: LivePayload): ProviderRecord[] {
       .map((provider) => [provider.id!.trim(), provider]),
   );
   const snapshotMap = new Map<string, SnapshotProvider>(
-    snapshot.providers.map((provider) => [provider.id, provider]),
+    snapshotProviders.map((provider) => [provider.id, provider]),
   );
   const orderedIds = [
-    ...snapshot.providers.map((provider) => provider.id),
+    ...snapshotProviders.map((provider) => provider.id),
     ...[...liveMap.keys()].filter((id) => !snapshotMap.has(id)),
   ];
 
@@ -424,65 +364,54 @@ function buildProviderRecords(live: LivePayload): ProviderRecord[] {
 
 function buildAgentRecords(live: LivePayload, providers: ProviderRecord[]): AgentRecord[] {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const snapshotMap = new Map<string, SnapshotAgent>(
-    snapshot.agents.map((agent) => [agent.name, agent]),
-  );
   const liveMap = new Map(
     live.agents
       .filter((agent) => (agent.name ?? "").trim() !== "")
       .map((agent) => [agent.name!.trim(), agent]),
   );
-  const orderedNames = mergeOverviewAgentNames(live.agents);
 
-  const items: AgentRecord[] = orderedNames.map((name) => {
-    const agent = snapshotMap.get(name);
-    const liveAgent = liveMap.get(name);
-    const providerRef = agent?.providerRef || liveAgent?.provider?.trim() || "";
-    const linkedProvider = providerById.get(providerRef);
+  const items: AgentRecord[] = snapshotAgents.map((agent) => {
+    const liveAgent = liveMap.get(agent.name);
+    const linkedProvider = providerById.get(agent.providerRef);
     const providerName =
       liveAgent?.provider_name?.trim() ||
       linkedProvider?.name ||
       liveAgent?.provider?.trim() ||
       "默认 Provider";
     const skillsCount =
-      liveAgent?.skills?.filter((skill) => skill?.enabled ?? true).length ?? agent?.skills.length ?? 0;
-    const active = liveAgent?.active ?? agent?.active ?? false;
-    const enabled = liveAgent?.enabled ?? agent?.enabled ?? true;
+      liveAgent?.skills?.filter((skill) => skill?.enabled ?? true).length ?? agent.skills.length;
+    const active = liveAgent?.active ?? agent.active;
+    const enabled = liveAgent?.enabled ?? agent.enabled;
     const model =
       liveAgent?.default_model?.trim() ||
-      agent?.defaultModel ||
-      linkedProvider?.model ||
+      agent.defaultModel ||
       (providers.find((provider) => provider.isDefault)?.model ?? "");
-    const permissionLevel = liveAgent?.permission_level?.trim() || agent?.permissionLevel || "limited";
-    const workingDir = liveAgent?.working_dir?.trim() || agent?.workingDir || snapshot.agent.workingDir;
-    const role =
-      liveAgent?.role?.trim() || (agent?.role === "main" ? "主 Agent" : agent?.role || "Agent Profile");
 
     return {
       active,
       model,
-      name,
-      permissionLevel,
+      name: agent.name,
+      permissionLevel: liveAgent?.permission_level?.trim() || agent.permissionLevel,
       providerName,
-      role,
+      role: liveAgent?.role?.trim() || (agent.role === "main" ? "主 Agent" : "Agent Profile"),
       skillsCount,
       status: active ? "当前启用" : enabled ? "已配置" : "已停用",
       summary: compactText(
-        liveAgent?.description?.trim() || agent?.description || "",
-        fallbackAgentDescription(name),
+        liveAgent?.description?.trim() || agent.description,
+        fallbackAgentDescription(agent.name),
       ),
       tags: [
         active ? "当前入口" : "候选 Agent",
-        permissionLevel,
+        liveAgent?.permission_level?.trim() || agent.permissionLevel,
         providerName,
         model,
         `${skillsCount} skills`,
       ].filter(Boolean),
-      workingDir,
+      workingDir: liveAgent?.working_dir?.trim() || agent.workingDir,
     };
   });
 
-  if (snapshot.orchestrator.enabled) {
+  if (workspaceSnapshot.orchestrator.enabled) {
     items.push({
       active: false,
       model: "",
@@ -492,12 +421,12 @@ function buildAgentRecords(live: LivePayload, providers: ProviderRecord[]): Agen
       role: "协同编排",
       skillsCount: 0,
       status: "已开启",
-      summary: `当前已开启多 Agent 编排，并发上限 ${snapshot.orchestrator.maxConcurrentAgents}。`,
+      summary: `当前已开启多 Agent 编排，并发上限 ${workspaceSnapshot.orchestrator.maxConcurrentAgents}。`,
       tags: [
-        `${snapshot.orchestrator.maxConcurrentAgents} 并发`,
-        `${snapshot.orchestrator.retryCount} 次重试`,
+        `${workspaceSnapshot.orchestrator.maxConcurrentAgents} 并发`,
+        `${workspaceSnapshot.orchestrator.retryCount} 次重试`,
       ],
-      workingDir: snapshot.agent.workingDir,
+      workingDir: workspaceSnapshot.agent.workingDir,
     });
   }
 
@@ -505,33 +434,28 @@ function buildAgentRecords(live: LivePayload, providers: ProviderRecord[]): Agen
 }
 
 function buildSkillRecords(live: LivePayload): SkillRecord[] {
-  const snapshotMap = new Map<string, SnapshotSkill>(
-    snapshot.skills.map((skill) => [skill.name, skill]),
-  );
   const liveMap = new Map(
     live.skills
       .filter((skill) => (skill.name ?? "").trim() !== "")
       .map((skill) => [skill.name!.trim(), skill]),
   );
-  const orderedNames = mergeOverviewSkillNames(live.skills);
 
-  return orderedNames
-    .map((name) => {
-      const skill = snapshotMap.get(name);
-      const liveSkill = liveMap.get(name);
+  return snapshotSkills
+    .map((skill) => {
+      const liveSkill = liveMap.get(skill.name);
 
       return {
         description: normalizeSkillDescription(
-          liveSkill?.description?.trim() || skill?.description || "",
-          fallbackSkillDescription(name),
+          liveSkill?.description?.trim() || skill.description,
+          `${skill.name} 已经存在于本地技能目录中。`,
         ),
-        enabled: resolveSkillEnabled(liveSkill),
-        installCommand: liveSkill?.installHint?.trim() || skill?.installCommand || "",
-        loaded: resolveSkillLoaded(liveSkill),
-        name,
-        registry: liveSkill?.registry?.trim() || skill?.registry || "",
-        source: liveSkill?.source?.trim() || skill?.source || "local",
-        version: liveSkill?.version?.trim() || skill?.version || "",
+        enabled: liveSkill?.enabled ?? (liveSkill?.loaded ?? liveSkill !== undefined),
+        installCommand: liveSkill?.installHint?.trim() || skill.installCommand,
+        loaded: liveSkill?.loaded ?? liveSkill !== undefined,
+        name: skill.name,
+        registry: liveSkill?.registry?.trim() || skill.registry,
+        source: liveSkill?.source?.trim() || skill.source,
+        version: liveSkill?.version?.trim() || skill.version,
       };
     })
     .sort((left, right) => Number(right.loaded) - Number(left.loaded) || left.name.localeCompare(right.name));
@@ -562,10 +486,10 @@ function buildChannelRecords(live: LivePayload): ChannelRecord[] {
       .map((channel) => [channel.name!.trim().toLowerCase(), channel]),
   );
   const configuredMap = new Map<string, SnapshotConfiguredChannel>(
-    snapshot.configuredChannels.map((channel) => [channel.key, channel]),
+    snapshotConfiguredChannels.map((channel) => [channel.key, channel]),
   );
   const extensionChannels = new Set<string>(
-    snapshot.extensions.flatMap((extension) => [...extension.channels]),
+    snapshotExtensions.flatMap((extension) => [...extension.channels]),
   );
 
   return priorityChannelOrder.map((slug) => {
@@ -603,21 +527,21 @@ function buildRuntimeProfile(
   const status = live.status;
   const gatewayOnline = status !== null;
   const gatewayAddress =
-    status?.address?.trim() || `${snapshot.gateway.host}:${snapshot.gateway.port}`;
+    status?.address?.trim() || `${workspaceSnapshot.gateway.host}:${workspaceSnapshot.gateway.port}`;
 
   return {
     address: gatewayAddress,
-    description: activeAgent?.summary ?? snapshot.agent.description,
+    description: activeAgent?.summary ?? workspaceSnapshot.agent.description,
     events: status?.events ?? 0,
     gatewayOnline,
     gatewaySource: gatewayOnline ? "网关在线 + 仓库快照" : "仓库快照",
-    language: normalizeLanguage(snapshot.agent.language),
+    language: normalizeLanguage(workspaceSnapshot.agent.language),
     model: status?.model?.trim() || activeAgent?.model || defaultProvider?.model || "未配置",
-    name: activeAgent?.name ?? snapshot.agent.name,
-    orchestrator: snapshot.orchestrator.enabled
-      ? `已开启 · 并发 ${snapshot.orchestrator.maxConcurrentAgents}`
+    name: activeAgent?.name ?? workspaceSnapshot.agent.name,
+    orchestrator: workspaceSnapshot.orchestrator.enabled
+      ? `已开启 · 并发 ${workspaceSnapshot.orchestrator.maxConcurrentAgents}`
       : "未开启",
-    permission: activeAgent?.permissionLevel ?? snapshot.agent.permissionLevel,
+    permission: activeAgent?.permissionLevel ?? workspaceSnapshot.agent.permissionLevel,
     provider: status?.provider?.trim() || defaultProvider?.provider || "unknown",
     providerLabel: defaultProvider?.name || "默认 Provider",
     providersCount: providers.length,
@@ -628,8 +552,8 @@ function buildRuntimeProfile(
     startedAt: status?.started_at?.trim() || "",
     title: activeAgent?.active ? "当前主 Agent" : "默认主 Agent",
     tools: status?.tools ?? 0,
-    workDir: status?.work_dir?.trim() || snapshot.agent.workDir,
-    workspace: status?.working_dir?.trim() || snapshot.agent.workingDir,
+    workDir: status?.work_dir?.trim() || workspaceSnapshot.agent.workDir,
+    workspace: status?.working_dir?.trim() || workspaceSnapshot.agent.workingDir,
   };
 }
 
@@ -699,8 +623,8 @@ function buildChannelSettings(channels: ChannelRecord[], extensionAdapters: stri
     },
     {
       label: "安全策略",
-      value: snapshot.security.mentionGate ? "提及门已开启" : "提及门未开启",
-      hint: snapshot.security.defaultDenyDM ? "默认拒绝私信开启。" : "默认私信放开。",
+      value: workspaceSnapshot.security.mentionGate ? "提及门已开启" : "提及门未开启",
+      hint: workspaceSnapshot.security.defaultDenyDM ? "默认拒绝私信开启。" : "默认私信放开。",
     },
   ];
 }
@@ -710,7 +634,7 @@ function buildOverview(live: LivePayload): WorkspaceOverview {
   const localAgents = buildAgentRecords(live, providers);
   const localSkills = buildSkillRecords(live);
   const priorityChannels = buildChannelRecords(live);
-  const extensionAdapters = snapshot.extensions.map((extension) => extension.name);
+  const extensionAdapters = snapshotExtensions.map((extension) => extension.name);
   const runtimeProfile = buildRuntimeProfile(live, providers, localAgents, localSkills);
 
   return {
@@ -721,7 +645,7 @@ function buildOverview(live: LivePayload): WorkspaceOverview {
     localAgents,
     localSkills,
     meta: {
-      generatedAt: snapshot.generatedAt,
+      generatedAt: workspaceSnapshot.generatedAt,
       liveConnected: runtimeProfile.gatewayOnline,
       sourceLabel: runtimeProfile.gatewaySource,
     },
