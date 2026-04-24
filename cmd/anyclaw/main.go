@@ -32,6 +32,8 @@ func runAnyClawCLI(args []string) error {
 		return runModelsCommand(args[1:])
 	case "plugin":
 		return runPluginCommand(args[1:])
+	case "channels":
+		return runChannelsCommand(args[1:])
 	case "skill", "skills":
 		return runSkillCommand(args[1:])
 	case "doctor":
@@ -52,6 +54,7 @@ Usage:
   anyclaw mcp <subcommand>            Run MCP-related commands
   anyclaw models <subcommand>         Run model management commands
   anyclaw plugin <subcommand>         Run plugin management commands
+  anyclaw channels <subcommand>       Run channels management commands
   anyclaw skill <subcommand>          Run skill management commands
   anyclaw doctor [options]            Run configuration diagnostics
   anyclaw onboard/setup [options]     Run first-run model onboarding
