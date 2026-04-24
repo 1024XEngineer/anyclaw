@@ -26,12 +26,9 @@ type RuntimeSnapshot struct {
 
 func NewRuntimeSnapshot(secrets map[string]*SecretEntry, source string) *RuntimeSnapshot {
 	rs := &RuntimeSnapshot{
-		secrets:   make(map[string]*SecretEntry),
+		secrets:   cloneEntryMap(secrets),
 		createdAt: time.Now().UTC(),
 		source:    source,
-	}
-	for k, v := range secrets {
-		rs.secrets[k] = v
 	}
 	rs.version = 1
 	rs.checksum = computeRuntimeChecksum(rs.secrets)
@@ -61,7 +58,7 @@ func (rs *RuntimeSnapshot) GetAll() map[string]*SecretEntry {
 	result := make(map[string]*SecretEntry)
 	for k, v := range rs.secrets {
 		if v.ExpiresAt == nil || time.Now().Before(*v.ExpiresAt) {
-			result[k] = v
+			result[k] = cloneEntry(v)
 		}
 	}
 	return result
@@ -108,10 +105,7 @@ func (rs *RuntimeSnapshot) Update(secrets map[string]*SecretEntry) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
-	rs.secrets = make(map[string]*SecretEntry)
-	for k, v := range secrets {
-		rs.secrets[k] = v
-	}
+	rs.secrets = cloneEntryMap(secrets)
 	atomic.AddUint64(&rs.version, 1)
 	rs.createdAt = time.Now().UTC()
 	rs.checksum = computeRuntimeChecksum(rs.secrets)
@@ -241,7 +235,7 @@ func (rs *RuntimeSnapshot) ToSnapshot() *Snapshot {
 
 	secrets := make(map[string]*SecretEntry)
 	for k, v := range rs.secrets {
-		secrets[k] = v
+		secrets[k] = cloneEntry(v)
 	}
 
 	return &Snapshot{
@@ -354,7 +348,7 @@ func (am *ActivationManager) CreateSnapshot(source string) (*Snapshot, error) {
 	if snap == nil {
 		return nil, fmt.Errorf("no active snapshot")
 	}
-	return am.store.CreateSnapshot(source)
+	return am.store.CreateSnapshotFromSecrets(source, snap.GetAll())
 }
 
 func (am *ActivationManager) GetActiveLock() *ActivationLock {
@@ -382,6 +376,10 @@ func (am *ActivationManager) RequestActivation(requestedBy, reason string) (*Act
 		(am.activeLock.State == LockPending || am.activeLock.State == LockActivated) &&
 		(am.activeLock.ExpiresAt == nil || time.Now().Before(*am.activeLock.ExpiresAt)) {
 		return nil, fmt.Errorf("activation already pending")
+	}
+
+	if am.activeSnap == nil {
+		return nil, fmt.Errorf("no active snapshot")
 	}
 
 	snap := am.activeSnap.ToSnapshot()
@@ -576,7 +574,7 @@ func (am *ActivationManager) AccessSecret(key string, actor string) (*SecretEntr
 		Success:   true,
 	})
 
-	return entry, nil
+	return cloneEntry(entry), nil
 }
 
 func (am *ActivationManager) Status() map[string]interface{} {
@@ -876,6 +874,9 @@ func (am *ActivationManager) RotateSecret(req *RotationRequest) (*RotationResult
 	if req == nil || req.Key == "" || req.NewValue == "" {
 		return nil, fmt.Errorf("key and new_value are required")
 	}
+	if am.activeSnap == nil {
+		return nil, fmt.Errorf("no active snapshot")
+	}
 
 	entry, ok := am.activeSnap.Get(req.Key)
 	if !ok {
@@ -902,9 +903,8 @@ func (am *ActivationManager) RotateSecret(req *RotationRequest) (*RotationResult
 	entry.Metadata["version"] = fmt.Sprintf("%d", newVersion)
 
 	am.activeSnap.Update(am.activeSnap.GetAll())
-
-	if req.ActivateNow {
-		am.activeSnap.Update(am.activeSnap.GetAll())
+	if err := am.store.SetSecret(cloneEntry(entry)); err != nil {
+		return nil, fmt.Errorf("persist rotated secret: %w", err)
 	}
 
 	result := &RotationResult{
@@ -956,6 +956,10 @@ func (am *ActivationManager) RollbackVersion(key string, targetVersion uint64, a
 	am.mu.Lock()
 	defer am.mu.Unlock()
 
+	if am.activeSnap == nil {
+		return fmt.Errorf("no active snapshot")
+	}
+
 	if err := am.store.RollbackVersion(key, targetVersion, actor); err != nil {
 		return err
 	}
@@ -979,6 +983,9 @@ func (am *ActivationManager) RollbackVersion(key string, targetVersion uint64, a
 	entry.Metadata["rolled_back_by"] = actor
 
 	am.activeSnap.Update(am.activeSnap.GetAll())
+	if err := am.store.SetSecret(cloneEntry(entry)); err != nil {
+		return fmt.Errorf("persist rolled back secret: %w", err)
+	}
 
 	am.store.AddAuditEntry(&AuditEntry{
 		Operation: OpRotate,
@@ -1011,9 +1018,6 @@ func (am *ActivationManager) DeleteRotationPolicy(key string) error {
 }
 
 func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationResult, error) {
-	am.mu.RLock()
-	defer am.mu.RUnlock()
-
 	policies := am.store.ListRotationPolicies()
 	var results []*RotationResult
 	now := time.Now().UTC()
@@ -1026,7 +1030,12 @@ func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationR
 			continue
 		}
 
-		entry, ok := am.activeSnap.Get(policy.Key)
+		snap := am.GetActiveSnapshot()
+		if snap == nil {
+			continue
+		}
+
+		entry, ok := snap.Get(policy.Key)
 		if !ok {
 			continue
 		}
@@ -1036,25 +1045,23 @@ func (am *ActivationManager) CheckScheduledRotations(actor string) ([]*RotationR
 			continue
 		}
 
-		oldVersion := uint64(0)
-		if vh, exists := am.store.GetVersionHistory(policy.Key); exists {
-			oldVersion = vh.Current
-		}
-		newVersion := oldVersion + 1
-
-		err := am.store.RecordRotation(policy.Key, oldVersion, newVersion, newValue, actor,
-			map[string]string{"auto": "true", "strategy": "scheduled"})
+		result, err := am.RotateSecret(&RotationRequest{
+			Key:         policy.Key,
+			NewValue:    newValue,
+			RequestedBy: actor,
+			Reason:      "scheduled rotation",
+			ActivateNow: policy.AutoActivate,
+			Metadata: map[string]string{
+				"auto":     "true",
+				"strategy": "scheduled",
+			},
+		})
 		if err != nil {
 			continue
 		}
 
-		results = append(results, &RotationResult{
-			Key:        policy.Key,
-			OldVersion: oldVersion,
-			NewVersion: newVersion,
-			Activated:  policy.AutoActivate,
-			RotatedAt:  now,
-		})
+		result.RotatedAt = now
+		results = append(results, result)
 	}
 
 	if len(results) > 0 {

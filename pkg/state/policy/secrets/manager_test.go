@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -343,6 +344,99 @@ func TestStoreWithEncryption(t *testing.T) {
 	}
 }
 
+func TestStoreWithEncryptionEncryptsLongBase64Plaintext(t *testing.T) {
+	key, err := GenerateEncryptionKey()
+	if err != nil {
+		t.Fatalf("GenerateEncryptionKey failed: %v", err)
+	}
+
+	cfg := DefaultStoreConfig()
+	cfg.EncryptionKey = key
+
+	store, cleanup := setupTestStore(t, cfg)
+	defer cleanup()
+
+	longPlaintext := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 64)))
+	if err := store.SetSecret(&SecretEntry{
+		Key:   "base64_key",
+		Value: longPlaintext,
+		Scope: ScopeGlobal,
+	}); err != nil {
+		t.Fatalf("SetSecret failed: %v", err)
+	}
+
+	raw, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if strings.Contains(string(raw), longPlaintext) {
+		t.Fatal("expected long base64 plaintext to be encrypted on disk")
+	}
+	if !strings.Contains(string(raw), encryptedValuePrefix) {
+		t.Fatal("expected encrypted values to carry the on-disk format marker")
+	}
+
+	reloaded, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("reload store failed: %v", err)
+	}
+	got, ok := reloaded.GetSecret("base64_key", ScopeGlobal, "")
+	if !ok {
+		t.Fatal("expected reloaded secret to exist")
+	}
+	if got.Value != longPlaintext {
+		t.Fatalf("expected reloaded plaintext %q, got %q", longPlaintext, got.Value)
+	}
+}
+
+func TestCreateSnapshotFromSecretsWithEncryption(t *testing.T) {
+	key, err := GenerateEncryptionKey()
+	if err != nil {
+		t.Fatalf("GenerateEncryptionKey failed: %v", err)
+	}
+
+	cfg := DefaultStoreConfig()
+	cfg.EncryptionKey = key
+
+	store, cleanup := setupTestStore(t, cfg)
+	defer cleanup()
+
+	_, err = store.CreateSnapshotFromSecrets("runtime", map[string]*SecretEntry{
+		"snapshot_only": {
+			Key:   "snapshot_only",
+			Value: "snapshot-secret",
+			Scope: ScopeGlobal,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSnapshotFromSecrets failed: %v", err)
+	}
+
+	raw, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if strings.Contains(string(raw), "snapshot-secret") {
+		t.Fatal("expected snapshot-only secret to be encrypted on disk")
+	}
+
+	reloaded, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("reload store failed: %v", err)
+	}
+	snaps := reloaded.ListSnapshots()
+	if len(snaps) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snaps))
+	}
+	entry, ok := snaps[0].Secrets["snapshot_only"]
+	if !ok {
+		t.Fatal("expected snapshot_only in reloaded snapshot")
+	}
+	if entry.Value != "snapshot-secret" {
+		t.Fatalf("expected decrypted snapshot secret, got %q", entry.Value)
+	}
+}
+
 func TestRuntimeSnapshot(t *testing.T) {
 	secrets := map[string]*SecretEntry{
 		"db_password": {
@@ -379,6 +473,41 @@ func TestRuntimeSnapshot(t *testing.T) {
 	all := snap.GetAll()
 	if len(all) != 2 {
 		t.Errorf("expected 2 secrets, got %d", len(all))
+	}
+}
+
+func TestRuntimeSnapshotClonesEntries(t *testing.T) {
+	source := map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "original",
+			Scope: ScopeGlobal,
+		},
+	}
+
+	snap := NewRuntimeSnapshot(source, "test")
+	source["api_key"].Value = "mutated-source"
+
+	entry, ok := snap.Get("api_key")
+	if !ok {
+		t.Fatal("expected api_key to exist")
+	}
+	if entry.Value != "original" {
+		t.Fatalf("expected snapshot to keep original value, got %q", entry.Value)
+	}
+
+	all := snap.GetAll()
+	all["api_key"].Value = "mutated-copy"
+	entry, _ = snap.Get("api_key")
+	if entry.Value != "original" {
+		t.Fatalf("expected GetAll to return a deep copy, got %q", entry.Value)
+	}
+
+	persisted := snap.ToSnapshot()
+	persisted.Secrets["api_key"].Value = "mutated-snapshot"
+	entry, _ = snap.Get("api_key")
+	if entry.Value != "original" {
+		t.Fatalf("expected ToSnapshot to return a deep copy, got %q", entry.Value)
 	}
 }
 
@@ -491,6 +620,21 @@ func TestActivationManagerRequestActivation(t *testing.T) {
 	}
 }
 
+func TestActivationManagerRequestActivationWithoutSnapshot(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	manager := NewActivationManager(store, nil)
+
+	_, err := manager.RequestActivation("user1", "deploy to prod")
+	if err == nil {
+		t.Fatal("expected error when requesting activation without a snapshot")
+	}
+	if !strings.Contains(err.Error(), "no active snapshot") {
+		t.Fatalf("expected no active snapshot error, got %v", err)
+	}
+}
+
 func TestActivationManagerApprove(t *testing.T) {
 	store, cleanup := setupTestStore(t, nil)
 	defer cleanup()
@@ -565,6 +709,40 @@ func TestActivationManagerApplySnapshot(t *testing.T) {
 	}
 }
 
+func TestActivationManagerCreateSnapshotUsesActiveSnapshot(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	if err := store.SetSecret(&SecretEntry{
+		Key:   "api_key",
+		Value: "stale-store-value",
+		Scope: ScopeGlobal,
+	}); err != nil {
+		t.Fatalf("SetSecret failed: %v", err)
+	}
+
+	manager := NewActivationManager(store, NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {
+			Key:   "api_key",
+			Value: "runtime-value",
+			Scope: ScopeGlobal,
+		},
+	}, "runtime"))
+
+	snap, err := manager.CreateSnapshot("runtime")
+	if err != nil {
+		t.Fatalf("CreateSnapshot failed: %v", err)
+	}
+
+	entry, ok := snap.Secrets["api_key"]
+	if !ok {
+		t.Fatal("expected api_key in persisted snapshot")
+	}
+	if entry.Value != "runtime-value" {
+		t.Fatalf("expected snapshot to use runtime value, got %q", entry.Value)
+	}
+}
+
 func TestActivationManagerAccessSecret(t *testing.T) {
 	store, cleanup := setupTestStore(t, nil)
 	defer cleanup()
@@ -586,6 +764,29 @@ func TestActivationManagerAccessSecret(t *testing.T) {
 	_, err = manager.AccessSecret("nonexistent", "user1")
 	if err == nil {
 		t.Fatal("expected error for nonexistent secret")
+	}
+}
+
+func TestActivationManagerAccessSecretKeepsFallbackSnapshotImmutable(t *testing.T) {
+	store, cleanup := setupTestStore(t, nil)
+	defer cleanup()
+
+	snap := NewRuntimeSnapshot(map[string]*SecretEntry{
+		"api_key": {Key: "api_key", Value: "secret-key", Scope: ScopeGlobal},
+	}, "test")
+
+	manager := NewActivationManagerWithFallback(store, snap, DefaultFallbackConfig())
+
+	if _, err := manager.AccessSecret("api_key", "user1"); err != nil {
+		t.Fatalf("AccessSecret failed: %v", err)
+	}
+
+	entry, ok := manager.fallbackSnap.Get("api_key")
+	if !ok {
+		t.Fatal("expected api_key in fallback snapshot")
+	}
+	if entry.LastUsedAt != nil {
+		t.Fatal("expected fallback snapshot to remain immutable after access")
 	}
 }
 
@@ -724,7 +925,7 @@ func TestIsEncryptedValue(t *testing.T) {
 		{"short value", "abc", false},
 		{"plain text", "not-encrypted-value", false},
 		{"base64 but short", "YWJj", false},
-		{"valid encrypted value", "aW5pdGlhbGl6YXRpb25WZWN0b3IxMjM0NTY3ODkwYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=", true},
+		{"prefixed encrypted value", encryptedValuePrefix + "ciphertext", true},
 	}
 
 	for _, tt := range tests {
@@ -1768,6 +1969,23 @@ func TestCheckScheduledRotations(t *testing.T) {
 	}
 	if results[0].Activated != true {
 		t.Error("expected activated to be true")
+	}
+
+	active := manager.GetActiveSnapshot()
+	entry, ok := active.Get("api_key")
+	if !ok {
+		t.Fatal("expected api_key in active snapshot")
+	}
+	if entry.Value == "current-key" {
+		t.Fatal("expected scheduled rotation to update the active snapshot value")
+	}
+
+	persisted, ok := store.GetSecret("api_key", ScopeGlobal, "")
+	if !ok {
+		t.Fatal("expected rotated secret to be persisted in the store")
+	}
+	if persisted.Value != entry.Value {
+		t.Fatalf("expected persisted value %q to match active value %q", persisted.Value, entry.Value)
 	}
 }
 

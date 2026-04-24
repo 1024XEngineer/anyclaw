@@ -351,15 +351,41 @@ func (c *Config) DeleteProviderProfile(ref string) bool {
 			continue
 		}
 		deletedID := provider.ID
+		deletedName := provider.Name
+		defaultWasDeleted := strings.EqualFold(strings.TrimSpace(c.LLM.DefaultProviderRef), strings.TrimSpace(deletedID)) ||
+			strings.EqualFold(strings.TrimSpace(c.LLM.DefaultProviderRef), strings.TrimSpace(deletedName))
 		c.Providers = append(c.Providers[:i], c.Providers[i+1:]...)
 		for idx := range c.Agent.Profiles {
-			if strings.EqualFold(strings.TrimSpace(c.Agent.Profiles[idx].ProviderRef), strings.TrimSpace(deletedID)) {
+			profileRef := strings.TrimSpace(c.Agent.Profiles[idx].ProviderRef)
+			if strings.EqualFold(profileRef, strings.TrimSpace(deletedID)) || strings.EqualFold(profileRef, strings.TrimSpace(deletedName)) {
 				c.Agent.Profiles[idx].ProviderRef = ""
+			}
+		}
+		if defaultWasDeleted {
+			if replacement, ok := c.firstEnabledProviderProfile(); ok {
+				c.LLM.DefaultProviderRef = replacement.ID
+			} else {
+				c.LLM.DefaultProviderRef = ""
+			}
+		} else if ref := strings.TrimSpace(c.LLM.DefaultProviderRef); ref != "" {
+			if existing, ok := c.FindProviderProfile(ref); ok {
+				c.LLM.DefaultProviderRef = existing.ID
+			} else {
+				c.LLM.DefaultProviderRef = ""
 			}
 		}
 		return true
 	}
 	return false
+}
+
+func (c *Config) firstEnabledProviderProfile() (ProviderProfile, bool) {
+	for _, provider := range c.Providers {
+		if provider.IsEnabled() {
+			return provider, true
+		}
+	}
+	return ProviderProfile{}, false
 }
 
 func normalizeProviderID(id string, fallbackName string) string {

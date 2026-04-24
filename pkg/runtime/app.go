@@ -154,6 +154,17 @@ func (a *MainRuntime) HasMemory() bool {
 	return a != nil && a.Memory != nil
 }
 
+func (a *MainRuntime) MemoryHealthCheck(ctx context.Context) error {
+	_ = ctx
+	if a == nil || a.Memory == nil {
+		return fmt.Errorf("runtime memory is unavailable")
+	}
+	if _, err := a.Memory.GetStats(); err != nil {
+		return fmt.Errorf("runtime memory backend is unavailable: %w", err)
+	}
+	return nil
+}
+
 func (a *MainRuntime) CallTool(ctx context.Context, name string, input map[string]any) (string, error) {
 	if a == nil || a.Tools == nil {
 		return "", fmt.Errorf("runtime tool registry is unavailable")
@@ -201,6 +212,16 @@ func (a *MainRuntime) LLMName() string {
 		return ""
 	}
 	return a.LLM.Name()
+}
+
+func (a *MainRuntime) LLMHealthCheck(ctx context.Context) error {
+	if a == nil || a.LLM == nil {
+		return fmt.Errorf("runtime llm is unavailable")
+	}
+	if err := a.LLM.HealthCheck(ctx); err != nil {
+		return fmt.Errorf("runtime llm is unavailable: %w", err)
+	}
+	return nil
 }
 
 func (a *MainRuntime) Name() string {

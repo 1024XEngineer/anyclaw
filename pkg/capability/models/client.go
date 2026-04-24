@@ -109,6 +109,10 @@ func (c *configurationRequiredClient) Name() string {
 	return c.provider
 }
 
+func (c *configurationRequiredClient) HealthCheck(_ context.Context) error {
+	return c.err
+}
+
 func NormalizeProviderName(provider string) string {
 	return normalizeProvider(provider)
 }
@@ -199,6 +203,25 @@ func normalizeProvider(provider string) string {
 
 func (c *client) Name() string {
 	return c.provider
+}
+
+func (c *client) HealthCheck(_ context.Context) error {
+	if strings.TrimSpace(c.provider) == "" {
+		return fmt.Errorf("llm provider is not configured")
+	}
+	if strings.TrimSpace(c.model) == "" {
+		return fmt.Errorf("llm model is not configured")
+	}
+	if ProviderRequiresAPIKey(c.provider) && strings.TrimSpace(c.apiKey) == "" {
+		return fmt.Errorf("llm api key is required")
+	}
+	if strings.TrimSpace(c.baseURL) == "" {
+		return fmt.Errorf("llm base url is not configured")
+	}
+	if _, err := url.ParseRequestURI(c.baseURL); err != nil {
+		return fmt.Errorf("llm base url is invalid: %w", err)
+	}
+	return nil
 }
 
 func (c *client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
@@ -595,6 +618,16 @@ func (w *ClientWrapper) StreamChat(ctx context.Context, messages []Message, tool
 
 func (w *ClientWrapper) Name() string {
 	return w.provider
+}
+
+func (w *ClientWrapper) HealthCheck(ctx context.Context) error {
+	if w == nil || w.client == nil {
+		return fmt.Errorf("runtime llm is unavailable")
+	}
+	if checker, ok := w.client.(interface{ HealthCheck(context.Context) error }); ok {
+		return checker.HealthCheck(ctx)
+	}
+	return nil
 }
 
 func (w *ClientWrapper) SwitchProvider(provider string) error {

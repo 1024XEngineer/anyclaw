@@ -7,15 +7,16 @@ import (
 )
 
 func applyEnvOverrides(cfg *Config) {
-	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
+	providerOverride := strings.TrimSpace(os.Getenv("LLM_PROVIDER"))
+	if providerOverride != "" {
+		cfg.LLM.Provider = providerOverride
+	}
+
+	if v := os.Getenv("OPENAI_API_KEY"); v != "" && !usesAnthropicAPIKey(resolveEnvProviderSelection(cfg, providerOverride)) {
 		cfg.LLM.APIKey = v
 	}
-	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" && usesAnthropicAPIKey(resolveEnvProviderSelection(cfg, providerOverride)) {
 		cfg.LLM.APIKey = v
-		cfg.LLM.Provider = "anthropic"
-	}
-	if v := os.Getenv("LLM_PROVIDER"); v != "" {
-		cfg.LLM.Provider = v
 	}
 	if v := os.Getenv("LLM_MODEL"); v != "" {
 		cfg.LLM.Model = v
@@ -110,4 +111,22 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Plugins.ExecTimeoutSeconds = sec
 		}
 	}
+}
+
+func resolveEnvProviderSelection(cfg *Config, providerOverride string) string {
+	if providerOverride != "" {
+		return providerOverride
+	}
+	if cfg != nil {
+		if provider, ok := cfg.FindDefaultProviderProfile(); ok && provider.IsEnabled() && strings.TrimSpace(provider.Provider) != "" {
+			return provider.Provider
+		}
+		return cfg.LLM.Provider
+	}
+	return ""
+}
+
+func usesAnthropicAPIKey(provider string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	return strings.Contains(provider, "anthropic") || strings.Contains(provider, "claude")
 }

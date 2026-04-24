@@ -210,3 +210,39 @@ func configuredLLMName(runtime GatewayHealthRuntime) string {
 	}
 	return strings.TrimSpace(runtime.LLMName())
 }
+
+func checkGatewayLLM(ctx context.Context, runtime GatewayHealthRuntime) error {
+	if runtime == nil {
+		return fmt.Errorf("llm runtime is unavailable")
+	}
+	if checker, ok := runtime.(gatewayLLMHealthChecker); ok {
+		return checker.LLMHealthCheck(ctx)
+	}
+	if availability, ok := runtime.(gatewayLLMAvailability); ok && !availability.HasLLM() {
+		return fmt.Errorf("llm backend is unavailable")
+	}
+	if strings.TrimSpace(runtime.LLMName()) == "" {
+		return fmt.Errorf("llm backend is unavailable")
+	}
+	return nil
+}
+
+func checkGatewayMemory(ctx context.Context, runtime GatewayHealthRuntime) error {
+	if runtime == nil {
+		return fmt.Errorf("memory runtime is unavailable")
+	}
+	if checker, ok := runtime.(gatewayMemoryHealthChecker); ok {
+		return checker.MemoryHealthCheck(ctx)
+	}
+	if !runtime.HasMemory() {
+		return fmt.Errorf("memory backend is unavailable")
+	}
+	return nil
+}
+
+func configuredLLMName(runtime GatewayHealthRuntime) string {
+	if runtime == nil {
+		return ""
+	}
+	return strings.TrimSpace(runtime.LLMName())
+}

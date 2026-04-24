@@ -9,9 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
+
+const encryptedValuePrefix = "enc:v1:"
 
 type persistedData struct {
 	Secrets          []*SecretEntry    `json:"secrets"`
@@ -91,9 +94,22 @@ func (s *Store) load() error {
 
 	if s.encryptionKey != nil {
 		for _, secret := range s.data.Secrets {
-			if secret.Value != "" && isEncryptedValue(secret.Value) {
-				decrypted, err := DecryptValue(secret.Value, s.encryptionKey)
-				if err != nil {
+			if secret.Value == "" {
+				continue
+			}
+			decrypted, changed, err := decryptPersistedValue(secret.Value, s.encryptionKey)
+			if err != nil || !changed {
+				continue
+			}
+			secret.Value = decrypted
+		}
+		for _, snap := range s.data.Snapshots {
+			for _, secret := range snap.Secrets {
+				if secret.Value == "" {
+					continue
+				}
+				decrypted, changed, err := decryptPersistedValue(secret.Value, s.encryptionKey)
+				if err != nil || !changed {
 					continue
 				}
 				secret.Value = decrypted
@@ -101,13 +117,14 @@ func (s *Store) load() error {
 		}
 		for _, vh := range s.data.VersionHistories {
 			for _, v := range vh.Versions {
-				if v.Value != "" && isEncryptedValue(v.Value) {
-					decrypted, err := DecryptValue(v.Value, s.encryptionKey)
-					if err != nil {
-						continue
-					}
-					v.Value = decrypted
+				if v.Value == "" {
+					continue
 				}
+				decrypted, changed, err := decryptPersistedValue(v.Value, s.encryptionKey)
+				if err != nil || !changed {
+					continue
+				}
+				v.Value = decrypted
 			}
 		}
 	}
@@ -120,31 +137,45 @@ func (s *Store) saveLocked() error {
 		Secrets:          cloneEntries(s.data.Secrets),
 		Snapshots:        cloneSnapshots(s.data.Snapshots),
 		Locks:            cloneLocks(s.data.Locks),
-		VersionHistories: s.data.VersionHistories,
-		RotationPolicies: s.data.RotationPolicies,
+		VersionHistories: cloneVersionHistories(s.data.VersionHistories),
+		RotationPolicies: cloneRotationPolicies(s.data.RotationPolicies),
 		AuditLog:         cloneAuditEntries(s.data.AuditLog),
 		LastUpdate:       time.Now().UTC(),
 	}
 
 	if s.encryptionKey != nil {
 		for _, secret := range saveData.Secrets {
-			if secret.Value != "" && !isEncryptedValue(secret.Value) {
-				encrypted, err := EncryptValue(secret.Value, s.encryptionKey)
+			if secret.Value == "" {
+				continue
+			}
+			encrypted, err := encryptPersistedValue(secret.Value, s.encryptionKey)
+			if err != nil {
+				return fmt.Errorf("encrypt secret %s: %w", secret.Key, err)
+			}
+			secret.Value = encrypted
+		}
+		for _, snap := range saveData.Snapshots {
+			for _, secret := range snap.Secrets {
+				if secret.Value == "" {
+					continue
+				}
+				encrypted, err := encryptPersistedValue(secret.Value, s.encryptionKey)
 				if err != nil {
-					return fmt.Errorf("encrypt secret %s: %w", secret.Key, err)
+					return fmt.Errorf("encrypt snapshot secret %s: %w", secret.Key, err)
 				}
 				secret.Value = encrypted
 			}
 		}
 		for _, vh := range saveData.VersionHistories {
 			for _, v := range vh.Versions {
-				if v.Value != "" && !isEncryptedValue(v.Value) {
-					encrypted, err := EncryptValue(v.Value, s.encryptionKey)
-					if err != nil {
-						return fmt.Errorf("encrypt version %s v%d: %w", vh.Key, v.Version, err)
-					}
-					v.Value = encrypted
+				if v.Value == "" {
+					continue
 				}
+				encrypted, err := encryptPersistedValue(v.Value, s.encryptionKey)
+				if err != nil {
+					return fmt.Errorf("encrypt version %s v%d: %w", vh.Key, v.Version, err)
+				}
+				v.Value = encrypted
 			}
 		}
 	}
@@ -267,6 +298,17 @@ func (s *Store) CreateSnapshot(source string) (*Snapshot, error) {
 		secrets[entry.Key] = cloneEntry(entry)
 	}
 
+	return s.createSnapshotLocked(source, secrets)
+}
+
+func (s *Store) CreateSnapshotFromSecrets(source string, secrets map[string]*SecretEntry) (*Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.createSnapshotLocked(source, cloneEntryMap(secrets))
+}
+
+func (s *Store) createSnapshotLocked(source string, secrets map[string]*SecretEntry) (*Snapshot, error) {
 	version := uint64(0)
 	if len(s.data.Snapshots) > 0 {
 		version = s.data.Snapshots[len(s.data.Snapshots)-1].Version + 1
@@ -751,14 +793,42 @@ func decodeKey(key string) ([]byte, error) {
 }
 
 func isEncryptedValue(value string) bool {
-	if len(value) < 44 {
-		return false
+	return strings.HasPrefix(value, encryptedValuePrefix)
+}
+
+func encryptPersistedValue(value string, key []byte) (string, error) {
+	if value == "" {
+		return "", nil
 	}
-	decoded, err := base64.StdEncoding.DecodeString(value)
+	if isEncryptedValue(value) {
+		return value, nil
+	}
+	encrypted, err := EncryptValue(value, key)
 	if err != nil {
-		return false
+		return "", err
 	}
-	return len(decoded) > 12
+	return encryptedValuePrefix + encrypted, nil
+}
+
+func decryptPersistedValue(value string, key []byte) (string, bool, error) {
+	if value == "" {
+		return "", false, nil
+	}
+	if isEncryptedValue(value) {
+		decrypted, err := DecryptValue(strings.TrimPrefix(value, encryptedValuePrefix), key)
+		if err != nil {
+			return "", true, err
+		}
+		return decrypted, true, nil
+	}
+
+	// Backward compatibility for older stores that persisted raw ciphertext
+	// without a format marker.
+	decrypted, err := DecryptValue(value, key)
+	if err != nil {
+		return value, false, nil
+	}
+	return decrypted, true, nil
 }
 
 func generateID(prefix string) string {
@@ -799,16 +869,24 @@ func cloneEntries(entries []*SecretEntry) []*SecretEntry {
 	return result
 }
 
+func cloneEntryMap(entries map[string]*SecretEntry) map[string]*SecretEntry {
+	if entries == nil {
+		return map[string]*SecretEntry{}
+	}
+	result := make(map[string]*SecretEntry, len(entries))
+	for k, entry := range entries {
+		result[k] = cloneEntry(entry)
+	}
+	return result
+}
+
 func cloneSnapshot(s *Snapshot) *Snapshot {
 	if s == nil {
 		return nil
 	}
 	c := *s
 	if s.Secrets != nil {
-		c.Secrets = make(map[string]*SecretEntry)
-		for k, v := range s.Secrets {
-			c.Secrets[k] = cloneEntry(v)
-		}
+		c.Secrets = cloneEntryMap(s.Secrets)
 	}
 	return &c
 }
@@ -921,4 +999,32 @@ func cloneVersionHistory(vh *VersionHistory) *VersionHistory {
 		c.Policy = &p
 	}
 	return &c
+}
+
+func cloneVersionHistories(histories []*VersionHistory) []*VersionHistory {
+	result := make([]*VersionHistory, len(histories))
+	for i, vh := range histories {
+		result[i] = cloneVersionHistory(vh)
+	}
+	return result
+}
+
+func cloneRotationPolicy(policy *RotationPolicy) *RotationPolicy {
+	if policy == nil {
+		return nil
+	}
+	c := *policy
+	if policy.NextRotation != nil {
+		t := *policy.NextRotation
+		c.NextRotation = &t
+	}
+	return &c
+}
+
+func cloneRotationPolicies(policies []*RotationPolicy) []*RotationPolicy {
+	result := make([]*RotationPolicy, len(policies))
+	for i, policy := range policies {
+		result[i] = cloneRotationPolicy(policy)
+	}
+	return result
 }
