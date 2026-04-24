@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 
@@ -476,6 +477,183 @@ func TestIndexNotReady(t *testing.T) {
 	}
 }
 
+func TestConfigTableNameOrDefault(t *testing.T) {
+	if got := (Config{Name: "docs"}).TableNameOrDefault(); got != "vec_docs" {
+		t.Fatalf("expected default table name vec_docs, got %q", got)
+	}
+	if got := (Config{Name: "docs", TableName: "custom_docs"}).TableNameOrDefault(); got != "custom_docs" {
+		t.Fatalf("expected explicit table name custom_docs, got %q", got)
+	}
+}
+
+func TestCreateIndexUsesDefaultDistanceAndCustomTableName(t *testing.T) {
+	im, _ := setupIndexManager(t)
+	ctx := context.Background()
+
+	info, err := im.Create(ctx, Config{
+		Name:       "custom_table",
+		Dimensions: 4,
+		TableName:  "custom_docs",
+	})
+	if err != nil {
+		t.Fatalf("create index with custom table: %v", err)
+	}
+
+	if info.TableName != "custom_docs" {
+		t.Fatalf("expected custom table name, got %q", info.TableName)
+	}
+	if info.Distance != "cosine" {
+		t.Fatalf("expected default cosine distance, got %q", info.Distance)
+	}
+}
+
+func TestInitFailsOnClosedDB(t *testing.T) {
+	db, err := sqlite.Open(sqlite.InMemoryConfig())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	_ = db.Close()
+
+	im := NewIndexManager(db.DB, nil, WithVectorDir(t.TempDir()))
+	if err := im.Init(context.Background()); err == nil {
+		t.Fatal("expected init on closed db to fail")
+	}
+}
+
+func TestUpdateIndexRejectsDistanceChangeAndMissingIndex(t *testing.T) {
+	im, _ := setupIndexManager(t)
+	ctx := context.Background()
+
+	if _, err := im.Update(ctx, "missing", Config{}); err == nil {
+		t.Fatal("expected missing index update to fail")
+	}
+
+	_, _ = im.Create(ctx, Config{Name: "distance_change", Dimensions: 4})
+	if _, err := im.Update(ctx, "distance_change", Config{Distance: "l2"}); err == nil {
+		t.Fatal("expected distance change to fail")
+	}
+
+	info, err := im.Get("distance_change")
+	if err != nil {
+		t.Fatalf("get distance_change: %v", err)
+	}
+	if info.Status != StatusError {
+		t.Fatalf("expected status error after rejected distance change, got %s", info.Status)
+	}
+}
+
+func TestSearchByTextErrorPaths(t *testing.T) {
+	db, err := sqlite.Open(sqlite.InMemoryConfig())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	ctx := context.Background()
+
+	noEmbedder := NewIndexManager(db.DB, nil, WithVectorDir(t.TempDir()))
+	if err := noEmbedder.Init(ctx); err != nil {
+		t.Fatalf("init no-embedder manager: %v", err)
+	}
+	if _, err := noEmbedder.SearchByText(ctx, "any", "query", 5); err == nil {
+		t.Fatal("expected search by text without embedder to fail")
+	}
+
+	fail := &failingEmbedder{dim: 4, err: errors.New("embed failed")}
+	failingManager := NewIndexManager(db.DB, fail, WithVectorDir(t.TempDir()))
+	if err := failingManager.Init(ctx); err != nil {
+		t.Fatalf("init failing manager: %v", err)
+	}
+	if _, err := failingManager.SearchByText(ctx, "any", "query", 5); !errors.Is(err, fail.err) {
+		t.Fatalf("expected wrapped embed error %v, got %v", fail.err, err)
+	}
+}
+
+func TestDeleteMarksIndexErrorWhenDropFails(t *testing.T) {
+	im, _ := setupIndexManager(t)
+	ctx := context.Background()
+
+	_, _ = im.Create(ctx, Config{Name: "delete_fail", Dimensions: 4})
+
+	im.mu.Lock()
+	im.indexes["delete_fail"].TableName = " "
+	im.mu.Unlock()
+
+	if err := im.Delete(ctx, "delete_fail"); err == nil {
+		t.Fatal("expected delete to fail when drop fails")
+	}
+
+	info, err := im.Get("delete_fail")
+	if err != nil {
+		t.Fatalf("get delete_fail: %v", err)
+	}
+	if info.Status != StatusError {
+		t.Fatalf("expected status error after failed delete, got %s", info.Status)
+	}
+	if info.Error == "" {
+		t.Fatal("expected delete failure to be recorded")
+	}
+}
+
+func TestRebuildMarksIndexErrorWhenDropFails(t *testing.T) {
+	im, _ := setupIndexManager(t)
+	ctx := context.Background()
+
+	_, _ = im.Create(ctx, Config{Name: "rebuild_fail", Dimensions: 4})
+
+	im.mu.Lock()
+	im.indexes["rebuild_fail"].TableName = " "
+	im.mu.Unlock()
+
+	if _, err := im.Rebuild(ctx, "rebuild_fail", nil); err == nil {
+		t.Fatal("expected rebuild to fail when drop fails")
+	}
+
+	info, err := im.Get("rebuild_fail")
+	if err != nil {
+		t.Fatalf("get rebuild_fail: %v", err)
+	}
+	if info.Status != StatusError {
+		t.Fatalf("expected status error after failed rebuild, got %s", info.Status)
+	}
+	if info.Error == "" {
+		t.Fatal("expected rebuild failure to be recorded")
+	}
+}
+
+func TestIndexReturnsErrorOnInsertBatchFailure(t *testing.T) {
+	im, _ := setupIndexManager(t)
+	ctx := context.Background()
+
+	_, _ = im.Create(ctx, Config{Name: "broken_index", Dimensions: 4})
+
+	result, err := im.Index(ctx, "broken_index", []IndexItem{
+		{ID: 1, Vector: []float32{0.1, 0.2}},
+	}, nil)
+	if err == nil {
+		t.Fatal("expected index batch insert failure to return error")
+	}
+	if result == nil {
+		t.Fatal("expected partial result on insert failure")
+	}
+	if result.Indexed != 0 || result.Failed != 1 {
+		t.Fatalf("expected 0 indexed and 1 failed, got %+v", result)
+	}
+
+	info, err := im.Get("broken_index")
+	if err != nil {
+		t.Fatalf("get broken_index: %v", err)
+	}
+	if info.Status != StatusError {
+		t.Fatalf("expected status error after insert failure, got %s", info.Status)
+	}
+	if info.VectorCount != 0 {
+		t.Fatalf("expected no vectors after failed batch insert, got %d", info.VectorCount)
+	}
+}
+
 type mockEmbedder struct {
 	dim       int
 	callCount atomic.Int32
@@ -504,3 +682,19 @@ func (m *mockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]floa
 
 func (m *mockEmbedder) Name() string   { return "mock" }
 func (m *mockEmbedder) Dimension() int { return m.dim }
+
+type failingEmbedder struct {
+	dim int
+	err error
+}
+
+func (f *failingEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	return nil, f.err
+}
+
+func (f *failingEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	return nil, f.err
+}
+
+func (f *failingEmbedder) Name() string   { return "failing" }
+func (f *failingEmbedder) Dimension() int { return f.dim }

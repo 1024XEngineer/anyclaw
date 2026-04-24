@@ -393,9 +393,21 @@ func (im *IndexManager) Index(ctx context.Context, indexName string, items []Ind
 		if len(vecItems) > 0 {
 			if err := vs.InsertBatch(ctx, vecItems); err != nil {
 				result.Failed += len(vecItems)
-			} else {
-				result.Indexed += len(vecItems)
+				result.CompletedAt = time.Now()
+				result.Duration = result.CompletedAt.Sub(result.StartedAt)
+
+				im.mu.Lock()
+				info.Status = StatusError
+				info.Error = err.Error()
+				info.UpdatedAt = result.CompletedAt
+				count, _ := im.countVectors(ctx, info)
+				info.VectorCount = count
+				_ = im.saveIndexMeta(ctx, info)
+				im.mu.Unlock()
+
+				return result, fmt.Errorf("insert vectors: %w", err)
 			}
+			result.Indexed += len(vecItems)
 		}
 
 		processed := end
