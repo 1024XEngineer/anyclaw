@@ -423,6 +423,9 @@ func resolveSkillLauncher(entrypoint string) (string, []string, error) {
 		if err != nil {
 			return "", nil, fmt.Errorf("powershell launcher not found for skill entrypoint %s", entrypoint)
 		}
+		if runtime.GOOS == "windows" {
+			return ps, []string{"-ExecutionPolicy", "Bypass", "-File", entrypoint}, nil
+		}
 		return ps, []string{"-File", entrypoint}, nil
 	default:
 		return entrypoint, nil, nil

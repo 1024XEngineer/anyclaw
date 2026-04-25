@@ -1,6 +1,7 @@
 package memory
 
 import (
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,6 +38,8 @@ const (
 	TypeReflection   = "reflection"
 	TypeFact         = "fact"
 )
+
+var randomIDFallbackCounter atomic.Uint64
 
 func NewFileMemory(workDir string) *FileMemory {
 	memoryDir := filepath.Join(workDir, "memory")
@@ -348,10 +352,23 @@ func (m *FileMemory) GetStats() (map[string]int, error) {
 }
 
 func randomID(length int) string {
+	if length <= 0 {
+		return ""
+	}
+
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
 	result := make([]byte, length)
+	randomBytes := make([]byte, length)
+	if _, err := cryptorand.Read(randomBytes); err == nil {
+		for i, b := range randomBytes {
+			result[i] = chars[int(b)%len(chars)]
+		}
+		return string(result)
+	}
+
+	seed := randomIDFallbackCounter.Add(1)
 	for i := range result {
-		result[i] = chars[time.Now().UnixNano()%int64(len(chars))]
+		result[i] = chars[int((seed+uint64(i))%uint64(len(chars)))]
 	}
 	return string(result)
 }
