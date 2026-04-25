@@ -68,6 +68,66 @@ func TestCreateIndexRejectsL2(t *testing.T) {
 	}
 }
 
+func TestCreateIndexRollsBackFailedMetadataAcrossRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+
+	db, err := sqlite.Open(sqlite.DefaultConfig(dbPath))
+	if err != nil {
+		t.Fatalf("open file-backed db: %v", err)
+	}
+
+	ctx := context.Background()
+	im := NewIndexManager(db.DB, nil)
+	if err := im.Init(ctx); err != nil {
+		t.Fatalf("init index manager: %v", err)
+	}
+
+	if _, err := im.Create(ctx, Config{
+		Name:       "retryable_index",
+		Dimensions: 4,
+		Distance:   "l2",
+	}); err == nil {
+		t.Fatal("expected l2 create failure")
+	}
+
+	if len(im.List()) != 0 {
+		t.Fatalf("expected failed create metadata to be removed before restart, got %+v", im.List())
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close file-backed db: %v", err)
+	}
+
+	reopened, err := sqlite.Open(sqlite.DefaultConfig(dbPath))
+	if err != nil {
+		t.Fatalf("reopen file-backed db: %v", err)
+	}
+	defer func() {
+		_ = reopened.Close()
+	}()
+
+	im2 := NewIndexManager(reopened.DB, nil)
+	if err := im2.Init(ctx); err != nil {
+		t.Fatalf("re-init index manager: %v", err)
+	}
+
+	if len(im2.List()) != 0 {
+		t.Fatalf("expected no stale failed index after restart, got %+v", im2.List())
+	}
+
+	info, err := im2.Create(ctx, Config{
+		Name:       "retryable_index",
+		Dimensions: 4,
+		Distance:   "cosine",
+	})
+	if err != nil {
+		t.Fatalf("expected recreate after failed create rollback to succeed, got %v", err)
+	}
+	if info.Status != StatusReady {
+		t.Fatalf("expected recreated index to be ready, got %s", info.Status)
+	}
+}
+
 func TestCreateDuplicateIndex(t *testing.T) {
 	im, _ := setupIndexManager(t)
 	ctx := context.Background()
@@ -464,6 +524,33 @@ func TestRemoveVectors(t *testing.T) {
 	info, _ := im.Get("remove_index")
 	if info.VectorCount != 1 {
 		t.Errorf("expected vector count 1, got %d", info.VectorCount)
+	}
+}
+
+func TestRemoveVectorsCountsOnlyExistingIDs(t *testing.T) {
+	im, _ := setupIndexManager(t)
+	ctx := context.Background()
+
+	_, _ = im.Create(ctx, Config{Name: "remove_exact_count", Dimensions: 4})
+
+	_, _ = im.Index(ctx, "remove_exact_count", []IndexItem{
+		{ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4}},
+	}, nil)
+
+	removed, err := im.RemoveVectors(ctx, "remove_exact_count", []any{1, 2, 3})
+	if err != nil {
+		t.Fatalf("remove vectors with missing ids: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected only 1 actual deletion, got %d", removed)
+	}
+
+	info, err := im.Get("remove_exact_count")
+	if err != nil {
+		t.Fatalf("get remove_exact_count: %v", err)
+	}
+	if info.VectorCount != 0 {
+		t.Fatalf("expected vector count 0 after removing existing id, got %d", info.VectorCount)
 	}
 }
 

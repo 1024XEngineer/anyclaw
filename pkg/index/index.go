@@ -201,9 +201,9 @@ func (im *IndexManager) Create(ctx context.Context, cfg Config) (*IndexInfo, err
 
 	vs := im.newVecStore(info)
 	if err := vs.Init(ctx); err != nil {
-		info.Status = StatusError
-		info.Error = err.Error()
-		_ = im.saveIndexMeta(ctx, info)
+		if cleanupErr := im.deleteIndexMeta(ctx, info.Name); cleanupErr != nil {
+			return nil, fmt.Errorf("create vector collection: %w (cleanup index metadata: %v)", err, cleanupErr)
+		}
 		return nil, fmt.Errorf("create vector collection: %w", err)
 	}
 
@@ -282,7 +282,7 @@ func (im *IndexManager) Delete(ctx context.Context, name string) error {
 		return err
 	}
 
-	if _, err := im.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE name = ?", im.metaTable), name); err != nil {
+	if err := im.deleteIndexMeta(ctx, name); err != nil {
 		return fmt.Errorf("delete meta: %w", err)
 	}
 
@@ -501,7 +501,23 @@ func (im *IndexManager) RemoveVectors(ctx context.Context, indexName string, ids
 	vs := im.newVecStore(info)
 	removed := 0
 	for _, id := range ids {
-		if err := vs.Delete(ctx, id); err == nil {
+		before, err := vs.Count(ctx)
+		if err != nil {
+			return removed, fmt.Errorf("count vectors before delete: %w", err)
+		}
+		if before == 0 {
+			break
+		}
+
+		if err := vs.Delete(ctx, id); err != nil {
+			return removed, fmt.Errorf("delete vector %v: %w", id, err)
+		}
+
+		after, err := vs.Count(ctx)
+		if err != nil {
+			return removed, fmt.Errorf("count vectors after delete: %w", err)
+		}
+		if after < before {
 			removed++
 		}
 	}
@@ -617,6 +633,11 @@ func (im *IndexManager) saveIndexMeta(ctx context.Context, info *IndexInfo) erro
 
 func (im *IndexManager) countVectors(ctx context.Context, info *IndexInfo) (int64, error) {
 	return im.newVecStore(info).Count(ctx)
+}
+
+func (im *IndexManager) deleteIndexMeta(ctx context.Context, name string) error {
+	_, err := im.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE name = ?", im.metaTable), name)
+	return err
 }
 
 func (im *IndexManager) resolvedVectorDir() string {
