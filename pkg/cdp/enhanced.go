@@ -219,20 +219,23 @@ func (eb *EnhancedBrowser) extraHTTPHeaders() (network.Headers, string) {
 func (eb *EnhancedBrowser) GetLocalStorage(key string) (string, error) {
 	var result string
 	err := chromedp.Run(eb.ctx,
-		chromedp.Evaluate(fmt.Sprintf("localStorage.getItem('%s')", key), &result),
+		chromedp.Evaluate(fmt.Sprintf("localStorage.getItem(%s)", jsStringLiteral(key)), &result),
 	)
 	return result, err
 }
 
 func (eb *EnhancedBrowser) SetLocalStorage(key, value string) error {
 	return chromedp.Run(eb.ctx,
-		chromedp.Evaluate(fmt.Sprintf("localStorage.setItem('%s', '%s')", key, value), nil),
+		chromedp.Evaluate(
+			fmt.Sprintf("localStorage.setItem(%s, %s)", jsStringLiteral(key), jsStringLiteral(value)),
+			nil,
+		),
 	)
 }
 
 func (eb *EnhancedBrowser) RemoveLocalStorage(key string) error {
 	return chromedp.Run(eb.ctx,
-		chromedp.Evaluate(fmt.Sprintf("localStorage.removeItem('%s')", key), nil),
+		chromedp.Evaluate(fmt.Sprintf("localStorage.removeItem(%s)", jsStringLiteral(key)), nil),
 	)
 }
 
@@ -261,14 +264,17 @@ func (eb *EnhancedBrowser) GetAllLocalStorage() (map[string]string, error) {
 func (eb *EnhancedBrowser) GetSessionStorage(key string) (string, error) {
 	var result string
 	err := chromedp.Run(eb.ctx,
-		chromedp.Evaluate(fmt.Sprintf("sessionStorage.getItem('%s')", key), &result),
+		chromedp.Evaluate(fmt.Sprintf("sessionStorage.getItem(%s)", jsStringLiteral(key)), &result),
 	)
 	return result, err
 }
 
 func (eb *EnhancedBrowser) SetSessionStorage(key, value string) error {
 	return chromedp.Run(eb.ctx,
-		chromedp.Evaluate(fmt.Sprintf("sessionStorage.setItem('%s', '%s')", key, value), nil),
+		chromedp.Evaluate(
+			fmt.Sprintf("sessionStorage.setItem(%s, %s)", jsStringLiteral(key), jsStringLiteral(value)),
+			nil,
+		),
 	)
 }
 
@@ -317,7 +323,10 @@ func (ef *ElementFinder) FindByText(text string) (string, error) {
 	var selector string
 	err := chromedp.Run(ef.ctx,
 		chromedp.Evaluate(
-			fmt.Sprintf(`Array.from(document.querySelectorAll("*")).find(el => el.textContent.includes('%s'))?.tagName`, text),
+			fmt.Sprintf(
+				`Array.from(document.querySelectorAll("*")).find(el => el.textContent.includes(%s))?.tagName`,
+				jsStringLiteral(text),
+			),
 			&selector,
 		),
 	)
@@ -332,7 +341,10 @@ func (ef *ElementFinder) FindByXPath(xpath string) (string, error) {
 	var result bool
 	err := chromedp.Run(ef.ctx,
 		chromedp.Evaluate(
-			fmt.Sprintf(`document.evaluate('%s', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue !== null`, xpath),
+			fmt.Sprintf(
+				`document.evaluate(%s, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue !== null`,
+				jsStringLiteral(xpath),
+			),
 			&result,
 		),
 	)
@@ -346,7 +358,7 @@ func (ef *ElementFinder) Count(selector string) (int, error) {
 	var count int
 	err := chromedp.Run(ef.ctx,
 		chromedp.Evaluate(
-			fmt.Sprintf(`document.querySelectorAll('%s').length`, selector),
+			fmt.Sprintf(`document.querySelectorAll(%s).length`, jsStringLiteral(selector)),
 			&count,
 		),
 	)

@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/chromedp/cdproto/network"
@@ -116,5 +117,18 @@ func TestExtraHTTPHeadersSeparatesUserAgent(t *testing.T) {
 	}
 	if _, exists := gotHeaders["User-Agent"]; exists {
 		t.Fatal("unexpected User-Agent header in extra HTTP headers")
+	}
+}
+
+func TestJSStringLiteralRoundTrip(t *testing.T) {
+	input := "key'with\"quotes\\and\nnewline"
+	encoded := jsStringLiteral(input)
+
+	var decoded string
+	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+		t.Fatalf("encoded literal %q did not decode: %v", encoded, err)
+	}
+	if decoded != input {
+		t.Fatalf("decoded literal = %q, want %q", decoded, input)
 	}
 }

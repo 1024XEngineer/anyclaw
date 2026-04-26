@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,15 @@ import (
 type Tool func(context.Context, ...chromedp.Action) error
 
 type cleanupFunc func()
+
+func jsStringLiteral(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		// json.Marshal on a Go string should never fail; keep a safe fallback.
+		return `""`
+	}
+	return string(encoded)
+}
 
 func combineCleanup(funcs ...cleanupFunc) cleanupFunc {
 	return func() {
@@ -120,7 +130,7 @@ func (b *BrowserTool) Scroll(x, y float64) error {
 }
 
 func (b *BrowserTool) ScrollToElement(selector string) error {
-	expr := fmt.Sprintf(`document.querySelector('%s').scrollIntoView()`, selector)
+	expr := fmt.Sprintf("document.querySelector(%s).scrollIntoView()", jsStringLiteral(selector))
 	return chromedp.Run(b.ctx,
 		chromedp.Evaluate(expr, nil),
 	)
