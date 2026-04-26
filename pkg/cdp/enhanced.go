@@ -4,137 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
-type NetworkInterceptor struct {
-	mu         sync.RWMutex
-	enabled    bool
-	patterns   []*InterceptPattern
-	handlers   map[string]RequestHandler
-	requestLog []NetworkRequest
-}
-
-type InterceptPattern struct {
-	URLPattern string
-	Regex      *regexp.Regexp
-}
-
-type RequestHandler func(*NetworkRequest) *NetworkResponse
-
-type NetworkRequest struct {
-	ID        string
-	URL       string
-	Method    string
-	Headers   map[string]string
-	PostData  string
-	Timestamp int64
-}
-
-type NetworkResponse struct {
-	StatusCode int
-	Status     string
-	Headers    map[string]string
-	Body       string
-	Base64Body string
-	Delay      int
-}
-
-func NewNetworkInterceptor() *NetworkInterceptor {
-	return &NetworkInterceptor{
-		handlers:   make(map[string]RequestHandler),
-		requestLog: make([]NetworkRequest, 0),
-	}
-}
-
-func (ni *NetworkInterceptor) Enable() {
-	ni.mu.Lock()
-	defer ni.mu.Unlock()
-	ni.enabled = true
-}
-
-func (ni *NetworkInterceptor) Disable() {
-	ni.mu.Lock()
-	defer ni.mu.Unlock()
-	ni.enabled = false
-}
-
-func (ni *NetworkInterceptor) AddPattern(pattern string) error {
-	ni.mu.Lock()
-	defer ni.mu.Unlock()
-
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return err
-	}
-
-	ni.patterns = append(ni.patterns, &InterceptPattern{
-		URLPattern: pattern,
-		Regex:      re,
-	})
-	return nil
-}
-
-func (ni *NetworkInterceptor) SetHandler(pattern string, handler RequestHandler) {
-	ni.mu.Lock()
-	defer ni.mu.Unlock()
-	ni.handlers[pattern] = handler
-}
-
-func (ni *NetworkInterceptor) ShouldIntercept(url string) bool {
-	ni.mu.RLock()
-	defer ni.mu.RUnlock()
-
-	if !ni.enabled {
-		return false
-	}
-
-	for _, p := range ni.patterns {
-		if p.Regex.MatchString(url) {
-			return true
-		}
-	}
-	return false
-}
-
-func (ni *NetworkInterceptor) HandleRequest(req *NetworkRequest) *NetworkResponse {
-	ni.mu.RLock()
-	defer ni.mu.RUnlock()
-
-	for pattern, handler := range ni.handlers {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			continue
-		}
-		if re.MatchString(req.URL) {
-			return handler(req)
-		}
-	}
-	return nil
-}
-
-func (ni *NetworkInterceptor) GetRequestLog() []NetworkRequest {
-	ni.mu.RLock()
-	defer ni.mu.RUnlock()
-	return ni.requestLog
-}
-
-func (ni *NetworkInterceptor) ClearLog() {
-	ni.mu.Lock()
-	defer ni.mu.Unlock()
-	ni.requestLog = nil
-}
-
 type EnhancedBrowser struct {
 	ctx     context.Context
 	cleanup cleanupFunc
-	ni      *NetworkInterceptor
 
 	headers   map[string]string
 	userAgent string
@@ -150,7 +29,6 @@ func NewEnhancedBrowser(opts *CDPOptions) (*EnhancedBrowser, error) {
 	eb := &EnhancedBrowser{
 		ctx:     rootCtx,
 		cleanup: cleanup,
-		ni:      NewNetworkInterceptor(),
 	}
 
 	return eb, nil
@@ -282,26 +160,6 @@ func (eb *EnhancedBrowser) ClearSessionStorage() error {
 	return chromedp.Run(eb.ctx,
 		chromedp.Evaluate("sessionStorage.clear()", nil),
 	)
-}
-
-func (eb *EnhancedBrowser) GetNetworkInterceptor() *NetworkInterceptor {
-	return eb.ni
-}
-
-func (eb *EnhancedBrowser) BlockURL(pattern string) error {
-	return eb.ni.AddPattern(pattern)
-}
-
-func (eb *EnhancedBrowser) InterceptAndMock(pattern string, response *NetworkResponse) error {
-	if err := eb.ni.AddPattern(pattern); err != nil {
-		return err
-	}
-
-	eb.ni.SetHandler(pattern, func(req *NetworkRequest) *NetworkResponse {
-		return response
-	})
-
-	return nil
 }
 
 func (eb *EnhancedBrowser) Close() error {
