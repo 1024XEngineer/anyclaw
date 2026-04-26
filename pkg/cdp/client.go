@@ -172,17 +172,37 @@ func DefaultCDPOptions() *CDPOptions {
 	}
 }
 
-func (o *CDPOptions) AllocatorOptions() []chromedp.ExecAllocatorOption {
-	opts := chromedp.DefaultExecAllocatorOptions[:]
+type allocatorFlagOverride struct {
+	name  string
+	value any
+}
 
-	if o.Headless {
-		opts = append(opts, chromedp.Headless)
+func (o *CDPOptions) allocatorFlagOverrides() []allocatorFlagOverride {
+	var overrides []allocatorFlagOverride
+
+	if !o.Headless {
+		overrides = append(overrides,
+			allocatorFlagOverride{name: "headless", value: false},
+			allocatorFlagOverride{name: "hide-scrollbars", value: false},
+			allocatorFlagOverride{name: "mute-audio", value: false},
+		)
 	}
+
 	if o.DisableImages {
-		opts = append(opts, chromedp.Flag("disable-images", true))
+		overrides = append(overrides, allocatorFlagOverride{name: "disable-images", value: true})
 	}
 	if o.CacheDisabled {
-		opts = append(opts, chromedp.Flag("disk-cache-size", 0))
+		overrides = append(overrides, allocatorFlagOverride{name: "disk-cache-size", value: 0})
+	}
+
+	return overrides
+}
+
+func (o *CDPOptions) AllocatorOptions() []chromedp.ExecAllocatorOption {
+	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
+
+	for _, override := range o.allocatorFlagOverrides() {
+		opts = append(opts, chromedp.Flag(override.name, override.value))
 	}
 	if o.WindowWidth > 0 && o.WindowHeight > 0 {
 		opts = append(opts, chromedp.WindowSize(o.WindowWidth, o.WindowHeight))
