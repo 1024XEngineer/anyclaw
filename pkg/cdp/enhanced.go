@@ -1,0 +1,314 @@
+package cdp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
+)
+
+type EnhancedBrowser struct {
+	ctx     context.Context
+	cleanup cleanupFunc
+
+	headers   map[string]string
+	userAgent string
+}
+
+func NewEnhancedBrowser(opts *CDPOptions) (*EnhancedBrowser, error) {
+	if opts == nil {
+		opts = DefaultCDPOptions()
+	}
+
+	rootCtx, cleanup := newAllocatorContext(opts)
+
+	eb := &EnhancedBrowser{
+		ctx:     rootCtx,
+		cleanup: cleanup,
+	}
+
+	return eb, nil
+}
+
+func (eb *EnhancedBrowser) Navigate(url string) error {
+	return runChromedp(eb.ctx,
+		chromedp.Navigate(url),
+		chromedp.WaitReady("body"),
+	)
+}
+
+func (eb *EnhancedBrowser) NavigateWithHeaders(url string) error {
+	actions := []chromedp.Action{
+		network.Enable(),
+	}
+
+	headers, userAgent := eb.extraHTTPHeaders()
+	if len(headers) > 0 {
+		actions = append(actions, network.SetExtraHTTPHeaders(headers))
+	}
+	if userAgent != "" {
+		actions = append(actions, emulation.SetUserAgentOverride(userAgent))
+	}
+
+	actions = append(actions,
+		chromedp.Navigate(url),
+		chromedp.WaitReady("body"),
+	)
+
+	return runChromedp(eb.ctx, actions...)
+}
+
+func (eb *EnhancedBrowser) SetHeader(key, value string) {
+	if eb.headers == nil {
+		eb.headers = make(map[string]string)
+	}
+	eb.headers[key] = value
+}
+
+func (eb *EnhancedBrowser) SetUserAgent(ua string) {
+	eb.userAgent = ua
+	eb.SetHeader("User-Agent", ua)
+}
+
+func (eb *EnhancedBrowser) ClearHeaders() {
+	eb.headers = nil
+}
+
+func (eb *EnhancedBrowser) extraHTTPHeaders() (network.Headers, string) {
+	if len(eb.headers) == 0 {
+		return nil, eb.userAgent
+	}
+
+	headers := make(network.Headers, len(eb.headers))
+	for key, value := range eb.headers {
+		if strings.EqualFold(key, "User-Agent") {
+			continue
+		}
+		headers[key] = value
+	}
+
+	return headers, eb.userAgent
+}
+
+func (eb *EnhancedBrowser) GetLocalStorage(key string) (string, error) {
+	var result string
+	err := runChromedp(eb.ctx,
+		chromedp.Evaluate(fmt.Sprintf("localStorage.getItem(%s)", jsStringLiteral(key)), &result),
+	)
+	return result, err
+}
+
+func (eb *EnhancedBrowser) SetLocalStorage(key, value string) error {
+	return runChromedp(eb.ctx,
+		chromedp.Evaluate(
+			fmt.Sprintf("localStorage.setItem(%s, %s)", jsStringLiteral(key), jsStringLiteral(value)),
+			nil,
+		),
+	)
+}
+
+func (eb *EnhancedBrowser) RemoveLocalStorage(key string) error {
+	return runChromedp(eb.ctx,
+		chromedp.Evaluate(fmt.Sprintf("localStorage.removeItem(%s)", jsStringLiteral(key)), nil),
+	)
+}
+
+func (eb *EnhancedBrowser) ClearLocalStorage() error {
+	return runChromedp(eb.ctx,
+		chromedp.Evaluate("localStorage.clear()", nil),
+	)
+}
+
+func (eb *EnhancedBrowser) GetAllLocalStorage() (map[string]string, error) {
+	var result string
+	err := runChromedp(eb.ctx,
+		chromedp.Evaluate("JSON.stringify(localStorage)", &result),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var storage map[string]string
+	if err := json.Unmarshal([]byte(result), &storage); err != nil {
+		return nil, err
+	}
+	return storage, nil
+}
+
+func (eb *EnhancedBrowser) GetSessionStorage(key string) (string, error) {
+	var result string
+	err := runChromedp(eb.ctx,
+		chromedp.Evaluate(fmt.Sprintf("sessionStorage.getItem(%s)", jsStringLiteral(key)), &result),
+	)
+	return result, err
+}
+
+func (eb *EnhancedBrowser) SetSessionStorage(key, value string) error {
+	return runChromedp(eb.ctx,
+		chromedp.Evaluate(
+			fmt.Sprintf("sessionStorage.setItem(%s, %s)", jsStringLiteral(key), jsStringLiteral(value)),
+			nil,
+		),
+	)
+}
+
+func (eb *EnhancedBrowser) ClearSessionStorage() error {
+	return runChromedp(eb.ctx,
+		chromedp.Evaluate("sessionStorage.clear()", nil),
+	)
+}
+
+func (eb *EnhancedBrowser) Close() error {
+	if eb.cleanup != nil {
+		eb.cleanup()
+	}
+	return nil
+}
+
+type ElementFinder struct {
+	ctx context.Context
+}
+
+func NewElementFinder(ctx context.Context) *ElementFinder {
+	return &ElementFinder{ctx: ctx}
+}
+
+func (ef *ElementFinder) FindByText(text string) (string, error) {
+	var selector string
+	err := runChromedp(ef.ctx,
+		chromedp.Evaluate(
+			fmt.Sprintf(
+				`Array.from(document.querySelectorAll("*")).find(el => el.textContent.includes(%s))?.tagName`,
+				jsStringLiteral(text),
+			),
+			&selector,
+		),
+	)
+	return selector, err
+}
+
+func (ef *ElementFinder) FindByAttribute(attr, value string) (string, error) {
+	return fmt.Sprintf("[%s=\"%s\"]", attr, value), nil
+}
+
+func (ef *ElementFinder) FindByXPath(xpath string) (string, error) {
+	var result bool
+	err := runChromedp(ef.ctx,
+		chromedp.Evaluate(
+			fmt.Sprintf(
+				`document.evaluate(%s, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue !== null`,
+				jsStringLiteral(xpath),
+			),
+			&result,
+		),
+	)
+	if err != nil || !result {
+		return "", fmt.Errorf("xpath not found")
+	}
+	return xpath, nil
+}
+
+func (ef *ElementFinder) Count(selector string) (int, error) {
+	var count int
+	err := runChromedp(ef.ctx,
+		chromedp.Evaluate(
+			fmt.Sprintf(`document.querySelectorAll(%s).length`, jsStringLiteral(selector)),
+			&count,
+		),
+	)
+	return count, err
+}
+
+type FormHandler struct {
+	ctx context.Context
+}
+
+func NewFormHandler(ctx context.Context) *FormHandler {
+	return &FormHandler{ctx: ctx}
+}
+
+func (fh *FormHandler) Fill(selector string, values map[string]string) error {
+	for field, value := range values {
+		fieldSelector := fmt.Sprintf("%s [name='%s']", selector, field)
+		if err := runChromedp(fh.ctx,
+			chromedp.SetValue(fieldSelector, value, chromedp.ByQuery),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (fh *FormHandler) Submit(selector string) error {
+	return runChromedp(fh.ctx,
+		chromedp.Submit(selector, chromedp.ByQuery),
+	)
+}
+
+func (fh *FormHandler) Reset(selector string) error {
+	return runChromedp(fh.ctx,
+		chromedp.Reset(selector, chromedp.ByQuery),
+	)
+}
+
+func (fh *FormHandler) GetValues(selector string, fields []string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	for _, field := range fields {
+		fieldSelector := fmt.Sprintf("%s [name='%s']", selector, field)
+		var value string
+		if err := runChromedp(fh.ctx,
+			chromedp.Value(fieldSelector, &value, chromedp.ByQuery),
+		); err != nil {
+			return nil, err
+		}
+		result[field] = value
+	}
+
+	return result, nil
+}
+
+func ResolveCDPSelector(selector string) string {
+	selector = strings.TrimSpace(selector)
+
+	if strings.HasPrefix(selector, "//") {
+		return selector
+	}
+
+	if strings.HasPrefix(selector, "#") {
+		return selector
+	}
+
+	if strings.HasPrefix(selector, ".") {
+		return selector
+	}
+
+	if strings.Contains(selector, "=") {
+		parts := strings.SplitN(selector, "=", 2)
+		return fmt.Sprintf("[%s=\"%s\"]", parts[0], parts[1])
+	}
+
+	return selector
+}
+
+func ParseSelector(selector string) (string, string) {
+	selector = strings.TrimSpace(selector)
+
+	if strings.HasPrefix(selector, "//") {
+		return selector, "xpath"
+	}
+
+	if strings.HasPrefix(selector, "#") {
+		return selector, "id"
+	}
+
+	if strings.HasPrefix(selector, ".") {
+		return selector, "class"
+	}
+
+	return selector, "css"
+}
