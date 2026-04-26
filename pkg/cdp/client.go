@@ -11,6 +11,18 @@ import (
 
 type Tool func(context.Context, ...chromedp.Action) error
 
+type cleanupFunc func()
+
+func combineCleanup(funcs ...cleanupFunc) cleanupFunc {
+	return func() {
+		for _, fn := range funcs {
+			if fn != nil {
+				fn()
+			}
+		}
+	}
+}
+
 type BrowserTool struct {
 	ctx     context.Context
 	tooltip chromedp.Action
@@ -217,13 +229,21 @@ func (o *CDPOptions) AllocatorOptions() []chromedp.ExecAllocatorOption {
 	return opts
 }
 
+func newAllocatorContext(opts *CDPOptions) (context.Context, cleanupFunc) {
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts.AllocatorOptions()...)
+	rootCtx, rootCancel := chromedp.NewContext(allocCtx)
+	return rootCtx, combineCleanup(
+		func() { rootCancel() },
+		func() { allocCancel() },
+	)
+}
+
 func RunInContext(ctx context.Context, opts *CDPOptions, fn func(*BrowserTool) error) error {
 	if opts == nil {
 		opts = DefaultCDPOptions()
 	}
 
-	allocCtx, _ := chromedp.NewExecAllocator(context.Background(), opts.AllocatorOptions()...)
-	rootCtx, cancel := chromedp.NewContext(allocCtx)
+	rootCtx, cancel := newAllocatorContext(opts)
 	defer cancel()
 
 	tool, err := NewBrowserTool(rootCtx)

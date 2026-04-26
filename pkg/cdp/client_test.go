@@ -1,6 +1,9 @@
 package cdp
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestAllocatorFlagOverridesHeadlessFalse(t *testing.T) {
 	overrides := (&CDPOptions{Headless: false}).allocatorFlagOverrides()
@@ -42,5 +45,42 @@ func TestAllocatorFlagOverridesHeadlessTrue(t *testing.T) {
 	}
 	if got["disk-cache-size"] != 0 {
 		t.Fatalf("disk-cache-size override = %v, want 0", got["disk-cache-size"])
+	}
+}
+
+func TestCombineCleanupRunsAllFuncs(t *testing.T) {
+	var calls []string
+	cleanup := combineCleanup(
+		func() { calls = append(calls, "root") },
+		nil,
+		func() { calls = append(calls, "alloc") },
+	)
+
+	cleanup()
+
+	if len(calls) != 2 || calls[0] != "root" || calls[1] != "alloc" {
+		t.Fatalf("cleanup calls = %v, want [root alloc]", calls)
+	}
+}
+
+func TestNewAllocatorContextReturnsCancelableContext(t *testing.T) {
+	ctx, cleanup := newAllocatorContext(&CDPOptions{Headless: false})
+	if ctx == nil {
+		t.Fatal("expected non-nil context")
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup")
+	}
+
+	cleanup()
+
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("expected cleanup to cancel returned context")
+	}
+
+	if err := ctx.Err(); err == nil || err != context.Canceled {
+		t.Fatalf("context error = %v, want %v", err, context.Canceled)
 	}
 }

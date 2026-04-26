@@ -130,9 +130,9 @@ func (ni *NetworkInterceptor) ClearLog() {
 }
 
 type EnhancedBrowser struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	ni     *NetworkInterceptor
+	ctx     context.Context
+	cleanup cleanupFunc
+	ni      *NetworkInterceptor
 
 	headers   map[string]string
 	userAgent string
@@ -143,13 +143,12 @@ func NewEnhancedBrowser(opts *CDPOptions) (*EnhancedBrowser, error) {
 		opts = DefaultCDPOptions()
 	}
 
-	allocCtx, _ := chromedp.NewExecAllocator(context.Background(), opts.AllocatorOptions()...)
-	rootCtx, cancel := chromedp.NewContext(allocCtx)
+	rootCtx, cleanup := newAllocatorContext(opts)
 
 	eb := &EnhancedBrowser{
-		ctx:    rootCtx,
-		cancel: cancel,
-		ni:     NewNetworkInterceptor(),
+		ctx:     rootCtx,
+		cleanup: cleanup,
+		ni:      NewNetworkInterceptor(),
 	}
 
 	return eb, nil
@@ -272,8 +271,8 @@ func (eb *EnhancedBrowser) InterceptAndMock(pattern string, response *NetworkRes
 }
 
 func (eb *EnhancedBrowser) Close() error {
-	if eb.cancel != nil {
-		eb.cancel()
+	if eb.cleanup != nil {
+		eb.cleanup()
 	}
 	return nil
 }
