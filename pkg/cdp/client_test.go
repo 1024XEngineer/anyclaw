@@ -3,6 +3,8 @@ package cdp
 import (
 	"context"
 	"testing"
+
+	"github.com/chromedp/cdproto/network"
 )
 
 func TestAllocatorFlagOverridesHeadlessFalse(t *testing.T) {
@@ -82,5 +84,37 @@ func TestNewAllocatorContextReturnsCancelableContext(t *testing.T) {
 
 	if err := ctx.Err(); err == nil || err != context.Canceled {
 		t.Fatalf("context error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestExtraHTTPHeadersSeparatesUserAgent(t *testing.T) {
+	eb := &EnhancedBrowser{
+		headers: map[string]string{
+			"Authorization": "Bearer test-token",
+			"X-Trace-ID":    "trace-123",
+			"User-Agent":    "from-header",
+		},
+		userAgent: "custom-agent",
+	}
+
+	gotHeaders, gotUserAgent := eb.extraHTTPHeaders()
+	wantHeaders := network.Headers{
+		"Authorization": "Bearer test-token",
+		"X-Trace-ID":    "trace-123",
+	}
+
+	if gotUserAgent != "custom-agent" {
+		t.Fatalf("user agent = %q, want %q", gotUserAgent, "custom-agent")
+	}
+	if len(gotHeaders) != len(wantHeaders) {
+		t.Fatalf("header count = %d, want %d", len(gotHeaders), len(wantHeaders))
+	}
+	for key, value := range wantHeaders {
+		if gotHeaders[key] != value {
+			t.Fatalf("header %q = %v, want %v", key, gotHeaders[key], value)
+		}
+	}
+	if _, exists := gotHeaders["User-Agent"]; exists {
+		t.Fatal("unexpected User-Agent header in extra HTTP headers")
 	}
 }

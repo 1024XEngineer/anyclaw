@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
@@ -163,11 +165,21 @@ func (eb *EnhancedBrowser) Navigate(url string) error {
 
 func (eb *EnhancedBrowser) NavigateWithHeaders(url string) error {
 	actions := []chromedp.Action{
-		chromedp.Navigate(url),
-		chromedp.WaitReady("body"),
+		network.Enable(),
 	}
 
-	_ = eb.headers
+	headers, userAgent := eb.extraHTTPHeaders()
+	if len(headers) > 0 {
+		actions = append(actions, network.SetExtraHTTPHeaders(headers))
+	}
+	if userAgent != "" {
+		actions = append(actions, emulation.SetUserAgentOverride(userAgent))
+	}
+
+	actions = append(actions,
+		chromedp.Navigate(url),
+		chromedp.WaitReady("body"),
+	)
 
 	return chromedp.Run(eb.ctx, actions...)
 }
@@ -186,6 +198,22 @@ func (eb *EnhancedBrowser) SetUserAgent(ua string) {
 
 func (eb *EnhancedBrowser) ClearHeaders() {
 	eb.headers = nil
+}
+
+func (eb *EnhancedBrowser) extraHTTPHeaders() (network.Headers, string) {
+	if len(eb.headers) == 0 {
+		return nil, eb.userAgent
+	}
+
+	headers := make(network.Headers, len(eb.headers))
+	for key, value := range eb.headers {
+		if strings.EqualFold(key, "User-Agent") {
+			continue
+		}
+		headers[key] = value
+	}
+
+	return headers, eb.userAgent
 }
 
 func (eb *EnhancedBrowser) GetLocalStorage(key string) (string, error) {
