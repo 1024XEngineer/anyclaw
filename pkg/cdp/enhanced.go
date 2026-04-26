@@ -35,7 +35,7 @@ func NewEnhancedBrowser(opts *CDPOptions) (*EnhancedBrowser, error) {
 }
 
 func (eb *EnhancedBrowser) Navigate(url string) error {
-	return chromedp.Run(eb.ctx,
+	return runChromedp(eb.ctx,
 		chromedp.Navigate(url),
 		chromedp.WaitReady("body"),
 	)
@@ -59,7 +59,7 @@ func (eb *EnhancedBrowser) NavigateWithHeaders(url string) error {
 		chromedp.WaitReady("body"),
 	)
 
-	return chromedp.Run(eb.ctx, actions...)
+	return runChromedp(eb.ctx, actions...)
 }
 
 func (eb *EnhancedBrowser) SetHeader(key, value string) {
@@ -96,14 +96,14 @@ func (eb *EnhancedBrowser) extraHTTPHeaders() (network.Headers, string) {
 
 func (eb *EnhancedBrowser) GetLocalStorage(key string) (string, error) {
 	var result string
-	err := chromedp.Run(eb.ctx,
+	err := runChromedp(eb.ctx,
 		chromedp.Evaluate(fmt.Sprintf("localStorage.getItem(%s)", jsStringLiteral(key)), &result),
 	)
 	return result, err
 }
 
 func (eb *EnhancedBrowser) SetLocalStorage(key, value string) error {
-	return chromedp.Run(eb.ctx,
+	return runChromedp(eb.ctx,
 		chromedp.Evaluate(
 			fmt.Sprintf("localStorage.setItem(%s, %s)", jsStringLiteral(key), jsStringLiteral(value)),
 			nil,
@@ -112,20 +112,20 @@ func (eb *EnhancedBrowser) SetLocalStorage(key, value string) error {
 }
 
 func (eb *EnhancedBrowser) RemoveLocalStorage(key string) error {
-	return chromedp.Run(eb.ctx,
+	return runChromedp(eb.ctx,
 		chromedp.Evaluate(fmt.Sprintf("localStorage.removeItem(%s)", jsStringLiteral(key)), nil),
 	)
 }
 
 func (eb *EnhancedBrowser) ClearLocalStorage() error {
-	return chromedp.Run(eb.ctx,
+	return runChromedp(eb.ctx,
 		chromedp.Evaluate("localStorage.clear()", nil),
 	)
 }
 
 func (eb *EnhancedBrowser) GetAllLocalStorage() (map[string]string, error) {
 	var result string
-	err := chromedp.Run(eb.ctx,
+	err := runChromedp(eb.ctx,
 		chromedp.Evaluate("JSON.stringify(localStorage)", &result),
 	)
 	if err != nil {
@@ -141,14 +141,14 @@ func (eb *EnhancedBrowser) GetAllLocalStorage() (map[string]string, error) {
 
 func (eb *EnhancedBrowser) GetSessionStorage(key string) (string, error) {
 	var result string
-	err := chromedp.Run(eb.ctx,
+	err := runChromedp(eb.ctx,
 		chromedp.Evaluate(fmt.Sprintf("sessionStorage.getItem(%s)", jsStringLiteral(key)), &result),
 	)
 	return result, err
 }
 
 func (eb *EnhancedBrowser) SetSessionStorage(key, value string) error {
-	return chromedp.Run(eb.ctx,
+	return runChromedp(eb.ctx,
 		chromedp.Evaluate(
 			fmt.Sprintf("sessionStorage.setItem(%s, %s)", jsStringLiteral(key), jsStringLiteral(value)),
 			nil,
@@ -157,7 +157,7 @@ func (eb *EnhancedBrowser) SetSessionStorage(key, value string) error {
 }
 
 func (eb *EnhancedBrowser) ClearSessionStorage() error {
-	return chromedp.Run(eb.ctx,
+	return runChromedp(eb.ctx,
 		chromedp.Evaluate("sessionStorage.clear()", nil),
 	)
 }
@@ -179,7 +179,7 @@ func NewElementFinder(ctx context.Context) *ElementFinder {
 
 func (ef *ElementFinder) FindByText(text string) (string, error) {
 	var selector string
-	err := chromedp.Run(ef.ctx,
+	err := runChromedp(ef.ctx,
 		chromedp.Evaluate(
 			fmt.Sprintf(
 				`Array.from(document.querySelectorAll("*")).find(el => el.textContent.includes(%s))?.tagName`,
@@ -197,7 +197,7 @@ func (ef *ElementFinder) FindByAttribute(attr, value string) (string, error) {
 
 func (ef *ElementFinder) FindByXPath(xpath string) (string, error) {
 	var result bool
-	err := chromedp.Run(ef.ctx,
+	err := runChromedp(ef.ctx,
 		chromedp.Evaluate(
 			fmt.Sprintf(
 				`document.evaluate(%s, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue !== null`,
@@ -214,7 +214,7 @@ func (ef *ElementFinder) FindByXPath(xpath string) (string, error) {
 
 func (ef *ElementFinder) Count(selector string) (int, error) {
 	var count int
-	err := chromedp.Run(ef.ctx,
+	err := runChromedp(ef.ctx,
 		chromedp.Evaluate(
 			fmt.Sprintf(`document.querySelectorAll(%s).length`, jsStringLiteral(selector)),
 			&count,
@@ -234,7 +234,7 @@ func NewFormHandler(ctx context.Context) *FormHandler {
 func (fh *FormHandler) Fill(selector string, values map[string]string) error {
 	for field, value := range values {
 		fieldSelector := fmt.Sprintf("%s [name='%s']", selector, field)
-		if err := chromedp.Run(fh.ctx,
+		if err := runChromedp(fh.ctx,
 			chromedp.SetValue(fieldSelector, value, chromedp.ByQuery),
 		); err != nil {
 			return err
@@ -244,13 +244,13 @@ func (fh *FormHandler) Fill(selector string, values map[string]string) error {
 }
 
 func (fh *FormHandler) Submit(selector string) error {
-	return chromedp.Run(fh.ctx,
+	return runChromedp(fh.ctx,
 		chromedp.Submit(selector, chromedp.ByQuery),
 	)
 }
 
 func (fh *FormHandler) Reset(selector string) error {
-	return chromedp.Run(fh.ctx,
+	return runChromedp(fh.ctx,
 		chromedp.Reset(selector, chromedp.ByQuery),
 	)
 }
@@ -261,7 +261,7 @@ func (fh *FormHandler) GetValues(selector string, fields []string) (map[string]s
 	for _, field := range fields {
 		fieldSelector := fmt.Sprintf("%s [name='%s']", selector, field)
 		var value string
-		if err := chromedp.Run(fh.ctx,
+		if err := runChromedp(fh.ctx,
 			chromedp.Value(fieldSelector, &value, chromedp.ByQuery),
 		); err != nil {
 			return nil, err

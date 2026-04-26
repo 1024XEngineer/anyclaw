@@ -14,6 +14,8 @@ type Tool func(context.Context, ...chromedp.Action) error
 
 type cleanupFunc func()
 
+var runChromedp = chromedp.Run
+
 func jsStringLiteral(value string) string {
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -45,7 +47,7 @@ func NewBrowserTool(ctx context.Context) (*BrowserTool, error) {
 }
 
 func (b *BrowserTool) Navigate(url string) error {
-	return chromedp.Run(b.ctx,
+	return runChromedp(b.ctx,
 		chromedp.Navigate(url),
 		chromedp.WaitReady("body"),
 	)
@@ -53,21 +55,21 @@ func (b *BrowserTool) Navigate(url string) error {
 
 func (b *BrowserTool) Screenshot() ([]byte, error) {
 	var buf []byte
-	err := chromedp.Run(b.ctx,
+	err := runChromedp(b.ctx,
 		chromedp.FullScreenshot(&buf, 90),
 	)
 	return buf, err
 }
 
 func (b *BrowserTool) Click(selector string) error {
-	return chromedp.Run(b.ctx,
+	return runChromedp(b.ctx,
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
 		chromedp.Click(selector, chromedp.ByQuery),
 	)
 }
 
 func (b *BrowserTool) Type(selector, text string) error {
-	return chromedp.Run(b.ctx,
+	return runChromedp(b.ctx,
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
 		chromedp.SetValue(selector, text, chromedp.ByQuery),
 	)
@@ -75,7 +77,7 @@ func (b *BrowserTool) Type(selector, text string) error {
 
 func (b *BrowserTool) GetElementText(selector string) (string, error) {
 	var text string
-	err := chromedp.Run(b.ctx,
+	err := runChromedp(b.ctx,
 		chromedp.Text(selector, &text, chromedp.ByQuery),
 	)
 	return text, err
@@ -83,7 +85,7 @@ func (b *BrowserTool) GetElementText(selector string) (string, error) {
 
 func (b *BrowserTool) GetElementAttribute(selector, attr string) (string, error) {
 	var result string
-	err := chromedp.Run(b.ctx,
+	err := runChromedp(b.ctx,
 		chromedp.AttributeValue(selector, attr, &result, nil, chromedp.ByQuery),
 	)
 	return result, err
@@ -91,7 +93,7 @@ func (b *BrowserTool) GetElementAttribute(selector, attr string) (string, error)
 
 func (b *BrowserTool) GetElementHTML(selector string) (string, error) {
 	var html string
-	err := chromedp.Run(b.ctx,
+	err := runChromedp(b.ctx,
 		chromedp.InnerHTML(selector, &html, chromedp.ByQuery),
 	)
 	return html, err
@@ -99,7 +101,7 @@ func (b *BrowserTool) GetElementHTML(selector string) (string, error) {
 
 func (b *BrowserTool) IsVisible(selector string) (bool, error) {
 	var visible bool
-	err := chromedp.Run(b.ctx,
+	err := runChromedp(b.ctx,
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
 	)
 	visible = (err == nil)
@@ -109,7 +111,7 @@ func (b *BrowserTool) IsVisible(selector string) (bool, error) {
 func (b *BrowserTool) WaitForSelector(selector string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(b.ctx, timeout)
 	defer cancel()
-	return chromedp.Run(ctx,
+	return runChromedp(ctx,
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
 	)
 }
@@ -117,28 +119,28 @@ func (b *BrowserTool) WaitForSelector(selector string, timeout time.Duration) er
 func (b *BrowserTool) WaitForNavigation(timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(b.ctx, timeout)
 	defer cancel()
-	return chromedp.Run(ctx,
+	return runChromedp(ctx,
 		chromedp.WaitReady("body"),
 	)
 }
 
 func (b *BrowserTool) Scroll(x, y float64) error {
 	expr := fmt.Sprintf("window.scrollTo(%v, %v)", x, y)
-	return chromedp.Run(b.ctx,
+	return runChromedp(b.ctx,
 		chromedp.Evaluate(expr, nil),
 	)
 }
 
 func (b *BrowserTool) ScrollToElement(selector string) error {
 	expr := fmt.Sprintf("document.querySelector(%s).scrollIntoView()", jsStringLiteral(selector))
-	return chromedp.Run(b.ctx,
+	return runChromedp(b.ctx,
 		chromedp.Evaluate(expr, nil),
 	)
 }
 
 func (b *BrowserTool) GetPageSource() (string, error) {
 	var source string
-	err := chromedp.Run(b.ctx,
+	err := runChromedp(b.ctx,
 		chromedp.InnerHTML("html", &source),
 	)
 	return source, err
@@ -146,7 +148,7 @@ func (b *BrowserTool) GetPageSource() (string, error) {
 
 func (b *BrowserTool) GetURL() (string, error) {
 	var url string
-	err := chromedp.Run(b.ctx,
+	err := runChromedp(b.ctx,
 		chromedp.Location(&url),
 	)
 	return url, err
@@ -154,7 +156,7 @@ func (b *BrowserTool) GetURL() (string, error) {
 
 func (b *BrowserTool) GetTitle() (string, error) {
 	var title string
-	err := chromedp.Run(b.ctx,
+	err := runChromedp(b.ctx,
 		chromedp.Title(&title),
 	)
 	return title, err
