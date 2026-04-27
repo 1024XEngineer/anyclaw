@@ -75,6 +75,38 @@ func TestExtractRejectsZipSlipPath(t *testing.T) {
 	}
 }
 
+func TestExtractRejectsSymlinkParent(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "symlink.zip")
+	dest := filepath.Join(dir, "out")
+	outside := filepath.Join(dir, "outside")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatalf("MkdirAll dest: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("MkdirAll outside: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dest, "link")); err != nil {
+		t.Skipf("symlink unavailable on this platform: %v", err)
+	}
+	if err := writeTestArchive(archive, map[string]string{
+		"link/pwn.txt": "owned",
+	}); err != nil {
+		t.Fatalf("writeTestArchive: %v", err)
+	}
+
+	_, err := NewClient(Config{}).Run(context.Background(), []string{"extract", archive, dest})
+	if err == nil {
+		t.Fatal("expected symlink parent error")
+	}
+	if !strings.Contains(err.Error(), "unsafe zip entry path") {
+		t.Fatalf("error = %v, want unsafe path", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "pwn.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("outside file stat = %v, want not exist", statErr)
+	}
+}
+
 func TestRunAddCreatesAndUpdatesArchive(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.txt")

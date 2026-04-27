@@ -293,7 +293,7 @@ func ListZIP(archive string) ([]string, error) {
 }
 
 func safeExtractPath(dest, name string) (string, error) {
-	if filepath.IsAbs(name) {
+	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
 		return "", fmt.Errorf("unsafe zip entry path: %s", name)
 	}
 	cleanName := filepath.Clean(name)
@@ -317,7 +317,50 @@ func safeExtractPath(dest, name string) (string, error) {
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
 		return "", fmt.Errorf("unsafe zip entry path: %s", name)
 	}
+	if err := rejectSymlinkPath(destAbs, targetAbs, name); err != nil {
+		return "", err
+	}
 	return targetAbs, nil
+}
+
+func rejectSymlinkPath(destAbs, targetAbs, name string) error {
+	destAbs = filepath.Clean(destAbs)
+	targetAbs = filepath.Clean(targetAbs)
+
+	if info, err := os.Lstat(destAbs); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("unsafe zip entry path: %s", name)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	rel, err := filepath.Rel(destAbs, targetAbs)
+	if err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+
+	current := destAbs
+	for _, part := range strings.Split(rel, string(os.PathSeparator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("unsafe zip entry path: %s", name)
+		}
+	}
+	return nil
 }
 
 func copyZipEntry(writer *zip.Writer, file *zip.File) error {
