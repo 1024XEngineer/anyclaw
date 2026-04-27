@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,6 +171,39 @@ func TestFileExecutionStoreSaveLoadListDelete(t *testing.T) {
 	}
 	if _, err := store.LoadExecution("exec_one"); err == nil {
 		t.Fatal("expected deleted execution to be missing")
+	}
+}
+
+func TestFileExecutionStoreListDoesNotDependOnStoreLock(t *testing.T) {
+	store, err := NewFileGraphStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileGraphStore: %v", err)
+	}
+	exec := NewExecutionContext("graph_one", nil)
+	exec.ExecutionID = "exec_one"
+	if err := store.SaveExecution(exec); err != nil {
+		t.Fatalf("SaveExecution: %v", err)
+	}
+
+	store.execStore.mu.Lock()
+	defer store.execStore.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		executions, err := store.ListExecutions("graph_one")
+		if err == nil && len(executions) != 1 {
+			err = fmt.Errorf("executions = %d, want 1", len(executions))
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ListExecutions: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ListExecutions blocked on execution store lock")
 	}
 }
 

@@ -293,9 +293,6 @@ func (s *FileExecutionStore) List(graphID string) ([]*ExecutionContext, error) {
 		return nil, fmt.Errorf("execution store is nil")
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	entries, err := os.ReadDir(s.baseDir)
 	if err != nil {
 		if os.IsNotExist(err) {
