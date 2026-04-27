@@ -35,14 +35,15 @@ func setupTestServer(t *testing.T) (*Server, *mockEmbedder) {
 		Name:       "test_index",
 		Dimensions: 4,
 		Distance:   "cosine",
+		Metadata:   []string{"category"},
 	}); err != nil {
 		t.Fatalf("create test index: %v", err)
 	}
 
 	if _, err := im.Index(context.Background(), "test_index", []index.IndexItem{
-		{ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4}},
-		{ID: 2, Vector: []float32{0.5, 0.6, 0.7, 0.8}},
-		{ID: 3, Vector: []float32{0.9, 1.0, 0.1, 0.2}},
+		{ID: 1, Vector: []float32{0.1, 0.2, 0.3, 0.4}, Metadata: map[string]string{"category": "docs"}},
+		{ID: 2, Vector: []float32{0.5, 0.6, 0.7, 0.8}, Metadata: map[string]string{"category": "media"}},
+		{ID: 3, Vector: []float32{0.9, 1.0, 0.1, 0.2}, Metadata: map[string]string{"category": "docs"}},
 	}, nil); err != nil {
 		t.Fatalf("seed test index: %v", err)
 	}
@@ -176,6 +177,50 @@ func TestSearchWithThreshold(t *testing.T) {
 	}
 }
 
+func TestSearchWithMetadataFilter(t *testing.T) {
+	s, _ := setupTestServer(t)
+
+	w := doRequest(t, s, "POST", "/v1/search", map[string]any{
+		"index": "test_index",
+		"vector": []float32{
+			0.1, 0.2, 0.3, 0.4,
+		},
+		"limit": 10,
+		"metadata": map[string]any{
+			"category": "media",
+		},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp SearchResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Count != 1 {
+		t.Fatalf("expected 1 filtered result, got %d", resp.Count)
+	}
+	if resp.Results[0].Metadata["category"] != "media" {
+		t.Fatalf("expected media metadata, got %+v", resp.Results[0].Metadata)
+	}
+}
+
+func TestSearchRejectsNonStringMetadataFilter(t *testing.T) {
+	s, _ := setupTestServer(t)
+
+	w := doRequest(t, s, "POST", "/v1/search", map[string]any{
+		"index":  "test_index",
+		"vector": []float32{0.1, 0.2, 0.3, 0.4},
+		"metadata": map[string]any{
+			"category": 123,
+		},
+	})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestSearchMissingIndex(t *testing.T) {
 	s, _ := setupTestServer(t)
 
@@ -275,6 +320,34 @@ func TestSearchTextUsesServerEmbedder(t *testing.T) {
 	}
 	if embedder.callCount.Load() != 1 {
 		t.Fatalf("expected server embedder to be called once, got %d", embedder.callCount.Load())
+	}
+}
+
+func TestSearchTextWithMetadataFilter(t *testing.T) {
+	s, _ := setupTestServer(t)
+
+	w := doRequest(t, s, "POST", "/v1/search/text", map[string]any{
+		"index": "test_index",
+		"text":  "search query",
+		"limit": 10,
+		"metadata": map[string]any{
+			"category": "docs",
+		},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp SearchResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Count != 2 {
+		t.Fatalf("expected 2 filtered results, got %d", resp.Count)
+	}
+	for _, result := range resp.Results {
+		if result.Metadata["category"] != "docs" {
+			t.Fatalf("expected docs metadata, got %+v", result.Metadata)
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/1024XEngineer/anyclaw/pkg/embedding"
@@ -172,6 +173,27 @@ func (s *Server) requireIndexManager(w http.ResponseWriter) bool {
 	return true
 }
 
+func requestMetadataFilter(w http.ResponseWriter, metadata map[string]any) (map[string]string, bool) {
+	if len(metadata) == 0 {
+		return nil, true
+	}
+
+	filter := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		if strings.TrimSpace(key) == "" {
+			writeError(w, http.StatusBadRequest, "metadata keys must be non-empty")
+			return nil, false
+		}
+		text, ok := value.(string)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "metadata filter values must be strings")
+			return nil, false
+		}
+		filter[key] = text
+	}
+	return filter, true
+}
+
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if !s.requireIndexManager(w) {
 		return
@@ -195,10 +217,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		req.Limit = 10
 	}
 
+	metadataFilter, ok := requestMetadataFilter(w, req.Metadata)
+	if !ok {
+		return
+	}
+
 	start := time.Now()
 
 	ctx := r.Context()
-	results, err := s.im.Search(ctx, req.Index, req.Vector, req.Limit)
+	results, err := s.im.SearchWithFilter(ctx, req.Index, req.Vector, req.Limit, req.Threshold, metadataFilter)
 	if err != nil {
 		writeErrorDetail(w, http.StatusBadRequest, "search failed", err.Error())
 		return
@@ -206,10 +233,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	searchResults := make([]SearchResult, 0, len(results))
 	for _, r := range results {
-		if req.Threshold > 0 && r.Distance > req.Threshold {
-			continue
-		}
-
 		score := 1.0 - r.Distance
 		if score < 0 {
 			score = 0
@@ -264,6 +287,11 @@ func (s *Server) handleSearchText(w http.ResponseWriter, r *http.Request) {
 		req.Limit = 10
 	}
 
+	metadataFilter, ok := requestMetadataFilter(w, req.Metadata)
+	if !ok {
+		return
+	}
+
 	start := time.Now()
 
 	ctx := r.Context()
@@ -273,7 +301,7 @@ func (s *Server) handleSearchText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, err := s.im.Search(ctx, req.Index, vector, req.Limit)
+	results, err := s.im.SearchWithFilter(ctx, req.Index, vector, req.Limit, req.Threshold, metadataFilter)
 	if err != nil {
 		writeErrorDetail(w, http.StatusBadRequest, "search failed", err.Error())
 		return
@@ -281,10 +309,6 @@ func (s *Server) handleSearchText(w http.ResponseWriter, r *http.Request) {
 
 	searchResults := make([]SearchResult, 0, len(results))
 	for _, r := range results {
-		if req.Threshold > 0 && r.Distance > req.Threshold {
-			continue
-		}
-
 		score := 1.0 - r.Distance
 		if score < 0 {
 			score = 0

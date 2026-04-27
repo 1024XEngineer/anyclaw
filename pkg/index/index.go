@@ -592,6 +592,10 @@ func (im *IndexManager) Rebuild(ctx context.Context, indexName string, progress 
 }
 
 func (im *IndexManager) Search(ctx context.Context, indexName string, queryVector []float32, limit int) ([]vec.VecSearchResult, error) {
+	return im.SearchWithFilter(ctx, indexName, queryVector, limit, 0, nil)
+}
+
+func (im *IndexManager) SearchWithFilter(ctx context.Context, indexName string, queryVector []float32, limit int, threshold float64, metadataFilter map[string]string) ([]vec.VecSearchResult, error) {
 	im.mu.RLock()
 	info, exists := im.indexes[indexName]
 	im.mu.RUnlock()
@@ -600,7 +604,7 @@ func (im *IndexManager) Search(ctx context.Context, indexName string, queryVecto
 		return nil, fmt.Errorf("index %q not found", indexName)
 	}
 
-	return im.newVecStore(info).Search(ctx, queryVector, limit)
+	return im.newVecStore(info).SearchWithFilter(ctx, queryVector, limit, threshold, metadataFilter)
 }
 
 func (im *IndexManager) SearchByText(ctx context.Context, indexName string, queryText string, limit int) ([]vec.VecSearchResult, error) {
