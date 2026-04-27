@@ -75,11 +75,11 @@ func (s *FileGraphStore) loadIndex() error {
 		}
 		path := filepath.Join(s.graphsDir, entry.Name())
 		graph, err := loadGraphFile(path)
-		if err != nil || graph.ID == "" {
-			continue
+		if err != nil {
+			return fmt.Errorf("load workflow graph %s: %w", entry.Name(), err)
 		}
 		if _, err := safeStoreID(graph.ID); err != nil {
-			continue
+			return fmt.Errorf("load workflow graph %s: %w", entry.Name(), err)
 		}
 		s.index[graph.ID] = graphIndexEntry{
 			ID:        graph.ID,

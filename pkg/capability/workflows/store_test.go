@@ -59,6 +59,55 @@ func TestFileGraphStoreSaveLoadListDelete(t *testing.T) {
 	}
 }
 
+func TestFileGraphStoreLoadIndexReportsInvalidGraphFiles(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		content  string
+		want     string
+	}{
+		{
+			name:     "malformed JSON",
+			filename: "broken.json",
+			content:  "{",
+			want:     "broken.json",
+		},
+		{
+			name:     "missing ID",
+			filename: "missing-id.json",
+			content:  `{"name":"missing id"}`,
+			want:     "store ID is required",
+		},
+		{
+			name:     "unsafe ID",
+			filename: "unsafe-id.json",
+			content:  `{"id":"../escape","name":"unsafe id"}`,
+			want:     "invalid store ID",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := t.TempDir()
+			graphsDir := filepath.Join(base, "graphs")
+			if err := os.MkdirAll(graphsDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll graphs: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(graphsDir, tt.filename), []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("WriteFile graph: %v", err)
+			}
+
+			_, err := NewFileGraphStore(base)
+			if err == nil {
+				t.Fatal("expected invalid graph file to fail store initialization")
+			}
+			if !strings.Contains(err.Error(), tt.filename) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want filename %q and %q", err, tt.filename, tt.want)
+			}
+		})
+	}
+}
+
 func TestFileGraphStoreRejectsEscapingIDs(t *testing.T) {
 	parent := t.TempDir()
 	base := filepath.Join(parent, "store")
