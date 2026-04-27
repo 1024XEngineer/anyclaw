@@ -545,14 +545,22 @@ func (ctx *ExecutionContext) MarkNodeStarted(nodeID string, inputs map[string]an
 		return
 	}
 	now := time.Now().UTC()
-	ctx.NodeStates[nodeID] = &NodeState{
-		NodeID:    nodeID,
-		Status:    NodeRunning,
-		StartTime: &now,
-		Inputs:    cloneAnyMap(inputs),
-		Attempts:  1,
-		Evidence:  make([]Evidence, 0),
+	state, ok := ctx.NodeStates[nodeID]
+	if !ok {
+		state = &NodeState{
+			NodeID:   nodeID,
+			Evidence: make([]Evidence, 0),
+		}
+		ctx.NodeStates[nodeID] = state
 	}
+	if state.Attempts == 0 {
+		state.Attempts = 1
+	}
+	state.Status = NodeRunning
+	state.StartTime = &now
+	state.EndTime = nil
+	state.Inputs = cloneAnyMap(inputs)
+	state.Error = nil
 	ctx.CurrentNode = nodeID
 	ctx.Status = ExecutionRunning
 }

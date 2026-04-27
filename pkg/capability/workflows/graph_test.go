@@ -282,6 +282,31 @@ func TestExecutionContextStateTransitions(t *testing.T) {
 	}
 }
 
+func TestExecutionContextMarkNodeStartedPreservesRetryState(t *testing.T) {
+	ctx := NewExecutionContext("graph-1", nil)
+	ctx.MarkNodeStarted("n1", map[string]any{"attempt": 1})
+	ctx.NodeStates["n1"].Evidence = append(ctx.NodeStates["n1"].Evidence, Evidence{Type: "note", Content: "keep"})
+	ctx.MarkNodeRetrying("n1")
+
+	ctx.MarkNodeStarted("n1", map[string]any{"attempt": 2})
+	state := ctx.NodeStates["n1"]
+	if state.Attempts != 2 {
+		t.Fatalf("attempts = %d, want preserved retry count 2", state.Attempts)
+	}
+	if len(state.Evidence) != 1 || state.Evidence[0].Content != "keep" {
+		t.Fatalf("evidence = %+v, want preserved evidence", state.Evidence)
+	}
+	if state.Status != NodeRunning {
+		t.Fatalf("status = %s, want running", state.Status)
+	}
+	if state.EndTime != nil {
+		t.Fatalf("end time = %v, want cleared end time", state.EndTime)
+	}
+	if state.Inputs["attempt"] != 2 {
+		t.Fatalf("inputs = %+v, want latest inputs", state.Inputs)
+	}
+}
+
 func TestExecutionContextMarkNodeFailed(t *testing.T) {
 	ctx := NewExecutionContext("graph-1", nil)
 	ctx.MarkNodeFailed("n1", &NodeError{
