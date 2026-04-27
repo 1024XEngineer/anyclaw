@@ -362,10 +362,10 @@ func (s *Server) handleEmbed(w http.ResponseWriter, r *http.Request) {
 
 type EmbedBatchRequest struct {
 	Texts       []string `json:"texts"`
-	Concurrency int      `json:"concurrency"`
-	ChunkSize   int      `json:"chunk_size"`
-	MaxRetries  int      `json:"max_retries"`
-	RateLimit   int      `json:"rate_limit"`
+	Concurrency *int     `json:"concurrency"`
+	ChunkSize   *int     `json:"chunk_size"`
+	MaxRetries  *int     `json:"max_retries"`
+	RateLimit   *int     `json:"rate_limit"`
 }
 
 type EmbedBatchResponse struct {
@@ -405,19 +405,19 @@ func (s *Server) handleEmbedBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bp := s.batchProc
-	if req.Concurrency > 0 || req.ChunkSize > 0 || req.MaxRetries >= 0 || req.RateLimit > 0 {
+	if req.Concurrency != nil || req.ChunkSize != nil || req.MaxRetries != nil || req.RateLimit != nil {
 		cfg := s.batchProc.Config()
-		if req.Concurrency > 0 {
-			cfg.Concurrency = req.Concurrency
+		if req.Concurrency != nil && *req.Concurrency > 0 {
+			cfg.Concurrency = *req.Concurrency
 		}
-		if req.ChunkSize > 0 {
-			cfg.ChunkSize = req.ChunkSize
+		if req.ChunkSize != nil && *req.ChunkSize > 0 {
+			cfg.ChunkSize = *req.ChunkSize
 		}
-		if req.MaxRetries >= 0 {
-			cfg.MaxRetries = req.MaxRetries
+		if req.MaxRetries != nil && *req.MaxRetries >= 0 {
+			cfg.MaxRetries = *req.MaxRetries
 		}
-		if req.RateLimit > 0 {
-			cfg.RateLimitPerSec = req.RateLimit
+		if req.RateLimit != nil && *req.RateLimit > 0 {
+			cfg.RateLimitPerSec = *req.RateLimit
 		}
 		bp = embedding.NewBatchProcessor(s.batchProc.Manager(), cfg)
 	}

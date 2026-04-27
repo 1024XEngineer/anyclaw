@@ -5,14 +5,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 	_ "modernc.org/sqlite/vec"
 
+	"github.com/1024XEngineer/anyclaw/pkg/embedding"
 	"github.com/1024XEngineer/anyclaw/pkg/index"
 )
 
@@ -733,6 +736,67 @@ func TestEmbedBatchWithRateLimit(t *testing.T) {
 	}
 }
 
+func TestEmbedBatchPreservesConfiguredRetriesWhenOmitted(t *testing.T) {
+	cfg := embedding.DefaultBatchConfig()
+	cfg.Concurrency = 1
+	cfg.MaxRetries = 1
+	cfg.RetryDelay = time.Millisecond
+
+	embedder := &transientEmbedder{dim: 4, failFirst: 1}
+	s := NewServer(ServerConfig{
+		Embedder:    embedder,
+		BatchConfig: &cfg,
+	})
+
+	w := doRequest(t, s, "POST", "/v1/embed/batch", map[string]any{
+		"texts": []string{"retry me"},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp EmbedBatchResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Succeeded != 1 || resp.Failed != 0 {
+		t.Fatalf("expected retry to succeed, got succeeded=%d failed=%d errors=%v", resp.Succeeded, resp.Failed, resp.Errors)
+	}
+	if embedder.callCount.Load() != 2 {
+		t.Fatalf("expected one retry after transient failure, got %d calls", embedder.callCount.Load())
+	}
+}
+
+func TestEmbedBatchExplicitZeroRetriesOverridesConfig(t *testing.T) {
+	cfg := embedding.DefaultBatchConfig()
+	cfg.Concurrency = 1
+	cfg.MaxRetries = 1
+	cfg.RetryDelay = time.Millisecond
+
+	embedder := &transientEmbedder{dim: 4, failFirst: 1}
+	s := NewServer(ServerConfig{
+		Embedder:    embedder,
+		BatchConfig: &cfg,
+	})
+
+	w := doRequest(t, s, "POST", "/v1/embed/batch", map[string]any{
+		"texts":       []string{"do not retry"},
+		"max_retries": 0,
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp EmbedBatchResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Succeeded != 0 || resp.Failed != 1 {
+		t.Fatalf("expected explicit zero retries to fail once, got succeeded=%d failed=%d", resp.Succeeded, resp.Failed)
+	}
+	if embedder.callCount.Load() != 1 {
+		t.Fatalf("expected no retry when max_retries is explicitly zero, got %d calls", embedder.callCount.Load())
+	}
+}
+
 func TestEmbedBatchResponseStructure(t *testing.T) {
 	s, _ := setupTestServer(t)
 
@@ -788,3 +852,37 @@ func (m *mockEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]floa
 
 func (m *mockEmbedder) Name() string   { return "mock" }
 func (m *mockEmbedder) Dimension() int { return m.dim }
+
+type transientEmbedder struct {
+	dim       int
+	failFirst int32
+	callCount atomic.Int32
+}
+
+func (m *transientEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	call := m.callCount.Add(1)
+	if call <= m.failFirst {
+		return nil, errors.New("transient embedding failure")
+	}
+
+	result := make([]float32, m.dim)
+	for i := range result {
+		result[i] = float32(len(text)) / float32(m.dim)
+	}
+	return result, nil
+}
+
+func (m *transientEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	var results [][]float32
+	for _, text := range texts {
+		emb, err := m.Embed(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, emb)
+	}
+	return results, nil
+}
+
+func (m *transientEmbedder) Name() string   { return "transient" }
+func (m *transientEmbedder) Dimension() int { return m.dim }
