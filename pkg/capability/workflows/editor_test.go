@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -112,6 +113,9 @@ func TestConditionHelpersCoverEvaluatorSurface(t *testing.T) {
 	for _, helper := range helpers {
 		if helper.Name == "" || helper.Signature == "" || helper.Description == "" {
 			t.Fatalf("helper = %+v, want name/signature/description", helper)
+		}
+		if helper.Name == "is_null" && strings.Contains(helper.Description, "missing") {
+			t.Fatalf("is_null description = %q, should not claim missing variables are null", helper.Description)
 		}
 		names[helper.Name] = true
 	}

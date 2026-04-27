@@ -226,7 +226,7 @@ func GetConditionHelpers() []ConditionHelper {
 		{
 			Name:        "is_null",
 			Signature:   "is_null(value)",
-			Description: "Checks whether a value is null or missing.",
+			Description: "Checks whether a value is explicitly null.",
 			Examples:    []string{`is_null($error)`},
 		},
 		{
