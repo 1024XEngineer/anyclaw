@@ -57,6 +57,59 @@ func TestLLMVisionProviderAnalyzeImageURLRejectsMissingClient(t *testing.T) {
 	assertMissingLLMClientError(t, err)
 }
 
+func TestAnalyzeImageURLRejectsUnsafeURL(t *testing.T) {
+	t.Run("GoogleVisionProvider", func(t *testing.T) {
+		provider := NewGoogleVisionProvider(DefaultGoogleVisionConfig())
+		_, err := provider.AnalyzeImageURL(context.Background(), "http://127.0.0.1/image.png")
+		assertUnsafeImageURLError(t, err)
+	})
+
+	t.Run("LLMVisionProvider", func(t *testing.T) {
+		provider := NewLLMVisionProvider(LLMVisionConfig{Client: &testLLMVisionClient{}})
+		_, err := provider.AnalyzeImageURL(context.Background(), "http://127.0.0.1/image.png")
+		assertUnsafeImageURLError(t, err)
+	})
+}
+
+func TestValidateImageFetchURLRejectsUnsafeInputs(t *testing.T) {
+	cases := []string{
+		"ftp://example.com/image.png",
+		"http:///image.png",
+		"https://user:pass@example.com/image.png",
+		"http://localhost/image.png",
+		"http://service.localhost/image.png",
+		"http://127.0.0.1/image.png",
+		"http://10.0.0.2/image.png",
+		"http://169.254.169.254/latest/meta-data",
+		"http://[::1]/image.png",
+		"http://[fe80::1]/image.png",
+	}
+
+	for _, rawURL := range cases {
+		err := validateImageFetchURL(context.Background(), rawURL)
+		if err == nil {
+			t.Fatalf("expected unsafe URL %q to be rejected", rawURL)
+		}
+	}
+}
+
+func TestValidateImageFetchURLAllowsPublicHTTPURLs(t *testing.T) {
+	if err := validateImageFetchURL(context.Background(), "https://8.8.8.8/image.png"); err != nil {
+		t.Fatalf("expected public URL to be accepted, got %v", err)
+	}
+}
+
+func TestImageFetchHTTPClientRejectsUnsafeRedirect(t *testing.T) {
+	client := imageFetchHTTPClient(&http.Client{})
+	req, err := http.NewRequest(http.MethodGet, "http://169.254.169.254/latest/meta-data", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+
+	err = client.CheckRedirect(req, nil)
+	assertUnsafeImageURLError(t, err)
+}
+
 func TestLLMVisionProviderAnalyzeImageUsesConfiguredClient(t *testing.T) {
 	provider := NewLLMVisionProvider(LLMVisionConfig{
 		Client: &testLLMVisionClient{
@@ -88,5 +141,15 @@ func assertMissingLLMClientError(t *testing.T, err error) {
 	}
 	if !strings.Contains(err.Error(), "no LLM vision client configured") {
 		t.Fatalf("expected missing client error, got %v", err)
+	}
+}
+
+func assertUnsafeImageURLError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected unsafe image URL error")
+	}
+	if !strings.Contains(err.Error(), "unsafe image URL") && !strings.Contains(err.Error(), "image URL host is required") {
+		t.Fatalf("expected unsafe image URL error, got %v", err)
 	}
 }

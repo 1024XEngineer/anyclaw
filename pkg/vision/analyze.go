@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -271,7 +274,7 @@ func (p *GoogleVisionProvider) AnalyzeImage(ctx context.Context, imageData []byt
 }
 
 func (p *GoogleVisionProvider) AnalyzeImageURL(ctx context.Context, imageURL string) (*AnalysisResult, error) {
-	resp, err := p.client.Get(imageURL)
+	resp, err := fetchImageURL(ctx, p.client, imageURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetch image: %w", err)
 	}
@@ -312,6 +315,133 @@ func (p *GoogleVisionProvider) DetectObjects(ctx context.Context, imageData []by
 		return nil, err
 	}
 	return result.Objects, nil
+}
+
+func fetchImageURL(ctx context.Context, client *http.Client, imageURL string) (*http.Response, error) {
+	if err := validateImageFetchURL(ctx, imageURL); err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create image request: %w", err)
+	}
+
+	return imageFetchHTTPClient(client).Do(req)
+}
+
+func imageFetchHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	next := *client
+	previousCheckRedirect := client.CheckRedirect
+	next.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		if err := validateImageFetchURL(req.Context(), req.URL.String()); err != nil {
+			return err
+		}
+		if previousCheckRedirect != nil {
+			return previousCheckRedirect(req, via)
+		}
+		return nil
+	}
+
+	return &next
+}
+
+func validateImageFetchURL(ctx context.Context, rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid image URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("unsafe image URL scheme: %s", parsed.Scheme)
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("image URL host is required")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("image URL must not include credentials")
+	}
+	return validateImageFetchHost(ctx, parsed.Hostname())
+}
+
+func validateImageFetchHost(ctx context.Context, host string) error {
+	normalized := strings.TrimSuffix(strings.ToLower(host), ".")
+	if normalized == "" {
+		return fmt.Errorf("image URL host is required")
+	}
+	if normalized == "localhost" || strings.HasSuffix(normalized, ".localhost") {
+		return fmt.Errorf("unsafe image URL host: %s", host)
+	}
+
+	if addr, err := netip.ParseAddr(normalized); err == nil {
+		return validateImageFetchAddr(host, addr)
+	}
+
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("resolve image URL host %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("resolve image URL host %q: no addresses", host)
+	}
+	for _, ip := range ips {
+		addr, ok := netip.AddrFromSlice(ip.IP)
+		if !ok {
+			return fmt.Errorf("resolve image URL host %q: invalid address %s", host, ip.IP)
+		}
+		if err := validateImageFetchAddr(host, addr); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateImageFetchAddr(host string, addr netip.Addr) error {
+	addr = addr.Unmap()
+	if !addr.IsValid() || !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsMulticast() || isSpecialImageFetchAddr(addr) {
+		return fmt.Errorf("unsafe image URL host %q resolves to non-public address %s", host, addr)
+	}
+	return nil
+}
+
+func isSpecialImageFetchAddr(addr netip.Addr) bool {
+	for _, prefix := range blockedImageFetchPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+var blockedImageFetchPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/128"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2001:2::/48"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("ff00::/8"),
 }
 
 type gcpAnnotation struct {
@@ -453,8 +583,12 @@ func (p *LLMVisionProvider) AnalyzeImage(ctx context.Context, imageData []byte, 
 }
 
 func (p *LLMVisionProvider) AnalyzeImageURL(ctx context.Context, imageURL string) (*AnalysisResult, error) {
+	if _, err := p.requireClient(); err != nil {
+		return nil, err
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(imageURL)
+	resp, err := fetchImageURL(ctx, client, imageURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetch image: %w", err)
 	}
