@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -194,13 +195,26 @@ func (p *MediaPipeline) DownloadWithOptions(ctx context.Context, req *MediaDownl
 		maxReqSize = maxSize
 	}
 
+	effectiveAllowedTypes := allowedTypes
+	if len(req.AcceptTypes) > 0 {
+		effectiveAllowedTypes = append([]string(nil), req.AcceptTypes...)
+	}
+
+	requestHeaders := cloneStringMap(req.Headers)
+
 	for _, hook := range hooks {
 		if err := hook.OnBeforeDownload(ctx, req.URL, req); err != nil {
 			return nil, fmt.Errorf("media-pipeline: hook rejected download: %w", err)
 		}
 	}
 
-	cacheKey := MakeMediaCacheKey(req.URL)
+	cacheKey := MakeMediaCacheKey(
+		req.URL,
+		WithCacheMaxSize(maxReqSize),
+		WithCacheAcceptTypes(effectiveAllowedTypes),
+		WithCacheHeaders(requestHeaders),
+		WithCacheFormat(p.cacheFormatVariant()),
+	)
 
 	if cache != nil {
 		if media, ok := cache.Get(cacheKey); ok {
@@ -218,7 +232,7 @@ func (p *MediaPipeline) DownloadWithOptions(ctx context.Context, req *MediaDownl
 		}
 	}
 
-	_, inflight := p.inflight.LoadOrStore(req.URL, make(chan struct{}))
+	_, inflight := p.inflight.LoadOrStore(cacheKey, make(chan struct{}))
 	if inflight {
 		p.mu.Lock()
 		p.stats.ActiveDownloads++
@@ -230,7 +244,7 @@ func (p *MediaPipeline) DownloadWithOptions(ctx context.Context, req *MediaDownl
 			p.mu.Unlock()
 		}()
 	} else {
-		defer p.inflight.Delete(req.URL)
+		defer p.inflight.Delete(cacheKey)
 	}
 
 	var media *Media
@@ -245,7 +259,7 @@ func (p *MediaPipeline) DownloadWithOptions(ctx context.Context, req *MediaDownl
 			}
 		}
 
-		media, lastErr = p.doDownload(ctx, req.URL, maxReqSize, userAgent, allowedTypes)
+		media, lastErr = p.doDownload(ctx, req.URL, maxReqSize, userAgent, effectiveAllowedTypes, requestHeaders)
 		if lastErr == nil {
 			break
 		}
@@ -553,13 +567,17 @@ func (p *MediaPipeline) CleanupRevokedURLs() int {
 	return signer.CleanupRevoked()
 }
 
-func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int64, userAgent string, allowedTypes []string) (*Media, error) {
+func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int64, userAgent string, allowedTypes []string, headers map[string]string) (*Media, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	if userAgent != "" {
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	if userAgent != "" && !hasHeaderKey(headers, "User-Agent") {
 		req.Header.Set("User-Agent", userAgent)
 	}
 
@@ -578,7 +596,7 @@ func (p *MediaPipeline) doDownload(ctx context.Context, url string, maxSize int6
 		if loc == "" {
 			return nil, fmt.Errorf("redirect without Location header: HTTP %d", resp.StatusCode)
 		}
-		return p.doDownload(ctx, loc, maxSize, userAgent, allowedTypes)
+		return p.doDownload(ctx, loc, maxSize, userAgent, allowedTypes, headers)
 	}
 
 	contentLength := resp.ContentLength
@@ -768,4 +786,40 @@ func isAllowedScheme(url string, blocked []string) bool {
 		}
 	}
 	return true
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(src))
+	for k, v := range src {
+		cloned[k] = v
+	}
+	return cloned
+}
+
+func hasHeaderKey(headers map[string]string, key string) bool {
+	for k := range headers {
+		if strings.EqualFold(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *MediaPipeline) cacheFormatVariant() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if !p.config.Transcode {
+		return "source"
+	}
+
+	return fmt.Sprintf(
+		"transcode|img=%s|audio=%s|video=%s",
+		p.config.ImageOptions.Format,
+		p.config.AudioOptions.Format,
+		p.config.VideoOptions.Format,
+	)
 }

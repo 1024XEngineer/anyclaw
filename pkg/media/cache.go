@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -470,21 +472,41 @@ func (c *MediaCache) updateHitRate() {
 
 func MakeMediaCacheKey(url string, opts ...MediaCacheOption) string {
 	options := mediaCacheOptions{
-		MaxSize: 0,
-		Format:  "",
+		MaxSize:     0,
+		Format:      "",
+		AcceptTypes: nil,
+		Headers:     nil,
 	}
 	for _, opt := range opts {
 		opt(&options)
 	}
 
-	raw := fmt.Sprintf("%s|%d|%s", url, options.MaxSize, options.Format)
+	acceptTypes := append([]string(nil), options.AcceptTypes...)
+	sort.Strings(acceptTypes)
+
+	headerParts := make([]string, 0, len(options.Headers))
+	for k, v := range options.Headers {
+		headerParts = append(headerParts, strings.ToLower(k)+"="+v)
+	}
+	sort.Strings(headerParts)
+
+	raw := fmt.Sprintf(
+		"%s|%d|%s|%s|%s",
+		url,
+		options.MaxSize,
+		options.Format,
+		strings.Join(acceptTypes, ","),
+		strings.Join(headerParts, ","),
+	)
 	hash := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(hash[:])
 }
 
 type mediaCacheOptions struct {
-	MaxSize int64
-	Format  string
+	MaxSize     int64
+	Format      string
+	AcceptTypes []string
+	Headers     map[string]string
 }
 
 type MediaCacheOption func(*mediaCacheOptions)
@@ -498,6 +520,26 @@ func WithCacheMaxSize(size int64) MediaCacheOption {
 func WithCacheFormat(format string) MediaCacheOption {
 	return func(o *mediaCacheOptions) {
 		o.Format = format
+	}
+}
+
+func WithCacheAcceptTypes(acceptTypes []string) MediaCacheOption {
+	return func(o *mediaCacheOptions) {
+		o.AcceptTypes = append([]string(nil), acceptTypes...)
+	}
+}
+
+func WithCacheHeaders(headers map[string]string) MediaCacheOption {
+	return func(o *mediaCacheOptions) {
+		if len(headers) == 0 {
+			o.Headers = nil
+			return
+		}
+		cloned := make(map[string]string, len(headers))
+		for k, v := range headers {
+			cloned[k] = v
+		}
+		o.Headers = cloned
 	}
 }
 

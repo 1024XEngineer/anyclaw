@@ -365,6 +365,34 @@ func TestMediaCacheOptions(t *testing.T) {
 	}
 }
 
+func TestMakeMediaCacheKey_RequestDimensions(t *testing.T) {
+	key1 := MakeMediaCacheKey(
+		"https://example.com/test.png",
+		WithCacheMaxSize(1024),
+		WithCacheAcceptTypes([]string{"image/png", "image/jpeg"}),
+		WithCacheHeaders(map[string]string{"Authorization": "Bearer a", "X-Mode": "full"}),
+	)
+	key2 := MakeMediaCacheKey(
+		"https://example.com/test.png",
+		WithCacheMaxSize(1024),
+		WithCacheAcceptTypes([]string{"image/jpeg", "image/png"}),
+		WithCacheHeaders(map[string]string{"X-Mode": "full", "Authorization": "Bearer a"}),
+	)
+	key3 := MakeMediaCacheKey(
+		"https://example.com/test.png",
+		WithCacheMaxSize(2048),
+		WithCacheAcceptTypes([]string{"image/jpeg", "image/png"}),
+		WithCacheHeaders(map[string]string{"X-Mode": "full", "Authorization": "Bearer a"}),
+	)
+
+	if key1 != key2 {
+		t.Error("same request contract should produce same cache key regardless of order")
+	}
+	if key1 == key3 {
+		t.Error("different max size should produce different cache keys")
+	}
+}
+
 func TestMediaPipeline_Download(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -426,6 +454,148 @@ func TestMediaPipeline_DownloadWithCache(t *testing.T) {
 	stats := pipeline.Stats()
 	if stats.DownloadsCached != 1 {
 		t.Errorf("expected 1 cached download, got %d", stats.DownloadsCached)
+	}
+}
+
+func TestMediaPipeline_DownloadWithOptions_MaxSizeCacheIsolation(t *testing.T) {
+	callCount := int32(0)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&callCount, 1)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write([]byte("12345678"))
+	}))
+	defer server.Close()
+
+	cfg := DefaultMediaPipelineConfig()
+	cfg.CacheConfig = MediaCacheConfig{
+		MaxItems: 100,
+		MaxBytes: 10 * 1024 * 1024,
+		TTL:      time.Hour,
+	}
+
+	pipeline := NewMediaPipeline(cfg)
+
+	media, err := pipeline.DownloadWithOptions(context.Background(), &MediaDownloadRequest{
+		URL:     server.URL,
+		MaxSize: 16,
+	})
+	if err != nil {
+		t.Fatalf("first download failed: %v", err)
+	}
+	if string(media.Data) != "12345678" {
+		t.Fatalf("unexpected first payload: %q", string(media.Data))
+	}
+
+	_, err = pipeline.DownloadWithOptions(context.Background(), &MediaDownloadRequest{
+		URL:     server.URL,
+		MaxSize: 4,
+	})
+	if err == nil {
+		t.Fatal("expected second download to enforce stricter max size")
+	}
+
+	if atomic.LoadInt32(&callCount) <= 1 {
+		t.Errorf("expected stricter max-size request to bypass cached result, got %d HTTP calls", callCount)
+	}
+}
+
+func TestMediaPipeline_DownloadWithOptions_HeaderAwareCache(t *testing.T) {
+	callCount := int32(0)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&callCount, 1)
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			http.Error(w, "missing auth", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte(auth))
+	}))
+	defer server.Close()
+
+	cfg := DefaultMediaPipelineConfig()
+	cfg.CacheConfig = MediaCacheConfig{
+		MaxItems: 100,
+		MaxBytes: 10 * 1024 * 1024,
+		TTL:      time.Hour,
+	}
+
+	pipeline := NewMediaPipeline(cfg)
+
+	first, err := pipeline.DownloadWithOptions(context.Background(), &MediaDownloadRequest{
+		URL: server.URL,
+		Headers: map[string]string{
+			"Authorization": "Bearer token-a",
+		},
+	})
+	if err != nil {
+		t.Fatalf("first header-aware download failed: %v", err)
+	}
+
+	second, err := pipeline.DownloadWithOptions(context.Background(), &MediaDownloadRequest{
+		URL: server.URL,
+		Headers: map[string]string{
+			"Authorization": "Bearer token-b",
+		},
+	})
+	if err != nil {
+		t.Fatalf("second header-aware download failed: %v", err)
+	}
+
+	if string(first.Data) != "Bearer token-a" {
+		t.Fatalf("expected first payload to reflect auth header, got %q", string(first.Data))
+	}
+	if string(second.Data) != "Bearer token-b" {
+		t.Fatalf("expected second payload to reflect auth header, got %q", string(second.Data))
+	}
+	if atomic.LoadInt32(&callCount) != 2 {
+		t.Errorf("expected 2 HTTP calls for distinct request headers, got %d", callCount)
+	}
+}
+
+func TestMediaPipeline_DownloadWithOptions_RequestAcceptTypes(t *testing.T) {
+	callCount := int32(0)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&callCount, 1)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("plain-text"))
+	}))
+	defer server.Close()
+
+	cfg := DefaultMediaPipelineConfig()
+	cfg.AllowedMimeTypes = []string{"text/plain", "image/png"}
+	cfg.CacheConfig = MediaCacheConfig{
+		MaxItems: 100,
+		MaxBytes: 10 * 1024 * 1024,
+		TTL:      time.Hour,
+	}
+
+	pipeline := NewMediaPipeline(cfg)
+
+	first, err := pipeline.DownloadWithOptions(context.Background(), &MediaDownloadRequest{
+		URL:         server.URL,
+		AcceptTypes: []string{"text/plain"},
+	})
+	if err != nil {
+		t.Fatalf("first accept-types download failed: %v", err)
+	}
+	if string(first.Data) != "plain-text" {
+		t.Fatalf("unexpected first payload: %q", string(first.Data))
+	}
+
+	_, err = pipeline.DownloadWithOptions(context.Background(), &MediaDownloadRequest{
+		URL:         server.URL,
+		AcceptTypes: []string{"image/png"},
+	})
+	if err == nil {
+		t.Fatal("expected second download to reject MIME type outside request accept types")
+	}
+
+	if atomic.LoadInt32(&callCount) <= 1 {
+		t.Errorf("expected distinct accept-type request to bypass cached result, got %d HTTP calls", callCount)
 	}
 }
 
