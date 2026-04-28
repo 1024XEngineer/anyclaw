@@ -1,15 +1,19 @@
 package speech
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
+
+	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
+	"google.golang.org/api/googleapi"
+	"google.golang.org/api/option"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 type GoogleModel string
@@ -71,7 +75,7 @@ type GoogleProvider struct {
 	useEnhanced     bool
 	timeout         time.Duration
 	retries         int
-	client          *http.Client
+	client          googleRecognizeAPI
 }
 
 type GoogleOption func(*GoogleProvider)
@@ -118,11 +122,13 @@ func WithGoogleCredentialsJSON(credentialsJSON string) GoogleOption {
 	}
 }
 
-func NewGoogleProvider(apiKey string, opts ...GoogleOption) (*GoogleProvider, error) {
-	if apiKey == "" {
-		return nil, NewSTTError(ErrAuthentication, "google: API key is required")
+func withGoogleRecognizeClient(client googleRecognizeAPI) GoogleOption {
+	return func(p *GoogleProvider) {
+		p.client = client
 	}
+}
 
+func NewGoogleProvider(apiKey string, opts ...GoogleOption) (*GoogleProvider, error) {
 	p := &GoogleProvider{
 		apiKey:       apiKey,
 		baseURL:      "https://speech.googleapis.com",
@@ -130,16 +136,38 @@ func NewGoogleProvider(apiKey string, opts ...GoogleOption) (*GoogleProvider, er
 		model:        GoogleModelDefault,
 		timeout:      120 * time.Second,
 		retries:      2,
-		client:       &http.Client{Timeout: 120 * time.Second},
 	}
 
 	for _, opt := range opts {
 		opt(p)
 	}
 
-	p.client.Timeout = p.timeout
+	if p.apiKey == "" && p.credentialsJSON == "" {
+		return nil, NewSTTError(ErrAuthentication, "google: API key or credentials JSON is required")
+	}
+
+	if p.client == nil {
+		client, err := newGoogleRecognizeClient(context.Background(), p.clientOptions()...)
+		if err != nil {
+			return nil, NewSTTErrorf(ErrAuthentication, "google-speech: failed to initialize official client: %v", err)
+		}
+		p.client = client
+	}
 
 	return p, nil
+}
+
+func (p *GoogleProvider) clientOptions() []option.ClientOption {
+	opts := make([]option.ClientOption, 0, 2)
+	if p.credentialsJSON != "" {
+		opts = append(opts, option.WithCredentialsJSON([]byte(p.credentialsJSON)))
+	} else {
+		opts = append(opts, option.WithAPIKey(p.apiKey))
+	}
+	if p.baseURL != "" && p.baseURL != "https://speech.googleapis.com" {
+		opts = append(opts, option.WithEndpoint(p.baseURL))
+	}
+	return opts
 }
 
 func (p *GoogleProvider) Name() string {
@@ -219,6 +247,24 @@ func (p *GoogleProvider) TranscribeStream(ctx context.Context, reader io.Reader,
 }
 
 func (p *GoogleProvider) doTranscribe(ctx context.Context, audio []byte, options TranscribeOptions) (*TranscriptResult, error) {
+	req := p.buildRecognizeRequest(audio, options)
+
+	requestCtx := ctx
+	var cancel context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && p.timeout > 0 {
+		requestCtx, cancel = context.WithTimeout(ctx, p.timeout)
+		defer cancel()
+	}
+
+	resp, err := p.client.Recognize(requestCtx, req)
+	if err != nil {
+		return nil, p.handleClientError(err)
+	}
+
+	return p.parseRecognizeResponse(resp, options)
+}
+
+func (p *GoogleProvider) buildRecognizeRequest(audio []byte, options TranscribeOptions) *speechpb.RecognizeRequest {
 	encoding := p.mapInputFormatToEncoding(options.InputFormat)
 
 	sampleRate := int32(options.SampleRate)
@@ -226,9 +272,9 @@ func (p *GoogleProvider) doTranscribe(ctx context.Context, audio []byte, options
 		sampleRate = p.guessSampleRate(options.InputFormat)
 	}
 
-	reqBody := googleRecognizeRequest{
-		Config: googleRecognitionConfigRequest{
-			Encoding:                   string(encoding),
+	return &speechpb.RecognizeRequest{
+		Config: &speechpb.RecognitionConfig{
+			Encoding:                   p.toProtoRecognitionEncoding(encoding),
 			SampleRateHertz:            sampleRate,
 			LanguageCode:               options.Language,
 			Model:                      string(p.model),
@@ -238,43 +284,10 @@ func (p *GoogleProvider) doTranscribe(ctx context.Context, audio []byte, options
 			EnableWordConfidence:       true,
 			EnableAutomaticPunctuation: true,
 		},
-		Audio: googleAudioRequest{
-			Content: base64.StdEncoding.EncodeToString(audio),
+		Audio: &speechpb.RecognitionAudio{
+			AudioSource: &speechpb.RecognitionAudio_Content{Content: audio},
 		},
 	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, NewSTTErrorf(ErrTranscriptionFailed, "google-speech: failed to marshal request: %v", err)
-	}
-
-	url := fmt.Sprintf("%s/v1/speech:recognize?key=%s", p.baseURL, p.apiKey)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, NewSTTErrorf(ErrTranscriptionFailed, "google-speech: failed to create request: %v", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "anyclaw-stt/1.0")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, NewSTTErrorf(ErrTranscriptionFailed, "google-speech: request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, p.handleErrorResponse(resp.StatusCode, respBody)
-	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, NewSTTErrorf(ErrTranscriptionFailed, "google-speech: failed to read response: %v", err)
-	}
-
-	return p.parseResponse(respBody, options)
 }
 
 func (p *GoogleProvider) mapInputFormatToEncoding(format AudioInputFormat) RecognitionEncoding {
@@ -285,7 +298,9 @@ func (p *GoogleProvider) mapInputFormatToEncoding(format AudioInputFormat) Recog
 		return EncodingFLAC
 	case InputMP3:
 		return EncodingMP3
-	case InputOGG, InputWEBM:
+	case InputOGG:
+		return EncodingOGGOpus
+	case InputWEBM:
 		return EncodingWEBMOpus
 	case InputM4A, InputMP4:
 		return EncodingWEBMOpus
@@ -293,6 +308,31 @@ func (p *GoogleProvider) mapInputFormatToEncoding(format AudioInputFormat) Recog
 		return EncodingMP3
 	default:
 		return EncodingMP3
+	}
+}
+
+func (p *GoogleProvider) toProtoRecognitionEncoding(encoding RecognitionEncoding) speechpb.RecognitionConfig_AudioEncoding {
+	switch encoding {
+	case EncodingLinear16:
+		return speechpb.RecognitionConfig_LINEAR16
+	case EncodingFLAC:
+		return speechpb.RecognitionConfig_FLAC
+	case EncodingMULAW:
+		return speechpb.RecognitionConfig_MULAW
+	case EncodingAMR:
+		return speechpb.RecognitionConfig_AMR
+	case EncodingAMRWB:
+		return speechpb.RecognitionConfig_AMR_WB
+	case EncodingOGGOpus:
+		return speechpb.RecognitionConfig_OGG_OPUS
+	case EncodingSpeexWithHeaderByte:
+		return speechpb.RecognitionConfig_SPEEX_WITH_HEADER_BYTE
+	case EncodingWEBMOpus:
+		return speechpb.RecognitionConfig_WEBM_OPUS
+	case EncodingMP3:
+		return speechpb.RecognitionConfig_MP3
+	default:
+		return speechpb.RecognitionConfig_ENCODING_UNSPECIFIED
 	}
 }
 
@@ -313,104 +353,41 @@ func (p *GoogleProvider) guessSampleRate(format AudioInputFormat) int32 {
 	}
 }
 
-func (p *GoogleProvider) handleErrorResponse(statusCode int, body []byte) error {
-	var errResp googleErrorResponse
-	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
-		msg := fmt.Sprintf("google-speech: API error: %s (status: %s)", errResp.Error.Message, errResp.Error.Status)
-		switch statusCode {
-		case http.StatusUnauthorized, http.StatusForbidden:
-			return NewSTTError(ErrAuthentication, msg)
-		case http.StatusTooManyRequests:
-			return NewSTTError(ErrRateLimited, msg)
-		case http.StatusBadRequest:
+func (p *GoogleProvider) handleClientError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return NewSTTErrorf(ErrTranscriptionFailed, "google-speech: request context error: %v", err)
+	}
+
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) {
+		msg := fmt.Sprintf("google-speech: API error: %s", apiErr.Message)
+		switch apiErr.Code {
+		case 400:
 			return NewSTTError(ErrAudioFormatInvalid, msg)
+		case 401, 403:
+			return NewSTTError(ErrAuthentication, msg)
+		case 429:
+			return NewSTTError(ErrRateLimited, msg)
 		default:
 			return NewSTTError(ErrTranscriptionFailed, msg)
 		}
 	}
 
-	switch statusCode {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		return NewSTTError(ErrAuthentication, fmt.Sprintf("google-speech: authentication failed: %s", string(body)))
-	case http.StatusTooManyRequests:
-		return NewSTTError(ErrRateLimited, fmt.Sprintf("google-speech: rate limited: %s", string(body)))
-	case http.StatusBadRequest:
-		return NewSTTError(ErrAudioFormatInvalid, fmt.Sprintf("google-speech: invalid request: %s", string(body)))
-	case http.StatusServiceUnavailable:
-		return NewSTTError(ErrTranscriptionFailed, fmt.Sprintf("google-speech: service unavailable: %s", string(body)))
+	switch status.Code(err) {
+	case codes.InvalidArgument:
+		return NewSTTError(ErrAudioFormatInvalid, "google-speech: invalid recognition request")
+	case codes.Unauthenticated, codes.PermissionDenied:
+		return NewSTTError(ErrAuthentication, "google-speech: authentication failed")
+	case codes.ResourceExhausted:
+		return NewSTTError(ErrRateLimited, "google-speech: rate limited")
 	default:
-		return NewSTTErrorf(ErrTranscriptionFailed, "google-speech: unexpected status %d: %s", statusCode, string(body))
+		return NewSTTErrorf(ErrTranscriptionFailed, "google-speech: request failed: %v", err)
 	}
 }
 
-type googleRecognizeRequest struct {
-	Config googleRecognitionConfigRequest `json:"config"`
-	Audio  googleAudioRequest             `json:"audio"`
-}
-
-type googleRecognitionConfigRequest struct {
-	Encoding                   string `json:"encoding"`
-	SampleRateHertz            int32  `json:"sampleRateHertz"`
-	LanguageCode               string `json:"languageCode"`
-	Model                      string `json:"model,omitempty"`
-	UseEnhanced                bool   `json:"useEnhanced,omitempty"`
-	MaxAlternatives            int32  `json:"maxAlternatives,omitempty"`
-	EnableWordTimeOffsets      bool   `json:"enableWordTimeOffsets,omitempty"`
-	EnableWordConfidence       bool   `json:"enableWordConfidence,omitempty"`
-	EnableAutomaticPunctuation bool   `json:"enableAutomaticPunctuation,omitempty"`
-	EnableSpokenPunctuation    bool   `json:"enableSpokenPunctuation,omitempty"`
-}
-
-type googleAudioRequest struct {
-	Content string `json:"content"`
-}
-
-type googleResponse struct {
-	Results []googleResult `json:"results"`
-}
-
-type googleResult struct {
-	Alternatives  []googleAlternative `json:"alternatives"`
-	LanguageCode  string              `json:"languageCode"`
-	ResultEndTime struct {
-		Seconds string `json:"seconds"`
-		Nanos   int    `json:"nanos"`
-	} `json:"resultEndTime"`
-}
-
-type googleAlternative struct {
-	Transcript string           `json:"transcript"`
-	Confidence float64          `json:"confidence"`
-	Words      []googleWordInfo `json:"words"`
-}
-
-type googleWordInfo struct {
-	StartTime  googleDuration `json:"startTime"`
-	EndTime    googleDuration `json:"endTime"`
-	Word       string         `json:"word"`
-	Confidence float64        `json:"confidence"`
-}
-
-type googleDuration struct {
-	Seconds string `json:"seconds"`
-	Nanos   int    `json:"nanos"`
-}
-
-type googleErrorResponse struct {
-	Error struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Status  string `json:"status"`
-	} `json:"error"`
-}
-
-func (p *GoogleProvider) parseResponse(body []byte, options TranscribeOptions) (*TranscriptResult, error) {
-	var resp googleResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, NewSTTErrorf(ErrTranscriptionFailed, "google-speech: failed to parse JSON response: %v", err)
-	}
-
-	if len(resp.Results) == 0 {
+func (p *GoogleProvider) parseRecognizeResponse(resp *speechpb.RecognizeResponse, options TranscribeOptions) (*TranscriptResult, error) {
+	results := resp.GetResults()
+	if len(results) == 0 {
 		return &TranscriptResult{
 			Text:     "",
 			Language: options.Language,
@@ -420,35 +397,40 @@ func (p *GoogleProvider) parseResponse(body []byte, options TranscribeOptions) (
 	result := &TranscriptResult{}
 	var totalConfidence float64
 	var confidenceCount int
+	var lastEnd time.Duration
 
-	for i, res := range resp.Results {
-		if len(res.Alternatives) == 0 {
+	for i, res := range results {
+		if len(res.GetAlternatives()) == 0 {
 			continue
 		}
 
-		primary := res.Alternatives[0]
-
+		primary := res.GetAlternatives()[0]
 		segment := SegmentInfo{
 			ID:   i,
-			Text: primary.Transcript,
+			Text: primary.GetTranscript(),
 		}
 
-		if primary.Confidence > 0 {
-			segment.Confidence = primary.Confidence
-			totalConfidence += primary.Confidence
+		if confidence := primary.GetConfidence(); confidence > 0 {
+			segment.Confidence = float64(confidence)
+			totalConfidence += segment.Confidence
 			confidenceCount++
 		}
 
-		if len(primary.Words) > 0 {
-			segment.Words = make([]WordInfo, 0, len(primary.Words))
-			for _, w := range primary.Words {
-				segment.Words = append(segment.Words, WordInfo{
-					Word:       w.Word,
-					StartTime:  parseGoogleDuration(w.StartTime),
-					EndTime:    parseGoogleDuration(w.EndTime),
-					Confidence: w.Confidence,
-				})
+		if len(primary.GetWords()) > 0 {
+			segment.Words = make([]WordInfo, 0, len(primary.GetWords()))
+			for _, word := range primary.GetWords() {
+				wordInfo := WordInfo{
+					Word:       word.GetWord(),
+					StartTime:  parseProtoDuration(word.GetStartTime()),
+					EndTime:    parseProtoDuration(word.GetEndTime()),
+					Confidence: float64(word.GetConfidence()),
+				}
+				segment.Words = append(segment.Words, wordInfo)
 			}
+			segment.StartTime = segment.Words[0].StartTime
+			segment.EndTime = segment.Words[len(segment.Words)-1].EndTime
+		} else {
+			segment.EndTime = parseProtoDuration(res.GetResultEndTime())
 		}
 
 		if options.WordTimestamps && len(segment.Words) > 0 {
@@ -458,40 +440,47 @@ func (p *GoogleProvider) parseResponse(body []byte, options TranscribeOptions) (
 		result.Segments = append(result.Segments, segment)
 
 		if i == 0 {
-			result.Text = primary.Transcript
-			result.Language = res.LanguageCode
+			result.Text = primary.GetTranscript()
+			if lang := res.GetLanguageCode(); lang != "" {
+				result.Language = lang
+			}
 		} else {
-			result.Text += " " + primary.Transcript
+			result.Text += " " + primary.GetTranscript()
 		}
 
-		if options.MaxAlternatives > 1 && len(res.Alternatives) > 1 {
-			for _, alt := range res.Alternatives[1:] {
-				result.Alternatives = append(result.Alternatives, alt.Transcript)
+		if options.MaxAlternatives > 1 && len(res.GetAlternatives()) > 1 {
+			for _, alt := range res.GetAlternatives()[1:] {
+				result.Alternatives = append(result.Alternatives, alt.GetTranscript())
 			}
 		}
+
+		if segment.EndTime > lastEnd {
+			lastEnd = segment.EndTime
+		}
+	}
+
+	if result.Language == "" {
+		result.Language = options.Language
 	}
 
 	if confidenceCount > 0 {
 		result.Confidence = totalConfidence / float64(confidenceCount)
 	}
 
-	if len(resp.Results) > 0 {
-		endTime := resp.Results[len(resp.Results)-1].ResultEndTime
-		result.Duration = parseGoogleDuration(googleDuration{
-			Seconds: endTime.Seconds,
-			Nanos:   endTime.Nanos,
-		})
+	if lastEnd > 0 {
+		result.Duration = lastEnd
+	} else {
+		result.Duration = parseProtoDuration(resp.GetTotalBilledTime())
 	}
 
 	return result, nil
 }
 
-func parseGoogleDuration(d googleDuration) time.Duration {
-	var seconds int64
-	if d.Seconds != "" {
-		fmt.Sscanf(d.Seconds, "%d", &seconds)
+func parseProtoDuration(d *durationpb.Duration) time.Duration {
+	if d == nil {
+		return 0
 	}
-	return time.Duration(seconds)*time.Second + time.Duration(d.Nanos)*time.Nanosecond
+	return d.AsDuration()
 }
 
 func (p *GoogleProvider) ListLanguages(ctx context.Context) ([]string, error) {

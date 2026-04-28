@@ -43,14 +43,13 @@ type STTProvider interface {
 }
 
 type STTConfig struct {
-	Type            STTProviderType
-	APIKey          string
-	CredentialsJSON string
-	BaseURL         string
-	Model           string
-	Language        string
-	SampleRate      int
-	Timeout         time.Duration
+	Type       STTProviderType
+	APIKey     string
+	BaseURL    string
+	Model      string
+	Language   string
+	SampleRate int
+	Timeout    time.Duration
 }
 
 func NewSTTProvider(cfg STTConfig) (STTProvider, error) {
@@ -72,9 +71,6 @@ func NewSTTProvider(cfg STTConfig) (STTProvider, error) {
 		return NewWhisperProvider(cfg.APIKey, opts...)
 	case STTProviderGoogle:
 		opts := []GoogleOption{}
-		if cfg.CredentialsJSON != "" {
-			opts = append(opts, WithGoogleCredentialsJSON(cfg.CredentialsJSON))
-		}
 		if cfg.BaseURL != "" {
 			opts = append(opts, WithGoogleBaseURL(cfg.BaseURL))
 		}

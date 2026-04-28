@@ -47,7 +47,6 @@ type AudioSource interface {
 
 type VoiceWakeConfig struct {
 	VADConfig        VADConfig
-	VADProvider      VADProviderType
 	WakeWordConfig   WakeWordConfig
 	EngineConfig     WakeWordEngineConfig
 	SampleRate       int
@@ -64,7 +63,6 @@ type VoiceWakeConfig struct {
 func DefaultVoiceWakeConfig() VoiceWakeConfig {
 	return VoiceWakeConfig{
 		VADConfig:        DefaultVADConfig(),
-		VADProvider:      VADProviderWebRTC,
 		WakeWordConfig:   DefaultWakeWordConfig(),
 		SampleRate:       16000,
 		Channels:         1,
@@ -79,7 +77,7 @@ type VoiceWake struct {
 	mu              sync.Mutex
 	cfg             VoiceWakeConfig
 	state           VoiceWakeState
-	vad             VADProcessor
+	vad             *VAD
 	wakeDetector    *WakeWordDetector
 	engineRouter    *WakeWordEngineRouter
 	engineAdapter   *WakeWordEngineAdapter
@@ -122,17 +120,7 @@ func NewVoiceWake(cfg VoiceWakeConfig) *VoiceWake {
 	cfg.EngineConfig.SampleRate = cfg.SampleRate
 	cfg.EngineConfig.FrameSize = cfg.FrameSize
 
-	if cfg.VADProvider == "" {
-		cfg.VADProvider = VADProviderHeuristic
-	}
-
-	vadManager := NewVADManager()
-	vad, err := vadManager.New(cfg.VADConfig, cfg.VADProvider)
-	if err != nil {
-		log.Printf("voicewake: failed to create VAD provider %q, fallback to heuristic: %v", cfg.VADProvider, err)
-		cfg.VADProvider = VADProviderHeuristic
-		vad = NewVAD(cfg.VADConfig)
-	}
+	vad := NewVAD(cfg.VADConfig)
 	wakeDetector := NewWakeWordDetector(cfg.WakeWordConfig)
 
 	router := NewWakeWordEngineRouter(cfg.EngineConfig)
@@ -501,7 +489,7 @@ func (vw *VoiceWake) LastWakeMatch() (string, float64) {
 	return vw.lastWakeMatch, vw.lastConfidence
 }
 
-func (vw *VoiceWake) VAD() VADProcessor {
+func (vw *VoiceWake) VAD() *VAD {
 	return vw.vad
 }
 

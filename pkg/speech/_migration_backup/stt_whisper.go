@@ -2,10 +2,12 @@ package speech
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -43,7 +45,6 @@ type WhisperProvider struct {
 	timeout       time.Duration
 	retries       int
 	client        *http.Client
-	apiClient     *openAIAudioAPIClient
 	httpTransport *http.Transport
 }
 
@@ -107,7 +108,6 @@ func NewWhisperProvider(apiKey string, opts ...WhisperOption) (*WhisperProvider,
 		p.client.Transport = p.httpTransport
 	}
 	p.client.Timeout = p.timeout
-	p.apiClient = newOpenAIAudioAPIClient(p.apiKey, p.baseURL, p.client)
 
 	if !validWhisperModels[p.model] {
 		return nil, NewSTTErrorf(ErrProviderNotSupported, "openai: invalid whisper model: %s", p.model)
@@ -256,6 +256,72 @@ func (p *WhisperProvider) validateTranscribeOptions(options TranscribeOptions) e
 }
 
 func (p *WhisperProvider) doTranscribe(ctx context.Context, audio []byte, options TranscribeOptions) (*TranscriptResult, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	filename := "audio." + string(options.InputFormat)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to create form file: %v", err)
+	}
+
+	if _, err := part.Write(audio); err != nil {
+		return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write audio data: %v", err)
+	}
+
+	if err := writer.WriteField("model", options.Model); err != nil {
+		return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write model field: %v", err)
+	}
+
+	if options.Language != "" {
+		if err := writer.WriteField("language", options.Language); err != nil {
+			return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write language field: %v", err)
+		}
+	}
+
+	if options.Prompt != "" {
+		if err := writer.WriteField("prompt", options.Prompt); err != nil {
+			return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write prompt field: %v", err)
+		}
+	}
+
+	if options.Temperature > 0 {
+		if err := writer.WriteField("temperature", fmt.Sprintf("%.2f", options.Temperature)); err != nil {
+			return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write temperature field: %v", err)
+		}
+	}
+
+	if options.MaxAlternatives > 0 {
+		if err := writer.WriteField("max_alternatives", fmt.Sprintf("%d", options.MaxAlternatives)); err != nil {
+			return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write max_alternatives field: %v", err)
+		}
+	}
+
+	if options.WordTimestamps || options.SpeakerLabels {
+		if options.WordTimestamps {
+			if err := writer.WriteField("timestamp_granularities[]", "word"); err != nil {
+				return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write word timestamp_granularities: %v", err)
+			}
+		}
+		if options.SpeakerLabels {
+			if err := writer.WriteField("timestamp_granularities[]", "segment"); err != nil {
+				return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write segment timestamp_granularities: %v", err)
+			}
+		}
+	}
+
+	responseType := "verbose_json"
+	if options.WordTimestamps || options.SpeakerLabels {
+		responseType = "verbose_json"
+	}
+	if err := writer.WriteField("response_format", responseType); err != nil {
+		return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write response_format field: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to close multipart writer: %v", err)
+	}
+
 	var endpoint string
 	switch options.Mode {
 	case ModeTranslation:
@@ -264,9 +330,20 @@ func (p *WhisperProvider) doTranscribe(ctx context.Context, audio []byte, option
 		endpoint = "/v1/audio/transcriptions"
 	}
 
-	resp, err := p.apiClient.DoTranscriptionRequest(ctx, endpoint, audio, options, false)
+	url := p.baseURL + endpoint
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, &body)
 	if err != nil {
-		return nil, err
+		return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to create request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("User-Agent", "anyclaw-stt/1.0")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
@@ -443,14 +520,60 @@ func (p *WhisperProvider) TranscribeSSE(ctx context.Context, audio []byte, onChu
 		return NewSTTError(ErrAudioFormatInvalid, "openai-whisper: audio data is empty")
 	}
 
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	filename := "audio." + string(options.InputFormat)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		return NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to create form file: %v", err)
+	}
+
+	if _, err := part.Write(audio); err != nil {
+		return NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write audio data: %v", err)
+	}
+
+	if err := writer.WriteField("model", options.Model); err != nil {
+		return NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write model field: %v", err)
+	}
+
+	if options.Language != "" {
+		if err := writer.WriteField("language", options.Language); err != nil {
+			return NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write language field: %v", err)
+		}
+	}
+
+	if err := writer.WriteField("response_format", "json"); err != nil {
+		return NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write response_format field: %v", err)
+	}
+
+	if err := writer.WriteField("stream", "true"); err != nil {
+		return NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to write stream field: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to close multipart writer: %v", err)
+	}
+
 	endpoint := "/v1/audio/transcriptions"
 	if options.Mode == ModeTranslation {
 		endpoint = "/v1/audio/translations"
 	}
 
-	resp, err := p.apiClient.DoTranscriptionRequest(ctx, endpoint, audio, options, true)
+	url := p.baseURL + endpoint
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, &body)
 	if err != nil {
-		return err
+		return NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: failed to create request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return NewSTTErrorf(ErrTranscriptionFailed, "openai-whisper: streaming request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
