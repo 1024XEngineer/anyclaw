@@ -10,7 +10,7 @@
         {"tool": "desktop_wait", "params": {"wait_ms": 1000}},
         {"tool": "desktop_screenshot", "params": {"path": ".anyclaw/vision/screen.png"}},
         {"tool": "desktop_ocr", "params": {"path": ".anyclaw/vision/screen.png"}},
-        {"tool": "desktop_verify_text", "params": {"text": "Notepad", "scope": "screen"}}
+        {"tool": "desktop_verify_text", "params": {"path": ".anyclaw/vision/screen.png", "expected": "Notepad", "mode": "contains"}}
       ]
     },
     "click_button": {

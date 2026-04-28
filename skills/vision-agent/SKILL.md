@@ -42,7 +42,7 @@ The vision agent loop is:
     {"action": "desktop_open", "target": "notepad.exe"},
     {"action": "desktop_wait", "ms": 1000},
     {"action": "desktop_focus_window", "title": "Notepad"},
-    {"action": "desktop_verify_text", "text": "Untitled"}
+    {"action": "desktop_verify_text", "expected": "Untitled"}
   ]
 }
 ```
