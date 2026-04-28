@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -189,18 +190,18 @@ func (e *ZaloExtension) handleVerification(w http.ResponseWriter, r *http.Reques
 func (e *ZaloExtension) verifyWebhookSignature(rawEvent map[string]any, r *http.Request) bool {
 	query := r.URL.Query()
 	sig := query.Get("sig")
-	if sig == "" {
-		return true
+	timestamp := query.Get("timestamp")
+	if strings.TrimSpace(sig) == "" || strings.TrimSpace(timestamp) == "" || strings.TrimSpace(e.config.WebhookToken) == "" {
+		return false
 	}
 
-	timestamp := query.Get("timestamp")
 	body, _ := json.Marshal(rawEvent)
 
 	h := sha256.New()
 	h.Write([]byte(timestamp + e.config.WebhookToken + string(body)))
 	computed := fmt.Sprintf("%x", h.Sum(nil))
 
-	return strings.EqualFold(computed, sig)
+	return subtle.ConstantTimeCompare([]byte(strings.ToLower(computed)), []byte(strings.ToLower(sig))) == 1
 }
 
 func (e *ZaloExtension) getAccessToken() (string, error) {

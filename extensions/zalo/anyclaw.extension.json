@@ -29,6 +29,6 @@
         "sensitive": true
       }
     },
-    "required": ["app_id", "secret_key", "oa_id"]
+    "required": ["app_id", "secret_key", "oa_id", "webhook_token"]
   }
 }
