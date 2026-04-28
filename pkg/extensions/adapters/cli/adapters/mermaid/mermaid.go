@@ -52,12 +52,13 @@ func (a *Adapter) render(args []string) (string, error) {
 	format := strings.TrimPrefix(ext, ".")
 
 	outputDir := filepath.Dir(output)
-	if outputDir == "." {
-		outputDir = "./dist"
-		os.MkdirAll(outputDir, 0755)
+	if outputDir != "." {
+		if err := os.MkdirAll(outputDir, 0o755); err != nil {
+			return "", err
+		}
 	}
 
-	cmd := exec.Command("npx", "-y", "@mermaid-js/mermaid-cli", "-i", input, "-o", outputDir, "-t", format)
+	cmd := exec.Command("npx", "-y", "@mermaid-js/mermaid-cli", "-i", input, "-o", output, "-t", format)
 	cmd.Dir = filepath.Dir(input)
 
 	out, err := cmd.CombinedOutput()
