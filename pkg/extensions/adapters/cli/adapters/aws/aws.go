@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -188,9 +189,13 @@ func (c *Client) configure(ctx context.Context, args []string) (string, error) {
 func (c *Client) run(ctx context.Context, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.awsPath, args...)
 	if c.region != "" {
+		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "AWS_DEFAULT_REGION="+c.region)
 	}
 	if c.profile != "" {
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
 		cmd.Env = append(cmd.Env, "AWS_PROFILE="+c.profile)
 	}
 	output, err := cmd.CombinedOutput()
