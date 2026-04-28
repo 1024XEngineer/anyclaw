@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"crypto/subtle"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -144,12 +145,12 @@ func (e *WeChatExtension) handleWebhook(w http.ResponseWriter, r *http.Request) 
 }
 
 type wechatMessage struct {
-	ToUserName   string `json:"ToUserName"`
-	FromUserName string `json:"FromUserName"`
-	CreateTime   int64  `json:"CreateTime"`
-	MsgType      string `json:"MsgType"`
-	Content      string `json:"Content"`
-	MsgID        string `json:"MsgId"`
+	ToUserName   string `json:"ToUserName" xml:"ToUserName"`
+	FromUserName string `json:"FromUserName" xml:"FromUserName"`
+	CreateTime   int64  `json:"CreateTime" xml:"CreateTime"`
+	MsgType      string `json:"MsgType" xml:"MsgType"`
+	Content      string `json:"Content" xml:"Content"`
+	MsgID        string `json:"MsgId" xml:"MsgId"`
 }
 
 func (e *WeChatExtension) parseMessage(body []byte) *wechatMessage {
@@ -171,46 +172,12 @@ func (e *WeChatExtension) parseMessage(body []byte) *wechatMessage {
 	return e.parseXMLMessage(string(body))
 }
 
-func (e *WeChatExtension) parseXMLMessage(xml string) *wechatMessage {
-	msg := &wechatMessage{}
-
-	fields := map[string]*string{
-		"ToUserName":   &msg.ToUserName,
-		"FromUserName": &msg.FromUserName,
-		"MsgType":      &msg.MsgType,
-		"Content":      &msg.Content,
-		"MsgId":        &msg.MsgID,
+func (e *WeChatExtension) parseXMLMessage(rawXML string) *wechatMessage {
+	var msg wechatMessage
+	if err := xml.Unmarshal([]byte(rawXML), &msg); err != nil {
+		return nil
 	}
-
-	for tag, ptr := range fields {
-		open := "<" + tag + ">"
-		close := "</" + tag + ">"
-		start := strings.Index(xml, open)
-		if start == -1 {
-			continue
-		}
-		start += len(open)
-		end := strings.Index(xml[start:], close)
-		if end == -1 {
-			continue
-		}
-		*ptr = xml[start : start+end]
-	}
-
-	if msg.CreateTime == 0 {
-		open := "<CreateTime>"
-		close := "</CreateTime>"
-		start := strings.Index(xml, open)
-		if start != -1 {
-			start += len(open)
-			end := strings.Index(xml[start:], close)
-			if end != -1 {
-				fmt.Sscanf(xml[start:start+end], "%d", &msg.CreateTime)
-			}
-		}
-	}
-
-	return msg
+	return &msg
 }
 
 func (e *WeChatExtension) verifySignature(signature, timestamp, nonce string) bool {

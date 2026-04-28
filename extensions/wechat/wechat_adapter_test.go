@@ -45,6 +45,32 @@ func TestHandleWebhookAcceptsSignedPost(t *testing.T) {
 	}
 }
 
+func TestParseXMLMessageStripsCDATA(t *testing.T) {
+	ext := NewWeChatExtension(Config{})
+
+	msg := ext.parseXMLMessage(`<xml>
+<ToUserName><![CDATA[to-user]]></ToUserName>
+<FromUserName><![CDATA[from-user]]></FromUserName>
+<CreateTime>1710000000</CreateTime>
+<MsgType><![CDATA[text]]></MsgType>
+<Content><![CDATA[hello <world> & friends]]></Content>
+<MsgId>12345</MsgId>
+</xml>`)
+
+	if msg == nil {
+		t.Fatal("expected parsed WeChat message")
+	}
+	if msg.FromUserName != "from-user" {
+		t.Fatalf("expected FromUserName without CDATA, got %q", msg.FromUserName)
+	}
+	if msg.Content != "hello <world> & friends" {
+		t.Fatalf("expected Content without CDATA, got %q", msg.Content)
+	}
+	if msg.MsgType != "text" || msg.MsgID != "12345" || msg.CreateTime != 1710000000 {
+		t.Fatalf("unexpected parsed message: %#v", msg)
+	}
+}
+
 func wechatTestSignature(token, timestamp, nonce string) string {
 	parts := []string{token, timestamp, nonce}
 	sort.Strings(parts)
