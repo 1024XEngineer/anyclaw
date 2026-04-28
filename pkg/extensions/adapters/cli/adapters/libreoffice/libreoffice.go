@@ -3,6 +3,7 @@ package libreoffice
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,9 @@ func (c *Client) convert(ctx context.Context, args []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := moveConvertedOutput(inputAbs, outputAbs, filepath.Ext(output)[1:]); err != nil {
+		return "", err
+	}
 
 	return fmt.Sprintf("Converted: %s -> %s", input, output), nil
 }
@@ -95,6 +99,9 @@ func (c *Client) toPDF(ctx context.Context, args []string) (string, error) {
 		inputAbs,
 	})
 	if err != nil {
+		return "", err
+	}
+	if err := moveConvertedOutput(inputAbs, outputAbs, "pdf"); err != nil {
 		return "", err
 	}
 
@@ -134,6 +141,26 @@ func (c *Client) run(ctx context.Context, args []string) (string, error) {
 		return string(output), err
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func moveConvertedOutput(inputAbs, outputAbs, format string) error {
+	generated := filepath.Join(
+		filepath.Dir(outputAbs),
+		strings.TrimSuffix(filepath.Base(inputAbs), filepath.Ext(inputAbs))+"."+format,
+	)
+	if filepath.Clean(generated) == filepath.Clean(outputAbs) {
+		return nil
+	}
+	if _, err := os.Stat(generated); err != nil {
+		return fmt.Errorf("converted output not found: %s: %w", generated, err)
+	}
+	if err := os.Remove(outputAbs); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove existing output %s: %w", outputAbs, err)
+	}
+	if err := os.Rename(generated, outputAbs); err != nil {
+		return fmt.Errorf("rename converted output %s to %s: %w", generated, outputAbs, err)
+	}
+	return nil
 }
 
 func (c *Client) IsInstalled(ctx context.Context) bool {
