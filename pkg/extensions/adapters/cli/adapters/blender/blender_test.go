@@ -24,6 +24,10 @@ func TestMain(m *testing.M) {
 					fmt.Fprint(os.Stderr, "background mode has no bpy.context.window")
 					os.Exit(1)
 				}
+				if strings.Contains(string(script), `name = "bad"`) || strings.Contains(string(script), `print("pwned")`) {
+					fmt.Fprint(os.Stderr, "script contains unescaped object name")
+					os.Exit(1)
+				}
 				fmt.Println("Created scene: TestScene")
 				os.Exit(0)
 			}
@@ -48,6 +52,19 @@ func TestCreateSceneWorksInBackgroundMode(t *testing.T) {
 	}
 	if !strings.Contains(out, "Scene created: TestScene") {
 		t.Fatalf("expected create scene confirmation, got %q", out)
+	}
+}
+
+func TestAddObjectQuotesPythonStrings(t *testing.T) {
+	t.Setenv("ANYCLAW_BLENDER_ADAPTER_HELPER", "1")
+	client := NewClient(Config{
+		BlenderPath: fakeBlenderPath(t),
+		Workspace:   t.TempDir(),
+	})
+
+	out, err := client.Run(context.Background(), []string{"object", "cube", "bad\"\nprint(\"pwned\")\n"})
+	if err != nil {
+		t.Fatalf("add object returned error: %v; output: %s", err, out)
 	}
 }
 

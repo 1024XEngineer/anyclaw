@@ -2,6 +2,7 @@ package blender
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -101,9 +102,10 @@ func (c *Client) createScene(ctx context.Context, args []string) (string, error)
 
 	script := fmt.Sprintf(`
 import bpy
-scene = bpy.data.scenes.new(name="%s")
-print("Created scene:", "%s")
-`, name, name)
+scene_name = %s
+scene = bpy.data.scenes.new(name=scene_name)
+print("Created scene:", scene_name)
+`, pyString(name))
 
 	out, err := c.runScript(ctx, script)
 	if err != nil {
@@ -124,8 +126,8 @@ func (c *Client) addObject(ctx context.Context, args []string) (string, error) {
 
 	script := fmt.Sprintf(`
 import bpy
-obj_type = "%s"
-name = "%s"
+obj_type = %s
+name = %s
 if obj_type == "cube":
     bpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0))
     obj = bpy.context.active_object
@@ -147,7 +149,7 @@ else:
 
 obj.name = name
 print("Added object:", name, "type:", obj_type)
-`, objType, objName)
+`, pyString(objType), pyString(objName))
 
 	return c.runScript(ctx, script)
 }
@@ -167,11 +169,11 @@ func (c *Client) render(ctx context.Context, args []string) (string, error) {
 	script := fmt.Sprintf(`
 import bpy
 scene = bpy.context.scene
-scene.render.filepath = "%s"
-scene.render.image_settings.file_format = "%s"
+scene.render.filepath = %s
+scene.render.image_settings.file_format = %s
 bpy.ops.render.render(write=True)
-print("Rendered to:", "%s")
-`, outputPath, format, absPath)
+print("Rendered to:", %s)
+`, pyString(outputPath), pyString(format), pyString(absPath))
 
 	_, err := c.runScript(ctx, script)
 	if err != nil {
@@ -197,6 +199,14 @@ for obj in bpy.data.objects[:5]:
 func (c *Client) runPython(ctx context.Context, code string) (string, error) {
 	script := code
 	return c.runScript(ctx, script)
+}
+
+func pyString(value string) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return `""`
+	}
+	return string(data)
 }
 
 func (c *Client) runScript(ctx context.Context, script string) (string, error) {
