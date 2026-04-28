@@ -18,7 +18,7 @@
       "steps": [
         {"tool": "desktop_screenshot", "params": {"path": ".anyclaw/vision/screen.png"}},
         {"tool": "desktop_find_text", "params": {"text": "Save", "path": ".anyclaw/vision/screen.png"}},
-        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}}
+        {"tool": "desktop_click", "params": {"x": "{{find_text.center_x}}", "y": "{{find_text.center_y}}"}}
       ]
     },
     "type_text": {
@@ -26,7 +26,7 @@
       "steps": [
         {"tool": "desktop_screenshot", "params": {"path": ".anyclaw/vision/screen.png"}},
         {"tool": "desktop_find_text", "params": {"text": "Input", "path": ".anyclaw/vision/screen.png"}},
-        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.center_x}}", "y": "{{find_text.center_y}}"}},
         {"tool": "desktop_type_human", "params": {"text": "Hello World", "delay_ms": 50}}
       ]
     },
@@ -35,13 +35,13 @@
       "steps": [
         {"tool": "desktop_screenshot", "params": {"path": ".anyclaw/vision/screen.png"}},
         {"tool": "desktop_find_text", "params": {"text": "Username", "path": ".anyclaw/vision/screen.png"}},
-        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.center_x}}", "y": "{{find_text.center_y}}"}},
         {"tool": "desktop_type_human", "params": {"text": "{{username}}", "delay_ms": 30}},
         {"tool": "desktop_find_text", "params": {"text": "Password", "path": ".anyclaw/vision/screen.png"}},
-        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}},
+        {"tool": "desktop_click", "params": {"x": "{{find_text.center_x}}", "y": "{{find_text.center_y}}"}},
         {"tool": "desktop_type_human", "params": {"text": "{{credential}}", "delay_ms": 30}},
         {"tool": "desktop_find_text", "params": {"text": "Sign in", "path": ".anyclaw/vision/screen.png"}},
-        {"tool": "desktop_click", "params": {"x": "{{find_text.x}}", "y": "{{find_text.y}}"}}
+        {"tool": "desktop_click", "params": {"x": "{{find_text.center_x}}", "y": "{{find_text.center_y}}"}}
       ]
     }
   }
