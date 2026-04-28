@@ -80,6 +80,7 @@ type TriggerManager struct {
 	mu       sync.RWMutex
 	triggers map[string]TriggerConfig
 	runs     []TriggerRun
+	inFlight map[string]int
 
 	executor   TriggerExecutor
 	graphStore GraphStore
@@ -91,6 +92,7 @@ func NewTriggerManager(executor TriggerExecutor, graphStore GraphStore) *Trigger
 	return &TriggerManager{
 		triggers:   make(map[string]TriggerConfig),
 		runs:       make([]TriggerRun, 0),
+		inFlight:   make(map[string]int),
 		executor:   executor,
 		graphStore: graphStore,
 	}
@@ -393,10 +395,16 @@ func (tm *TriggerManager) fireTrigger(
 		return nil, err
 	}
 
-	cfg, hook, err := tm.triggerForRun(triggerID)
+	cfg, hook, err := tm.reserveTriggerRun(triggerID)
 	if err != nil {
 		return nil, err
 	}
+	reserved := true
+	defer func() {
+		if reserved {
+			tm.releaseTriggerReservation(triggerID)
+		}
+	}()
 
 	merged := cloneAnyMap(cfg.DefaultInputs)
 	if merged == nil {
@@ -416,13 +424,14 @@ func (tm *TriggerManager) fireTrigger(
 	startedAt := time.Now().UTC()
 	execCtx, execErr := tm.executeTrigger(runCtx, cfg, hook, merged)
 	run := buildTriggerRun(triggerID, triggeredBy, event, startedAt, execCtx, execErr)
-	tm.appendRun(run)
+	tm.appendRunAndRelease(run)
+	reserved = false
 	return cloneTriggerRunPtr(run), execErr
 }
 
-func (tm *TriggerManager) triggerForRun(triggerID string) (TriggerConfig, TriggerHook, error) {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
+func (tm *TriggerManager) reserveTriggerRun(triggerID string) (TriggerConfig, TriggerHook, error) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	cfg, ok := tm.triggers[triggerID]
 	if !ok {
 		return TriggerConfig{}, nil, fmt.Errorf("trigger not found: %s", triggerID)
@@ -430,9 +439,13 @@ func (tm *TriggerManager) triggerForRun(triggerID string) (TriggerConfig, Trigge
 	if !cfg.Enabled {
 		return TriggerConfig{}, nil, fmt.Errorf("trigger is disabled: %s", triggerID)
 	}
-	if cfg.MaxRuns > 0 && tm.runCountLocked(triggerID) >= cfg.MaxRuns {
+	if cfg.MaxRuns > 0 && tm.runCountLocked(triggerID)+tm.inFlightCountLocked(triggerID) >= cfg.MaxRuns {
 		return TriggerConfig{}, nil, fmt.Errorf("trigger max_runs reached: %s", triggerID)
 	}
+	if tm.inFlight == nil {
+		tm.inFlight = make(map[string]int)
+	}
+	tm.inFlight[triggerID]++
 	return cloneTriggerConfig(cfg), tm.hookFunc, nil
 }
 
@@ -479,10 +492,35 @@ func (tm *TriggerManager) runCountLocked(triggerID string) int {
 	return count
 }
 
-func (tm *TriggerManager) appendRun(run TriggerRun) {
+func (tm *TriggerManager) inFlightCountLocked(triggerID string) int {
+	if tm.inFlight == nil {
+		return 0
+	}
+	return tm.inFlight[triggerID]
+}
+
+func (tm *TriggerManager) appendRunAndRelease(run TriggerRun) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	tm.runs = append(tm.runs, cloneTriggerRun(run))
+	tm.releaseTriggerReservationLocked(run.TriggerID)
+}
+
+func (tm *TriggerManager) releaseTriggerReservation(triggerID string) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	tm.releaseTriggerReservationLocked(triggerID)
+}
+
+func (tm *TriggerManager) releaseTriggerReservationLocked(triggerID string) {
+	if tm.inFlight == nil || tm.inFlight[triggerID] == 0 {
+		return
+	}
+	if tm.inFlight[triggerID] == 1 {
+		delete(tm.inFlight, triggerID)
+		return
+	}
+	tm.inFlight[triggerID]--
 }
 
 func (tm *TriggerManager) fireMatching(

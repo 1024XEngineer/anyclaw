@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -526,6 +527,69 @@ func TestFireTriggerEnforcesMaxRuns(t *testing.T) {
 	}
 	if _, err := tm.FireTrigger(context.Background(), "manual-1", nil); err == nil {
 		t.Fatal("expected max_runs error")
+	}
+}
+
+func TestFireTriggerMaxRunsCountsInFlightRuns(t *testing.T) {
+	tm := NewTriggerManager(nil, nil)
+	if err := tm.AddTrigger(TriggerConfig{
+		ID:      "manual-1",
+		GraphID: "graph-1",
+		MaxRuns: 1,
+	}); err != nil {
+		t.Fatalf("AddTrigger: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	tm.SetHookFunc(func(ctx context.Context, _ string, _ map[string]any) (*ExecutionContext, error) {
+		enteredOnce.Do(func() { close(entered) })
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		exec := NewExecutionContext("graph-1", nil)
+		exec.MarkExecutionCompleted(nil)
+		return exec, nil
+	})
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := tm.FireTrigger(context.Background(), "manual-1", nil)
+		firstDone <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("first trigger did not enter hook")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := tm.FireTrigger(context.Background(), "manual-1", nil)
+		secondDone <- err
+	}()
+
+	var secondErr error
+	select {
+	case secondErr = <-secondDone:
+	case <-time.After(200 * time.Millisecond):
+		secondErr = errors.New("second FireTrigger blocked instead of observing in-flight max_runs")
+	}
+
+	close(release)
+
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first FireTrigger: %v", err)
+	}
+	if secondErr != nil && strings.Contains(secondErr.Error(), "blocked") {
+		<-secondDone
+	}
+	if secondErr == nil || !strings.Contains(secondErr.Error(), "max_runs") {
+		t.Fatalf("expected in-flight max_runs rejection, got %v", secondErr)
 	}
 }
 
