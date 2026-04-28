@@ -100,6 +100,60 @@ func TestCandidatesUsesKindRankForConfidenceTies(t *testing.T) {
 	}
 }
 
+func TestCandidatesMatchesKeywordsWithTokenBoundaries(t *testing.T) {
+	svc := NewServiceForRegistry([]RouteRule{
+		{
+			ID:         "toolchain-ci",
+			Kind:       CandidateToolchain,
+			Keywords:   []string{"ci"},
+			Confidence: 0.9,
+		},
+	}, nil)
+
+	candidates, err := svc.Candidates(context.Background(), CandidateRequest{Input: "ask a specialist"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Kind != CandidateDirect {
+		t.Fatalf("expected specialist not to match ci keyword, got %#v", candidates)
+	}
+
+	candidates, err = svc.Candidates(context.Background(), CandidateRequest{Input: "run ci, please"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ID != "toolchain-ci" {
+		t.Fatalf("expected standalone ci token to match, got %#v", candidates)
+	}
+}
+
+func TestCandidatesMatchesMultiTokenKeywordPhrases(t *testing.T) {
+	svc := NewServiceForRegistry([]RouteRule{
+		{
+			ID:         "triage-workflow",
+			Kind:       CandidateWorkflow,
+			Keywords:   []string{"open issue"},
+			Confidence: 0.8,
+		},
+	}, nil)
+
+	candidates, err := svc.Candidates(context.Background(), CandidateRequest{Input: "open issue quickly"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if candidates[0].ID != "triage-workflow" {
+		t.Fatalf("expected phrase keyword to match, got %#v", candidates)
+	}
+
+	candidates, err = svc.Candidates(context.Background(), CandidateRequest{Input: "open a new issue"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Kind != CandidateDirect {
+		t.Fatalf("expected non-contiguous phrase not to match, got %#v", candidates)
+	}
+}
+
 func TestCandidatesAddsApprovalForHighRiskInput(t *testing.T) {
 	svc := NewServiceForRegistry([]RouteRule{
 		{
@@ -127,6 +181,30 @@ func TestCandidatesAddsApprovalForHighRiskInput(t *testing.T) {
 	}
 	if candidates[0].RiskLevel != "high" {
 		t.Fatalf("expected high risk level, got %q", candidates[0].RiskLevel)
+	}
+}
+
+func TestCandidatesDetectsRiskWithTokenBoundaries(t *testing.T) {
+	svc := NewServiceForRegistry(nil, nil)
+
+	candidates, err := svc.Candidates(context.Background(), CandidateRequest{
+		Input: "message the secretary",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Kind != CandidateDirect {
+		t.Fatalf("expected secretary not to trigger secret risk, got %#v", candidates)
+	}
+
+	candidates, err = svc.Candidates(context.Background(), CandidateRequest{
+		Input: "remove all credentials",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(candidates) != 2 || candidates[0].Kind != CandidateApproval {
+		t.Fatalf("expected bounded risk phrase to trigger approval plus fallback, got %#v", candidates)
 	}
 }
 

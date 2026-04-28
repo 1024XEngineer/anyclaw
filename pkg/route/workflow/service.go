@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 type CandidateKind string
@@ -212,10 +213,10 @@ func matchRule(rule RouteRule, input string) (float64, bool) {
 		return 0, false
 	}
 
-	normalizedInput := normalizeText(input)
+	inputTokens := tokenizeText(input)
 	matches := 0
 	for _, keyword := range keywords {
-		if strings.Contains(normalizedInput, keyword) {
+		if containsNormalizedPhrase(inputTokens, keyword) {
 			matches++
 		}
 	}
@@ -267,7 +268,7 @@ func hasRunnableCandidate(candidates []Candidate) bool {
 }
 
 func detectRisk(input string) string {
-	normalized := normalizeText(input)
+	inputTokens := tokenizeText(input)
 	highRiskWords := []string{
 		"delete",
 		"drop",
@@ -279,7 +280,7 @@ func detectRisk(input string) string {
 		"secret",
 	}
 	for _, word := range highRiskWords {
-		if strings.Contains(normalized, word) {
+		if containsNormalizedPhrase(inputTokens, word) {
 			return "high"
 		}
 	}
@@ -328,8 +329,34 @@ func normalizedKeywords(keywords []string) []string {
 	return normalized
 }
 
+func containsNormalizedPhrase(inputTokens []string, phrase string) bool {
+	phraseTokens := tokenizeText(phrase)
+	if len(phraseTokens) == 0 || len(inputTokens) < len(phraseTokens) {
+		return false
+	}
+	for i := 0; i <= len(inputTokens)-len(phraseTokens); i++ {
+		matched := true
+		for j, token := range phraseTokens {
+			if inputTokens[i+j] != token {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeText(input string) string {
-	return strings.Join(strings.Fields(strings.ToLower(input)), " ")
+	return strings.Join(tokenizeText(input), " ")
+}
+
+func tokenizeText(input string) []string {
+	return strings.FieldsFunc(strings.ToLower(input), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
 }
 
 func clampConfidence(score float64) float64 {
