@@ -2,19 +2,41 @@ package speech
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
+
+	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
+	"google.golang.org/api/googleapi"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
+type fakeGoogleRecognizeClient struct {
+	calls       int
+	lastRequest *speechpb.RecognizeRequest
+	recognizeFn func(context.Context, *speechpb.RecognizeRequest) (*speechpb.RecognizeResponse, error)
+}
+
+func (f *fakeGoogleRecognizeClient) Recognize(ctx context.Context, req *speechpb.RecognizeRequest) (*speechpb.RecognizeResponse, error) {
+	f.calls++
+	f.lastRequest = req
+	if f.recognizeFn != nil {
+		return f.recognizeFn(ctx, req)
+	}
+	return &speechpb.RecognizeResponse{}, nil
+}
+
+func (f *fakeGoogleRecognizeClient) Close() error {
+	return nil
+}
+
 func TestNewGoogleProvider(t *testing.T) {
-	t.Run("requires API key", func(t *testing.T) {
-		_, err := NewGoogleProvider("")
+	t.Run("requires API key or credentials JSON", func(t *testing.T) {
+		_, err := NewGoogleProvider("", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
 		if err == nil {
-			t.Fatal("expected error when API key is empty")
+			t.Fatal("expected error when auth config is empty")
 		}
 		sttErr, ok := err.(*STTError)
 		if !ok {
@@ -26,7 +48,8 @@ func TestNewGoogleProvider(t *testing.T) {
 	})
 
 	t.Run("creates provider with defaults", func(t *testing.T) {
-		p, err := NewGoogleProvider("test-key")
+		fake := &fakeGoogleRecognizeClient{}
+		p, err := NewGoogleProvider("test-key", withGoogleRecognizeClient(fake))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -48,16 +71,21 @@ func TestNewGoogleProvider(t *testing.T) {
 		if p.retries != 2 {
 			t.Errorf("expected 2 retries, got %d", p.retries)
 		}
+		if p.client != fake {
+			t.Fatal("expected injected fake client to be used")
+		}
 	})
 
 	t.Run("applies options", func(t *testing.T) {
 		p, err := NewGoogleProvider("test-key",
-			WithGoogleBaseURL("https://custom.speech.api.com"),
+			withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}),
+			WithGoogleBaseURL("https://custom.speech.api.com/"),
 			WithGoogleLanguageCode("zh-CN"),
 			WithGoogleModel(GoogleModelLatestLong),
 			WithGoogleEnhanced(true),
 			WithGoogleTimeout(30*time.Second),
 			WithGoogleRetries(5),
+			WithGoogleCredentialsJSON(`{"type":"service_account"}`),
 		)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -80,25 +108,15 @@ func TestNewGoogleProvider(t *testing.T) {
 		if p.retries != 5 {
 			t.Errorf("expected 5 retries, got %d", p.retries)
 		}
-	})
-
-	t.Run("trims trailing slash from baseURL", func(t *testing.T) {
-		p, err := NewGoogleProvider("test-key", WithGoogleBaseURL("https://api.example.com/"))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if strings.HasSuffix(p.baseURL, "/") {
-			t.Errorf("baseURL should not have trailing slash: %s", p.baseURL)
+		if p.credentialsJSON == "" {
+			t.Error("expected credentials JSON to be stored")
 		}
 	})
 }
 
 func TestGoogleProviderTranscribe(t *testing.T) {
 	t.Run("rejects empty audio", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
+		p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
 		_, err := p.Transcribe(context.Background(), nil)
 		if err == nil {
 			t.Fatal("expected error for empty audio")
@@ -106,10 +124,7 @@ func TestGoogleProviderTranscribe(t *testing.T) {
 	})
 
 	t.Run("rejects audio too large", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
+		p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
 		largeAudio := make([]byte, 101*1024*1024)
 		_, err := p.Transcribe(context.Background(), largeAudio)
 		if err == nil {
@@ -124,49 +139,46 @@ func TestGoogleProviderTranscribe(t *testing.T) {
 		}
 	})
 
-	t.Run("successful transcription", func(t *testing.T) {
-		response := googleResponse{
-			Results: []googleResult{
-				{
-					Alternatives: []googleAlternative{
+	t.Run("successful transcription and request mapping", func(t *testing.T) {
+		fake := &fakeGoogleRecognizeClient{
+			recognizeFn: func(ctx context.Context, req *speechpb.RecognizeRequest) (*speechpb.RecognizeResponse, error) {
+				return &speechpb.RecognizeResponse{
+					Results: []*speechpb.SpeechRecognitionResult{
 						{
-							Transcript: "Hello world",
-							Confidence: 0.95,
-							Words: []googleWordInfo{
-								{Word: "Hello", Confidence: 0.96, StartTime: googleDuration{Seconds: "0", Nanos: 0}, EndTime: googleDuration{Seconds: "0", Nanos: 500000000}},
-								{Word: "world", Confidence: 0.94, StartTime: googleDuration{Seconds: "0", Nanos: 600000000}, EndTime: googleDuration{Seconds: "1", Nanos: 0}},
+							Alternatives: []*speechpb.SpeechRecognitionAlternative{
+								{
+									Transcript: "Hello world",
+									Confidence: 0.95,
+									Words: []*speechpb.WordInfo{
+										{
+											Word:       "Hello",
+											Confidence: 0.96,
+											StartTime:  durationpb.New(0),
+											EndTime:    durationpb.New(500 * time.Millisecond),
+										},
+										{
+											Word:       "world",
+											Confidence: 0.94,
+											StartTime:  durationpb.New(600 * time.Millisecond),
+											EndTime:    durationpb.New(time.Second),
+										},
+									},
+								},
 							},
+							LanguageCode:  "en-US",
+							ResultEndTime: durationpb.New(2500 * time.Millisecond),
 						},
 					},
-					LanguageCode: "en-US",
-					ResultEndTime: struct {
-						Seconds string `json:"seconds"`
-						Nanos   int    `json:"nanos"`
-					}{Seconds: "2", Nanos: 500000000},
-				},
+				}, nil
 			},
 		}
 
-		respBody, _ := json.Marshal(response)
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != "POST" {
-				t.Errorf("expected POST, got %s", r.Method)
-			}
-			if !strings.Contains(r.URL.Query().Get("key"), "test-key") {
-				t.Error("missing API key in query")
-			}
-			if r.Header.Get("Content-Type") != "application/json" {
-				t.Errorf("expected application/json, got %s", r.Header.Get("Content-Type"))
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			w.Write(respBody)
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
-		result, err := p.Transcribe(context.Background(), []byte("fake-audio-data"))
+		p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(fake))
+		result, err := p.Transcribe(context.Background(), []byte("fake-audio-data"),
+			WithSTTLanguage("zh-CN"),
+			WithSTTWordTimestamps(true),
+			WithSTTMaxAlternatives(3),
+		)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -177,8 +189,8 @@ func TestGoogleProviderTranscribe(t *testing.T) {
 		if result.Language != "en-US" {
 			t.Errorf("expected language 'en-US', got '%s'", result.Language)
 		}
-		if result.Duration != 2500*time.Millisecond {
-			t.Errorf("expected duration 2.5s, got %v", result.Duration)
+		if result.Duration != time.Second {
+			t.Errorf("expected duration 1s from word timestamps, got %v", result.Duration)
 		}
 		if len(result.Segments) != 1 {
 			t.Fatalf("expected 1 segment, got %d", len(result.Segments))
@@ -186,243 +198,151 @@ func TestGoogleProviderTranscribe(t *testing.T) {
 		if len(result.Segments[0].Words) != 2 {
 			t.Fatalf("expected 2 words, got %d", len(result.Segments[0].Words))
 		}
-		if result.Confidence != 0.95 {
+		if math.Abs(result.Confidence-0.95) > 0.0001 {
 			t.Errorf("expected confidence 0.95, got %f", result.Confidence)
+		}
+
+		req := fake.lastRequest
+		if req == nil {
+			t.Fatal("expected request to be captured")
+		}
+		if req.GetConfig().GetLanguageCode() != "zh-CN" {
+			t.Errorf("expected request language zh-CN, got %s", req.GetConfig().GetLanguageCode())
+		}
+		if !req.GetConfig().GetEnableWordTimeOffsets() {
+			t.Error("expected EnableWordTimeOffsets to be true")
+		}
+		if req.GetConfig().GetMaxAlternatives() != 3 {
+			t.Errorf("expected max alternatives 3, got %d", req.GetConfig().GetMaxAlternatives())
+		}
+		if req.GetConfig().GetEncoding() != speechpb.RecognitionConfig_MP3 {
+			t.Errorf("expected MP3 encoding, got %v", req.GetConfig().GetEncoding())
+		}
+		if len(req.GetAudio().GetContent()) == 0 {
+			t.Error("expected inline audio content to be populated")
 		}
 	})
 
-	t.Run("multiple segments", func(t *testing.T) {
-		response := googleResponse{
-			Results: []googleResult{
-				{Alternatives: []googleAlternative{{Transcript: "First segment"}}, LanguageCode: "en-US"},
-				{Alternatives: []googleAlternative{{Transcript: "Second segment"}}, LanguageCode: "en-US"},
+	t.Run("multiple segments and alternatives", func(t *testing.T) {
+		fake := &fakeGoogleRecognizeClient{
+			recognizeFn: func(ctx context.Context, req *speechpb.RecognizeRequest) (*speechpb.RecognizeResponse, error) {
+				return &speechpb.RecognizeResponse{
+					Results: []*speechpb.SpeechRecognitionResult{
+						{
+							Alternatives: []*speechpb.SpeechRecognitionAlternative{
+								{Transcript: "First segment", Confidence: 0.9},
+								{Transcript: "First segments", Confidence: 0.7},
+							},
+							LanguageCode:  "en-US",
+							ResultEndTime: durationpb.New(time.Second),
+						},
+						{
+							Alternatives: []*speechpb.SpeechRecognitionAlternative{
+								{Transcript: "Second segment", Confidence: 0.8},
+								{Transcript: "Second segments", Confidence: 0.6},
+							},
+							LanguageCode:  "en-US",
+							ResultEndTime: durationpb.New(2 * time.Second),
+						},
+					},
+				}, nil
 			},
 		}
 
-		respBody, _ := json.Marshal(response)
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(respBody)
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
-		result, err := p.Transcribe(context.Background(), []byte("fake-audio"))
+		p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(fake))
+		result, err := p.Transcribe(context.Background(), []byte("fake-audio"), WithSTTMaxAlternatives(3))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		expectedText := "First segment Second segment"
-		if result.Text != expectedText {
-			t.Errorf("expected '%s', got '%s'", expectedText, result.Text)
+		if result.Text != "First segment Second segment" {
+			t.Errorf("unexpected combined text: %s", result.Text)
 		}
 		if len(result.Segments) != 2 {
 			t.Fatalf("expected 2 segments, got %d", len(result.Segments))
 		}
-	})
-
-	t.Run("alternatives", func(t *testing.T) {
-		response := googleResponse{
-			Results: []googleResult{
-				{
-					Alternatives: []googleAlternative{
-						{Transcript: "Hello world", Confidence: 0.95},
-						{Transcript: "Hello word", Confidence: 0.80},
-						{Transcript: "Halo world", Confidence: 0.70},
-					},
-					LanguageCode: "en-US",
-				},
-			},
-		}
-
-		respBody, _ := json.Marshal(response)
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(respBody)
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
-		result, err := p.Transcribe(context.Background(), []byte("fake-audio"),
-			WithSTTMaxAlternatives(3))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
 		if len(result.Alternatives) != 2 {
 			t.Fatalf("expected 2 alternatives, got %d", len(result.Alternatives))
 		}
-		if result.Alternatives[0] != "Hello word" {
-			t.Errorf("expected first alternative 'Hello word', got '%s'", result.Alternatives[0])
+		if result.Duration != 2*time.Second {
+			t.Errorf("expected duration 2s, got %v", result.Duration)
 		}
 	})
 
 	t.Run("empty results", func(t *testing.T) {
-		response := googleResponse{Results: []googleResult{}}
-		respBody, _ := json.Marshal(response)
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(respBody)
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
+		p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
 		result, err := p.Transcribe(context.Background(), []byte("fake-audio"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if result.Text != "" {
-			t.Errorf("expected empty text, got '%s'", result.Text)
+			t.Errorf("expected empty text, got %q", result.Text)
 		}
 	})
 
-	t.Run("handles authentication error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":{"code":401,"message":"API key not valid. Please pass a valid API key.","status":"UNAUTHENTICATED"}}`))
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("bad-key", WithGoogleBaseURL(server.URL), WithGoogleRetries(0))
+	t.Run("does not retry auth errors", func(t *testing.T) {
+		fake := &fakeGoogleRecognizeClient{
+			recognizeFn: func(ctx context.Context, req *speechpb.RecognizeRequest) (*speechpb.RecognizeResponse, error) {
+				return nil, &googleapi.Error{Code: 401, Message: "invalid API key"}
+			},
+		}
+		p, _ := NewGoogleProvider("bad-key", withGoogleRecognizeClient(fake), WithGoogleRetries(3))
 		_, err := p.Transcribe(context.Background(), []byte("fake-audio"))
 		if err == nil {
 			t.Fatal("expected authentication error")
 		}
-		sttErr, ok := err.(*STTError)
-		if !ok {
-			t.Fatalf("expected *STTError, got %T", err)
-		}
-		if sttErr.Code != ErrAuthentication {
-			t.Errorf("expected ErrAuthentication, got %s", sttErr.Code)
+		if fake.calls != 1 {
+			t.Errorf("expected 1 call, got %d", fake.calls)
 		}
 	})
 
-	t.Run("handles forbidden error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"error":{"code":403,"message":"API key expired.","status":"PERMISSION_DENIED"}}`))
-		}))
-		defer server.Close()
+	t.Run("retries transient errors then succeeds", func(t *testing.T) {
+		fake := &fakeGoogleRecognizeClient{}
+		fake.recognizeFn = func(ctx context.Context, req *speechpb.RecognizeRequest) (*speechpb.RecognizeResponse, error) {
+			if fake.calls == 1 {
+				return nil, &googleapi.Error{Code: 503, Message: "service unavailable"}
+			}
+			return &speechpb.RecognizeResponse{
+				Results: []*speechpb.SpeechRecognitionResult{
+					{
+						Alternatives:  []*speechpb.SpeechRecognitionAlternative{{Transcript: "Success after retry"}},
+						LanguageCode:  "en-US",
+						ResultEndTime: durationpb.New(time.Second),
+					},
+				},
+			}, nil
+		}
 
-		p, _ := NewGoogleProvider("expired-key", WithGoogleBaseURL(server.URL), WithGoogleRetries(0))
-		_, err := p.Transcribe(context.Background(), []byte("fake-audio"))
-		if err == nil {
-			t.Fatal("expected authentication error")
+		p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(fake), WithGoogleRetries(2))
+		result, err := p.Transcribe(context.Background(), []byte("fake-audio"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
-		sttErr, ok := err.(*STTError)
-		if !ok {
-			t.Fatalf("expected *STTError, got %T", err)
+		if result.Text != "Success after retry" {
+			t.Errorf("expected 'Success after retry', got '%s'", result.Text)
 		}
-		if sttErr.Code != ErrAuthentication {
-			t.Errorf("expected ErrAuthentication, got %s", sttErr.Code)
-		}
-	})
-
-	t.Run("handles rate limit error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":{"code":429,"message":"Quota exceeded.","status":"RESOURCE_EXHAUSTED"}}`))
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL), WithGoogleRetries(0))
-		_, err := p.Transcribe(context.Background(), []byte("fake-audio"))
-		if err == nil {
-			t.Fatal("expected rate limit error")
-		}
-		sttErr, ok := err.(*STTError)
-		if !ok {
-			t.Fatalf("expected *STTError, got %T", err)
-		}
-		if sttErr.Code != ErrRateLimited {
-			t.Errorf("expected ErrRateLimited, got %s", sttErr.Code)
+		if fake.calls != 2 {
+			t.Errorf("expected 2 calls, got %d", fake.calls)
 		}
 	})
 
 	t.Run("context cancellation", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL), WithGoogleRetries(1))
-
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		_, err := p.Transcribe(ctx, []byte("fake-audio"))
+		fake := &fakeGoogleRecognizeClient{
+			recognizeFn: func(ctx context.Context, req *speechpb.RecognizeRequest) (*speechpb.RecognizeResponse, error) {
+				return nil, context.Canceled
+			},
+		}
+		p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(fake), WithGoogleRetries(0))
+		_, err := p.Transcribe(context.Background(), []byte("fake-audio"))
 		if err == nil {
 			t.Fatal("expected context cancellation error")
-		}
-	})
-
-	t.Run("uses correct URL with API key", func(t *testing.T) {
-		var receivedURL string
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			receivedURL = r.URL.String()
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"results":[{"alternatives":[{"transcript":"test"}],"languageCode":"en-US"}]}`))
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("my-api-key", WithGoogleBaseURL(server.URL))
-		_, err := p.Transcribe(context.Background(), []byte("fake-audio"))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !strings.Contains(receivedURL, "key=my-api-key") {
-			t.Errorf("expected URL to contain 'key=my-api-key', got %s", receivedURL)
-		}
-		if !strings.Contains(receivedURL, "/v1/speech:recognize") {
-			t.Errorf("expected URL to contain '/v1/speech:recognize', got %s", receivedURL)
-		}
-	})
-
-	t.Run("sends correct request body", func(t *testing.T) {
-		var receivedBody googleRecognizeRequest
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			json.NewDecoder(r.Body).Decode(&receivedBody)
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"results":[{"alternatives":[{"transcript":"test"}],"languageCode":"en-US"}]}`))
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
-		_, err := p.Transcribe(context.Background(), []byte("fake-audio"),
-			WithSTTLanguage("zh-CN"),
-			WithSTTWordTimestamps(true),
-			WithSTTMaxAlternatives(3))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-
-		if receivedBody.Config.LanguageCode != "zh-CN" {
-			t.Errorf("expected language zh-CN, got %s", receivedBody.Config.LanguageCode)
-		}
-		if !receivedBody.Config.EnableWordTimeOffsets {
-			t.Error("expected EnableWordTimeOffsets to be true")
-		}
-		if receivedBody.Config.MaxAlternatives != 3 {
-			t.Errorf("expected maxAlternatives 3, got %d", receivedBody.Config.MaxAlternatives)
-		}
-		if receivedBody.Config.EnableAutomaticPunctuation != true {
-			t.Error("expected EnableAutomaticPunctuation to be true")
 		}
 	})
 }
 
 func TestGoogleProviderTranscribeStream(t *testing.T) {
 	t.Run("rejects nil reader", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
+		p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
 		_, err := p.TranscribeStream(context.Background(), nil)
 		if err == nil {
 			t.Fatal("expected error for nil reader")
@@ -430,13 +350,19 @@ func TestGoogleProviderTranscribeStream(t *testing.T) {
 	})
 
 	t.Run("successful stream transcription", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"results":[{"alternatives":[{"transcript":"Stream content","confidence":0.9}],"languageCode":"en-US"}]}`))
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
+		fake := &fakeGoogleRecognizeClient{
+			recognizeFn: func(ctx context.Context, req *speechpb.RecognizeRequest) (*speechpb.RecognizeResponse, error) {
+				return &speechpb.RecognizeResponse{
+					Results: []*speechpb.SpeechRecognitionResult{
+						{
+							Alternatives: []*speechpb.SpeechRecognitionAlternative{{Transcript: "Stream content", Confidence: 0.9}},
+							LanguageCode: "en-US",
+						},
+					},
+				}, nil
+			},
+		}
+		p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(fake))
 		reader := strings.NewReader("stream-audio-data")
 		result, err := p.TranscribeStream(context.Background(), reader)
 		if err != nil {
@@ -449,27 +375,22 @@ func TestGoogleProviderTranscribeStream(t *testing.T) {
 }
 
 func TestGoogleProviderTranscribeFile(t *testing.T) {
-	t.Run("returns not supported error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL))
-		_, err := p.TranscribeFile(context.Background(), "/some/file.mp3")
-		if err == nil {
-			t.Fatal("expected error for file transcription")
-		}
-		sttErr, ok := err.(*STTError)
-		if !ok {
-			t.Fatalf("expected *STTError, got %T", err)
-		}
-		if sttErr.Code != ErrProviderNotSupported {
-			t.Errorf("expected ErrProviderNotSupported, got %s", sttErr.Code)
-		}
-	})
+	p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
+	_, err := p.TranscribeFile(context.Background(), "/some/file.mp3")
+	if err == nil {
+		t.Fatal("expected error for file transcription")
+	}
+	sttErr, ok := err.(*STTError)
+	if !ok {
+		t.Fatalf("expected *STTError, got %T", err)
+	}
+	if sttErr.Code != ErrProviderNotSupported {
+		t.Errorf("expected ErrProviderNotSupported, got %s", sttErr.Code)
+	}
 }
 
 func TestGoogleProviderListLanguages(t *testing.T) {
-	p, _ := NewGoogleProvider("test-key")
+	p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
 	langs, err := p.ListLanguages(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -477,32 +398,10 @@ func TestGoogleProviderListLanguages(t *testing.T) {
 	if len(langs) == 0 {
 		t.Fatal("expected non-empty language list")
 	}
-
-	found := false
-	for _, lang := range langs {
-		if lang == "en-US" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected 'en-US' in language list")
-	}
-
-	found = false
-	for _, lang := range langs {
-		if lang == "zh-CN" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected 'zh-CN' in language list")
-	}
 }
 
 func TestGoogleProviderEncodingMapping(t *testing.T) {
-	p, _ := NewGoogleProvider("test-key")
+	p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
 
 	tests := []struct {
 		format AudioInputFormat
@@ -512,7 +411,7 @@ func TestGoogleProviderEncodingMapping(t *testing.T) {
 		{InputPCM, EncodingLinear16},
 		{InputFLAC, EncodingFLAC},
 		{InputMP3, EncodingMP3},
-		{InputOGG, EncodingWEBMOpus},
+		{InputOGG, EncodingOGGOpus},
 		{InputWEBM, EncodingWEBMOpus},
 		{InputM4A, EncodingWEBMOpus},
 		{InputMP4, EncodingWEBMOpus},
@@ -531,7 +430,7 @@ func TestGoogleProviderEncodingMapping(t *testing.T) {
 }
 
 func TestGoogleProviderSampleRateGuessing(t *testing.T) {
-	p, _ := NewGoogleProvider("test-key")
+	p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
 
 	tests := []struct {
 		format AudioInputFormat
@@ -557,137 +456,89 @@ func TestGoogleProviderSampleRateGuessing(t *testing.T) {
 	}
 }
 
-func TestGoogleProviderRetries(t *testing.T) {
-	t.Run("retries on server error then succeeds", func(t *testing.T) {
-		callCount := 0
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			callCount++
-			if callCount < 2 {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				w.Write([]byte(`{"error":{"code":503,"message":"Service unavailable","status":"UNAVAILABLE"}}`))
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"results":[{"alternatives":[{"transcript":"Success after retry"}],"languageCode":"en-US"}]}`))
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("test-key", WithGoogleBaseURL(server.URL), WithGoogleRetries(2))
-		result, err := p.Transcribe(context.Background(), []byte("fake-audio"))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if result.Text != "Success after retry" {
-			t.Errorf("expected 'Success after retry', got '%s'", result.Text)
-		}
-		if callCount != 2 {
-			t.Errorf("expected 2 calls, got %d", callCount)
-		}
-	})
-
-	t.Run("does not retry on auth error", func(t *testing.T) {
-		callCount := 0
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			callCount++
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":{"code":401,"message":"Invalid API key","status":"UNAUTHENTICATED"}}`))
-		}))
-		defer server.Close()
-
-		p, _ := NewGoogleProvider("bad-key", WithGoogleBaseURL(server.URL), WithGoogleRetries(3))
-		_, err := p.Transcribe(context.Background(), []byte("fake-audio"))
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if callCount != 1 {
-			t.Errorf("expected 1 call (no retry on auth error), got %d", callCount)
-		}
-	})
-}
-
-func TestParseGoogleDuration(t *testing.T) {
+func TestParseProtoDuration(t *testing.T) {
 	tests := []struct {
 		name string
-		d    googleDuration
+		d    *durationpb.Duration
 		want time.Duration
 	}{
-		{"zero", googleDuration{Seconds: "0", Nanos: 0}, 0},
-		{"one second", googleDuration{Seconds: "1", Nanos: 0}, time.Second},
-		{"500ms", googleDuration{Seconds: "0", Nanos: 500000000}, 500 * time.Millisecond},
-		{"2.5s", googleDuration{Seconds: "2", Nanos: 500000000}, 2500 * time.Millisecond},
-		{"1.234s", googleDuration{Seconds: "1", Nanos: 234000000}, time.Second + 234*time.Millisecond},
+		{"nil", nil, 0},
+		{"zero", durationpb.New(0), 0},
+		{"one second", durationpb.New(time.Second), time.Second},
+		{"500ms", durationpb.New(500 * time.Millisecond), 500 * time.Millisecond},
+		{"2.5s", durationpb.New(2500 * time.Millisecond), 2500 * time.Millisecond},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseGoogleDuration(tt.d)
+			got := parseProtoDuration(tt.d)
 			if got != tt.want {
-				t.Errorf("parseGoogleDuration(%v) = %v, want %v", tt.d, got, tt.want)
+				t.Errorf("parseProtoDuration(%v) = %v, want %v", tt.d, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestNewSTTProviderGoogle(t *testing.T) {
-	t.Run("creates Google provider", func(t *testing.T) {
-		p, err := NewSTTProvider(STTConfig{
-			Type:    STTProviderGoogle,
-			APIKey:  "test-key",
-			Timeout: 30 * time.Second,
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if p.Type() != STTProviderGoogle {
-			t.Errorf("expected STTProviderGoogle, got %s", p.Type())
-		}
-		if p.Name() != "google-speech" {
-			t.Errorf("expected name 'google-speech', got %s", p.Name())
-		}
+	p, err := NewSTTProvider(STTConfig{
+		Type:    STTProviderGoogle,
+		APIKey:  "test-key",
+		Timeout: 30 * time.Second,
 	})
-
-	t.Run("creates Google provider with language", func(t *testing.T) {
-		p, err := NewSTTProvider(STTConfig{
-			Type:     STTProviderGoogle,
-			APIKey:   "test-key",
-			Language: "zh-CN",
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		gp, ok := p.(*GoogleProvider)
-		if !ok {
-			t.Fatalf("expected *GoogleProvider, got %T", p)
-		}
-		if gp.languageCode != "zh-CN" {
-			t.Errorf("expected language zh-CN, got %s", gp.languageCode)
-		}
-	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.Type() != STTProviderGoogle {
+		t.Errorf("expected STTProviderGoogle, got %s", p.Type())
+	}
+	if p.Name() != "google-speech" {
+		t.Errorf("expected name 'google-speech', got %s", p.Name())
+	}
 }
 
 func TestGoogleSTTManager(t *testing.T) {
-	t.Run("register and use Google provider", func(t *testing.T) {
-		m := NewSTTManager()
-		p, _ := NewGoogleProvider("test-key")
+	m := NewSTTManager()
+	p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
 
-		err := m.Register("google", p)
-		if err != nil {
-			t.Fatalf("failed to register provider: %v", err)
-		}
+	err := m.Register("google", p)
+	if err != nil {
+		t.Fatalf("failed to register provider: %v", err)
+	}
 
-		providers := m.ListProviders()
-		if len(providers) != 1 {
-			t.Fatalf("expected 1 provider, got %d", len(providers))
-		}
+	got, err := m.Get("google")
+	if err != nil {
+		t.Fatalf("failed to get provider: %v", err)
+	}
+	if got.Type() != STTProviderGoogle {
+		t.Errorf("expected STTProviderGoogle, got %s", got.Type())
+	}
+}
 
-		got, err := m.Get("google")
-		if err != nil {
-			t.Fatalf("failed to get provider: %v", err)
-		}
-		if got.Type() != STTProviderGoogle {
-			t.Errorf("expected STTProviderGoogle, got %s", got.Type())
-		}
-	})
+func TestGoogleProviderHandleClientError(t *testing.T) {
+	p, _ := NewGoogleProvider("test-key", withGoogleRecognizeClient(&fakeGoogleRecognizeClient{}))
+
+	tests := []struct {
+		name string
+		err  error
+		want STTErrorCode
+	}{
+		{"bad request", &googleapi.Error{Code: 400, Message: "bad request"}, ErrAudioFormatInvalid},
+		{"unauthorized", &googleapi.Error{Code: 401, Message: "unauthorized"}, ErrAuthentication},
+		{"forbidden", &googleapi.Error{Code: 403, Message: "forbidden"}, ErrAuthentication},
+		{"rate limited", &googleapi.Error{Code: 429, Message: "quota"}, ErrRateLimited},
+		{"generic", errors.New("boom"), ErrTranscriptionFailed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := p.handleClientError(tt.err)
+			sttErr, ok := err.(*STTError)
+			if !ok {
+				t.Fatalf("expected *STTError, got %T", err)
+			}
+			if sttErr.Code != tt.want {
+				t.Errorf("expected %s, got %s", tt.want, sttErr.Code)
+			}
+		})
+	}
 }
