@@ -102,7 +102,6 @@ func (c *Client) createScene(ctx context.Context, args []string) (string, error)
 	script := fmt.Sprintf(`
 import bpy
 scene = bpy.data.scenes.new(name="%s")
-bpy.context.window.scene = scene
 print("Created scene:", "%s")
 `, name, name)
 
