@@ -260,19 +260,10 @@ func (tm *TriggerManager) HandleEvent(ctx context.Context, event *WorkflowTrigge
 		event.Timestamp = time.Now().UTC()
 	}
 
-	matching := tm.matchingTriggerIDs(func(cfg TriggerConfig) bool {
-		if !cfg.Enabled || cfg.Type != TriggerEvent || cfg.EventSource != event.Source {
-			return false
-		}
-		if len(cfg.EventTypes) > 0 && !matchesEventType(cfg.EventTypes, event.Type) {
-			return false
-		}
-		if cfg.EventFilter != "" {
-			ok, err := EvalCondition(cfg.EventFilter, event.Payload)
-			return err == nil && ok
-		}
-		return true
-	})
+	matching, err := tm.matchingEventTriggerIDs(event)
+	if err != nil {
+		return nil, err
+	}
 	if len(matching) == 0 {
 		return nil, fmt.Errorf("no event trigger found for source=%s type=%s", event.Source, event.Type)
 	}
@@ -557,6 +548,48 @@ func (tm *TriggerManager) matchingTriggerIDs(match func(TriggerConfig) bool) []s
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func (tm *TriggerManager) matchingEventTriggerIDs(event *WorkflowTriggerEvent) ([]string, error) {
+	tm.mu.RLock()
+	configs := make([]TriggerConfig, 0, len(tm.triggers))
+	for _, cfg := range tm.triggers {
+		configs = append(configs, cloneTriggerConfig(cfg))
+	}
+	tm.mu.RUnlock()
+
+	ids := make([]string, 0)
+	var errs []error
+	for _, cfg := range configs {
+		matched, err := eventTriggerMatches(cfg, event)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if matched {
+			ids = append(ids, cfg.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids, errors.Join(errs...)
+}
+
+func eventTriggerMatches(cfg TriggerConfig, event *WorkflowTriggerEvent) (bool, error) {
+	if !cfg.Enabled || cfg.Type != TriggerEvent || cfg.EventSource != event.Source {
+		return false, nil
+	}
+	if len(cfg.EventTypes) > 0 && !matchesEventType(cfg.EventTypes, event.Type) {
+		return false, nil
+	}
+	if cfg.EventFilter == "" {
+		return true, nil
+	}
+
+	ok, err := EvalCondition(cfg.EventFilter, event.Payload)
+	if err != nil {
+		return false, fmt.Errorf("event_filter for trigger %q: %w", cfg.ID, err)
+	}
+	return ok, nil
 }
 
 func (tm *TriggerManager) filterTriggers(match func(TriggerConfig) bool) []*TriggerConfig {

@@ -462,6 +462,32 @@ func TestHandleEventFiltersByTypeAndExpression(t *testing.T) {
 	}
 }
 
+func TestHandleEventReturnsInvalidFilterError(t *testing.T) {
+	tm := NewTriggerManager(nil, nil)
+	if err := tm.AddTrigger(TriggerConfig{
+		ID:          "event-1",
+		GraphID:     "graph-1",
+		Type:        TriggerEvent,
+		EventSource: "github",
+		EventTypes:  []string{"pull_request"},
+		EventFilter: "$approved &&",
+	}); err != nil {
+		t.Fatalf("AddTrigger: %v", err)
+	}
+
+	_, err := tm.HandleEvent(context.Background(), &WorkflowTriggerEvent{
+		Source:  "github",
+		Type:    "pull_request",
+		Payload: map[string]any{"approved": true},
+	})
+	if err == nil {
+		t.Fatal("expected invalid event_filter error")
+	}
+	if !strings.Contains(err.Error(), `event_filter for trigger "event-1"`) {
+		t.Fatalf("expected trigger-specific filter error, got %v", err)
+	}
+}
+
 func TestGetRunsReturnsNewestFirstAndClones(t *testing.T) {
 	tm := NewTriggerManager(nil, nil)
 	if err := tm.AddTrigger(TriggerConfig{ID: "manual-1", GraphID: "graph-1"}); err != nil {
