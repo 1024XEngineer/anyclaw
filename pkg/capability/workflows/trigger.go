@@ -144,7 +144,7 @@ func (tm *TriggerManager) AddTrigger(cfg TriggerConfig) error {
 	return nil
 }
 
-// GetTrigger returns a defensive copy of a trigger by ID.
+// GetTrigger returns a defensive public copy of a trigger by ID.
 func (tm *TriggerManager) GetTrigger(id string) (*TriggerConfig, bool) {
 	if tm == nil {
 		return nil, false
@@ -155,11 +155,11 @@ func (tm *TriggerManager) GetTrigger(id string) (*TriggerConfig, bool) {
 	if !ok {
 		return nil, false
 	}
-	cloned := cloneTriggerConfig(cfg)
+	cloned := clonePublicTriggerConfig(cfg)
 	return &cloned, true
 }
 
-// ListTriggers returns trigger configurations, optionally filtered by graph ID.
+// ListTriggers returns public trigger configurations, optionally filtered by graph ID.
 func (tm *TriggerManager) ListTriggers(graphID string) []*TriggerConfig {
 	if tm == nil {
 		return nil
@@ -172,7 +172,7 @@ func (tm *TriggerManager) ListTriggers(graphID string) []*TriggerConfig {
 		if graphID != "" && cfg.GraphID != graphID {
 			continue
 		}
-		cloned := cloneTriggerConfig(cfg)
+		cloned := clonePublicTriggerConfig(cfg)
 		result = append(result, &cloned)
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -310,7 +310,7 @@ func (tm *TriggerManager) GetRuns(triggerID string, limit int) []*TriggerRun {
 	return result
 }
 
-// GetCronTriggers returns enabled cron triggers for scheduler integration.
+// GetCronTriggers returns enabled public cron triggers for scheduler integration.
 func (tm *TriggerManager) GetCronTriggers() []*TriggerConfig {
 	if tm == nil {
 		return nil
@@ -320,7 +320,7 @@ func (tm *TriggerManager) GetCronTriggers() []*TriggerConfig {
 	})
 }
 
-// GetWebhookTriggers returns enabled webhook triggers for HTTP registration.
+// GetWebhookTriggers returns enabled public webhook triggers for HTTP registration.
 func (tm *TriggerManager) GetWebhookTriggers() []*TriggerConfig {
 	if tm == nil {
 		return nil
@@ -568,7 +568,7 @@ func (tm *TriggerManager) filterTriggers(match func(TriggerConfig) bool) []*Trig
 		if !match(cfg) {
 			continue
 		}
-		cloned := cloneTriggerConfig(cfg)
+		cloned := clonePublicTriggerConfig(cfg)
 		result = append(result, &cloned)
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -656,6 +656,12 @@ func buildTriggerRun(
 func cloneTriggerConfig(cfg TriggerConfig) TriggerConfig {
 	cfg.EventTypes = append([]string(nil), cfg.EventTypes...)
 	cfg.DefaultInputs = cloneAnyMap(cfg.DefaultInputs)
+	return cfg
+}
+
+func clonePublicTriggerConfig(cfg TriggerConfig) TriggerConfig {
+	cfg = cloneTriggerConfig(cfg)
+	cfg.WebhookSecret = ""
 	return cfg
 }
 

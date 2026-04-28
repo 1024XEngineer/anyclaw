@@ -108,6 +108,46 @@ func TestAddGetListTriggersUseDefensiveCopies(t *testing.T) {
 	}
 }
 
+func TestReadPathsRedactWebhookSecrets(t *testing.T) {
+	tm := NewTriggerManager(nil, nil)
+	if err := tm.AddTrigger(TriggerConfig{
+		ID:            "webhook-1",
+		GraphID:       "graph-1",
+		Type:          TriggerWebhook,
+		WebhookPath:   "/hooks/private",
+		WebhookSecret: "secret-token",
+	}); err != nil {
+		t.Fatalf("AddTrigger: %v", err)
+	}
+	tm.SetHookFunc(func(context.Context, string, map[string]any) (*ExecutionContext, error) {
+		exec := NewExecutionContext("graph-1", nil)
+		exec.MarkExecutionCompleted(nil)
+		return exec, nil
+	})
+
+	cfg, ok := tm.GetTrigger("webhook-1")
+	if !ok {
+		t.Fatal("expected trigger to exist")
+	}
+	if cfg.WebhookSecret != "" {
+		t.Fatalf("GetTrigger leaked webhook secret %q", cfg.WebhookSecret)
+	}
+
+	listed := tm.ListTriggers("graph-1")
+	if len(listed) != 1 || listed[0].WebhookSecret != "" {
+		t.Fatalf("ListTriggers leaked webhook secret: %#v", listed)
+	}
+
+	webhooks := tm.GetWebhookTriggers()
+	if len(webhooks) != 1 || webhooks[0].WebhookSecret != "" {
+		t.Fatalf("GetWebhookTriggers leaked webhook secret: %#v", webhooks)
+	}
+
+	if _, err := tm.HandleWebhookWithSecret(context.Background(), "/hooks/private", "secret-token", nil); err != nil {
+		t.Fatalf("redaction should not break internal secret matching: %v", err)
+	}
+}
+
 func TestAddTriggerValidatesTypeSpecificFields(t *testing.T) {
 	tm := NewTriggerManager(nil, nil)
 
