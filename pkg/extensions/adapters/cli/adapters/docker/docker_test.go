@@ -2,10 +2,12 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -13,7 +15,8 @@ import (
 func TestMain(m *testing.M) {
 	if os.Getenv("ANYCLAW_DOCKER_ADAPTER_HELPER") == "1" {
 		if logPath := os.Getenv("ANYCLAW_DOCKER_ADAPTER_LOG"); logPath != "" {
-			_ = os.WriteFile(logPath, []byte(strings.Join(os.Args[1:], " ")), 0o644)
+			data, _ := json.Marshal(os.Args[1:])
+			_ = os.WriteFile(logPath, data, 0o644)
 		}
 		fmt.Print(strings.Join(os.Args[1:], " "))
 		os.Exit(0)
@@ -32,13 +35,40 @@ func TestStartUsesDockerStartSubcommand(t *testing.T) {
 		t.Fatalf("Run start returned error: %v", err)
 	}
 
+	if got, want := readDockerArgs(t, logPath), []string{"start", "existing-container"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("docker args = %q, want %q", got, want)
+	}
+}
+
+func TestExecForwardsCommandArgvWithoutShell(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "docker-args.txt")
+	t.Setenv("ANYCLAW_DOCKER_ADAPTER_HELPER", "1")
+	t.Setenv("ANYCLAW_DOCKER_ADAPTER_LOG", logPath)
+	client := NewClient(Config{DockerPath: fakeDockerPath(t)})
+
+	args := []string{"exec", "existing-container", "echo", "hello world", "$PATH;rm"}
+	if _, err := client.Run(context.Background(), args); err != nil {
+		t.Fatalf("Run exec returned error: %v", err)
+	}
+
+	want := []string{"exec", "existing-container", "echo", "hello world", "$PATH;rm"}
+	if got := readDockerArgs(t, logPath); !reflect.DeepEqual(got, want) {
+		t.Fatalf("docker args = %#v, want %#v", got, want)
+	}
+}
+
+func readDockerArgs(t *testing.T, logPath string) []string {
+	t.Helper()
+
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("read helper log: %v", err)
 	}
-	if got, want := string(data), "start existing-container"; got != want {
-		t.Fatalf("docker args = %q, want %q", got, want)
+	var args []string
+	if err := json.Unmarshal(data, &args); err != nil {
+		t.Fatalf("decode helper args: %v", err)
 	}
+	return args
 }
 
 func fakeDockerPath(t *testing.T) string {

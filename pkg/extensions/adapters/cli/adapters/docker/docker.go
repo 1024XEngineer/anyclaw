@@ -245,10 +245,8 @@ func (c *Client) exec(ctx context.Context, args []string) (string, error) {
 		return "", fmt.Errorf("usage: docker exec <container> <command>")
 	}
 
-	container := args[0]
-	cmd := strings.Join(args[1:], " ")
-
-	return c.runDocker(ctx, []string{"exec", container, "sh", "-c", cmd})
+	dockerArgs := append([]string{"exec"}, args...)
+	return c.runDocker(ctx, dockerArgs)
 }
 
 func (c *Client) pull(ctx context.Context, args []string) (string, error) {
