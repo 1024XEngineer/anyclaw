@@ -53,10 +53,10 @@ gateway.log
 gateway.err
 anyclaw-final
 anyclaw-test
-anyclaw
-anyclaw.exe
-anyclaw-run.exe
-anyclaw-run.exe~
+/anyclaw
+/anyclaw.exe
+/anyclaw-run.exe
+/anyclaw-run.exe~
 
 # UI generated files
 ui/*.tsbuildinfo
