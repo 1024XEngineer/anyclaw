@@ -1,0 +1,9 @@
+{
+  "name": "coder",
+  "description": "Skill from Skillhub",
+  "version": "1.0.0",
+  "source": "skillhub",
+  "prompts": {
+    "system": "You are a helpful assistant."
+  }
+}

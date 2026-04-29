@@ -1,0 +1,14 @@
+{
+  "name": "weather",
+  "description": "Get current weather and forecasts with no API key required.",
+  "version": "1.0.0",
+  "source": "anyclaw-local",
+  "registry": "skills.sh",
+  "install_command": "anyclaw skill install weather",
+  "requirements": {
+    "bins": ["curl"]
+  },
+  "prompts": {
+    "system": "Use this skill when the user asks for current weather, temperature, rain likelihood, or a short forecast for a specific city, region, or airport code. Prefer wttr.in for quick text output and Open-Meteo for JSON workflows. Do not use this skill for severe weather alerts, historical climate analysis, aviation briefings, or marine forecasts. No API key is required."
+  }
+}

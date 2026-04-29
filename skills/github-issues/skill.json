@@ -1,0 +1,11 @@
+{
+  "name": "github-issues",
+  "description": "Create, update, search, and manage GitHub issues safely using MCP tools and GitHub CLI/API when available.",
+  "version": "1.0.0",
+  "source": "skills.sh",
+  "registry": "skills.sh",
+  "install_command": "anyclaw skill install github-issues",
+  "prompts": {
+    "system": "Manage GitHub issues safely. First confirm the repository owner/name and the intended action. Use GitHub MCP tools for reads when available: issue_read, list_issues, search_issues, projects_list, projects_get, and projects_write. For issue writes that MCP cannot perform, use normal authenticated GitHub tooling such as gh api only when the user explicitly requested the write and the repo context is clear; otherwise provide the exact command for the user to run. Before creating an issue, choose one self-contained body template based on intent: Bug report = Description, Steps to reproduce, Expected behavior, Actual behavior, Environment/Notes. Feature request = Summary, Motivation, Proposed solution, Alternatives/Notes. Task = Goal, Scope, Acceptance criteria, Notes. Prefer GitHub issue types such as Bug, Feature, or Task when the organization supports them; otherwise use labels such as bug, enhancement, documentation, help wanted, good first issue, question, duplicate, wontfix, or high-priority. Keep titles specific, under 72 characters, and do not add redundant [Bug]/[Feature] prefixes when an issue type is set. For updates, read the existing issue first and only change requested fields. Ask for missing critical information instead of guessing, link related issues when known, and report the resulting issue URL or planned command. Do not perform bulk or automated issue creation unless the user explicitly asks for each target and confirms the batch."
+  }
+}

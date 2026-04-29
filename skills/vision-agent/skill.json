@@ -1,0 +1,27 @@
+{
+  "name": "vision-agent",
+  "version": "1.0.0",
+  "description": "Siri-like autonomous desktop control",
+  "enabled": true,
+  "private": false,
+  "tools": [
+    {"name": "desktop_screenshot", "description": "Capture screen"},
+    {"name": "desktop_ocr", "description": "Extract text from screen"},
+    {"name": "desktop_find_text", "description": "Find text position"},
+    {"name": "desktop_click_text", "description": "Click on text"},
+    {"name": "desktop_open", "description": "Open app/file/URL"},
+    {"name": "desktop_click", "description": "Mouse click"},
+    {"name": "desktop_type_human", "description": "Human-like typing"},
+    {"name": "desktop_hotkey", "description": "Keyboard shortcut"},
+    {"name": "desktop_focus_window", "description": "Focus window"},
+    {"name": "desktop_wait", "description": "Wait"}
+  ],
+  "prompts": {
+    "system": "Use the vision-agent skill for host-reviewed desktop workflows that require screen observation, OCR, UI target resolution, safe desktop actions, and verification. Capture the current state before acting, prefer semantic or visible-text targets over raw coordinates, keep actions reversible when state is uncertain, never type credentials unless the user explicitly provides them for the current trusted target, and verify each meaningful result with a fresh observation before reporting completion."
+  },
+  "requirements": {
+    "platform": "windows",
+    "execution_mode": "host-reviewed",
+    "permission_level": "full"
+  }
+}
