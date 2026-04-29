@@ -2,6 +2,12 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
 )
@@ -12,8 +18,583 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 	RegisterQMDTools(r, opts)
 	RegisterWebTools(r, opts)
 	RegisterDesktopTools(r, opts)
+	RegisterOpenClawCompatTools(r, opts)
 	RegisterCLIHubTools(r, opts)
 	RegisterClawBridgeTools(r, opts)
+}
+
+func RegisterOpenClawCompatTools(r *Registry, opts BuiltinOptions) {
+	registerAlias := func(alias string, target string, desc string, schema map[string]any) {
+		r.RegisterTool(alias, desc, schema, func(ctx context.Context, input map[string]any) (string, error) {
+			return r.Call(ctx, target, input)
+		})
+	}
+
+	registerAlias(
+		"read",
+		"read_file",
+		"OpenClaw-compatible alias for reading file contents",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]string{"type": "string", "description": "Path to the file"},
+			},
+			"required": []string{"path"},
+		},
+	)
+	registerAlias(
+		"write",
+		"write_file",
+		"OpenClaw-compatible alias for creating or overwriting files",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":    map[string]string{"type": "string", "description": "Path to the file"},
+				"content": map[string]string{"type": "string", "description": "Content to write"},
+			},
+			"required": []string{"path", "content"},
+		},
+	)
+	registerAlias(
+		"exec",
+		"run_command",
+		"OpenClaw-compatible alias for executing a shell command",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command": map[string]string{"type": "string", "description": "Shell command to execute"},
+				"cwd":     map[string]string{"type": "string", "description": "Optional working directory override"},
+				"shell":   map[string]string{"type": "string", "description": "Optional shell: auto, cmd, powershell, pwsh, sh, or bash"},
+			},
+			"required": []string{"command"},
+		},
+	)
+	registerAlias(
+		"web_fetch",
+		"fetch_url",
+		"OpenClaw-compatible alias for fetching web content",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]string{"type": "string", "description": "URL to fetch"},
+			},
+			"required": []string{"url"},
+		},
+	)
+	registerAlias(
+		"image",
+		"image_analyze",
+		"OpenClaw-compatible alias for image understanding",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":   map[string]string{"type": "string", "description": "Local image path"},
+				"url":    map[string]string{"type": "string", "description": "Remote image URL"},
+				"prompt": map[string]string{"type": "string", "description": "Question or instruction for the image"},
+			},
+		},
+	)
+	r.RegisterTool(
+		"process",
+		"OpenClaw-compatible process command alias. Accepts command/cmd plus optional cwd and shell.",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command": map[string]string{"type": "string", "description": "Shell command to execute"},
+				"cmd":     map[string]string{"type": "string", "description": "Shell command to execute"},
+				"cwd":     map[string]string{"type": "string", "description": "Optional working directory override"},
+				"shell":   map[string]string{"type": "string", "description": "Optional shell"},
+			},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			if _, ok := input["command"]; !ok {
+				if cmd, ok := input["cmd"]; ok {
+					input["command"] = cmd
+				}
+			}
+			return r.Call(ctx, "run_command", input)
+		},
+	)
+	r.RegisterTool(
+		"edit",
+		"OpenClaw-compatible exact text replacement for a file",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":        map[string]string{"type": "string", "description": "Path to the file"},
+				"old_text":    map[string]string{"type": "string", "description": "Text to replace"},
+				"new_text":    map[string]string{"type": "string", "description": "Replacement text"},
+				"oldString":   map[string]string{"type": "string", "description": "Text to replace"},
+				"newString":   map[string]string{"type": "string", "description": "Replacement text"},
+				"replace_all": map[string]string{"type": "boolean", "description": "Replace every occurrence"},
+			},
+			"required": []string{"path"},
+		},
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "edit", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return editFileCompatTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	)
+	r.Register(&Tool{
+		Name:        "apply_patch",
+		Description: "OpenClaw-compatible patch application using the *** Begin Patch / *** End Patch format",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"input": map[string]string{"type": "string", "description": "Patch content using the apply_patch format"},
+				"patch": map[string]string{"type": "string", "description": "Alias for input"},
+			},
+			"required": []string{"input"},
+		},
+		Category:    ToolCategoryFile,
+		CachePolicy: ToolCachePolicyNever,
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "apply_patch", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return applyPatchCompatTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	})
+	r.Register(&Tool{
+		Name:        "update_plan",
+		Description: "OpenClaw-compatible structured planning update. Tracks ordered steps in the current tool result without writing files.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"explanation": map[string]string{"type": "string", "description": "Optional short note explaining what changed"},
+				"plan": map[string]any{
+					"type":        "array",
+					"description": "Ordered plan steps; at most one may be in_progress",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"step":   map[string]string{"type": "string", "description": "Short plan step"},
+							"status": map[string]string{"type": "string", "description": "pending, in_progress, or completed"},
+						},
+						"required": []string{"step", "status"},
+					},
+				},
+			},
+			"required": []string{"plan"},
+		},
+		Category:    ToolCategoryCustom,
+		CachePolicy: ToolCachePolicyNever,
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "update_plan", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return updatePlanCompatTool(ctx, input)
+			})(ctx, input)
+		},
+	})
+	r.Register(&Tool{
+		Name:        "session_status",
+		Description: "OpenClaw-compatible current session status, including time, caller, channel, permissions, and sandbox mode.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"sessionKey": map[string]string{"type": "string", "description": "Optional session key to echo in the status request"},
+			},
+		},
+		Category:    ToolCategoryCustom,
+		CachePolicy: ToolCachePolicyNever,
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "session_status", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return sessionStatusCompatTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	})
+}
+
+func editFileCompatTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	path, ok := input["path"].(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	oldText := firstStringInput(input, "old_text", "oldString", "old_string")
+	newText := firstStringInput(input, "new_text", "newString", "new_string")
+	if oldText == "" {
+		return "", fmt.Errorf("old_text is required")
+	}
+
+	content, err := ReadFileToolWithPolicy(ctx, map[string]any{"path": path}, opts.WorkingDir, opts)
+	if err != nil {
+		return "", err
+	}
+	if !strings.Contains(content, oldText) {
+		return "", fmt.Errorf("old_text not found in %s", path)
+	}
+
+	replaceAll, _ := input["replace_all"].(bool)
+	count := 1
+	if replaceAll {
+		count = -1
+	}
+	updated := strings.Replace(content, oldText, newText, count)
+	if updated == content {
+		return "", fmt.Errorf("edit produced no changes")
+	}
+	if _, err := WriteFileToolWithPolicy(ctx, map[string]any{"path": path, "content": updated}, opts.WorkingDir, opts); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("edited %s", path), nil
+}
+
+type applyPatchCompatSummary struct {
+	Added    []string `json:"added"`
+	Modified []string `json:"modified"`
+	Deleted  []string `json:"deleted"`
+}
+
+type applyPatchUpdateChunk struct {
+	oldLines []string
+	newLines []string
+}
+
+func applyPatchCompatTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	patch := firstStringInput(input, "input", "patch")
+	if strings.TrimSpace(patch) == "" {
+		if strings.TrimSpace(firstStringInput(input, "path")) != "" {
+			result, err := editFileCompatTool(ctx, input, opts)
+			if err != nil {
+				return "", err
+			}
+			return marshalCompactJSON(map[string]any{"status": "updated", "text": result})
+		}
+		return "", fmt.Errorf("input is required")
+	}
+
+	summary, err := applyPatchText(ctx, patch, opts)
+	if err != nil {
+		return "", err
+	}
+	if len(summary.Added)+len(summary.Modified)+len(summary.Deleted) == 0 {
+		return "", fmt.Errorf("no files were modified")
+	}
+	return marshalCompactJSON(map[string]any{
+		"status":  "applied",
+		"summary": summary,
+	})
+}
+
+func applyPatchText(ctx context.Context, patch string, opts BuiltinOptions) (applyPatchCompatSummary, error) {
+	lines := strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n")
+	i := skipBlankPatchLines(lines, 0)
+	if i >= len(lines) || strings.TrimSpace(lines[i]) != "*** Begin Patch" {
+		return applyPatchCompatSummary{}, fmt.Errorf("patch must start with *** Begin Patch")
+	}
+	i++
+
+	summary := applyPatchCompatSummary{}
+	for i < len(lines) {
+		i = skipBlankPatchLines(lines, i)
+		if i >= len(lines) {
+			break
+		}
+		line := strings.TrimSpace(lines[i])
+		if line == "*** End Patch" {
+			return summary, nil
+		}
+		switch {
+		case strings.HasPrefix(line, "*** Add File: "):
+			path := cleanPatchPath(strings.TrimPrefix(line, "*** Add File: "))
+			i++
+			contentLines := []string{}
+			for i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), "*** ") {
+				if !strings.HasPrefix(lines[i], "+") {
+					return applyPatchCompatSummary{}, fmt.Errorf("add file line for %s must start with +", path)
+				}
+				contentLines = append(contentLines, strings.TrimPrefix(lines[i], "+"))
+				i++
+			}
+			if err := writePatchFile(ctx, path, patchLinesToText(contentLines, true), opts); err != nil {
+				return applyPatchCompatSummary{}, err
+			}
+			summary.Added = appendPatchSummaryPath(summary.Added, path)
+		case strings.HasPrefix(line, "*** Delete File: "):
+			path := cleanPatchPath(strings.TrimPrefix(line, "*** Delete File: "))
+			if err := removePatchFile(path, opts); err != nil {
+				return applyPatchCompatSummary{}, err
+			}
+			summary.Deleted = appendPatchSummaryPath(summary.Deleted, path)
+			i++
+		case strings.HasPrefix(line, "*** Update File: "):
+			path := cleanPatchPath(strings.TrimPrefix(line, "*** Update File: "))
+			i++
+			movePath := ""
+			if i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "*** Move to: ") {
+				movePath = cleanPatchPath(strings.TrimPrefix(strings.TrimSpace(lines[i]), "*** Move to: "))
+				i++
+			}
+			chunks := []applyPatchUpdateChunk{}
+			current := applyPatchUpdateChunk{}
+			seenChunkLine := false
+			flushChunk := func() {
+				if len(current.oldLines)+len(current.newLines) == 0 {
+					return
+				}
+				chunks = append(chunks, current)
+				current = applyPatchUpdateChunk{}
+				seenChunkLine = false
+			}
+			for i < len(lines) {
+				trimmed := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(trimmed, "*** ") && trimmed != "*** End of File" {
+					break
+				}
+				switch {
+				case trimmed == "@@" || strings.HasPrefix(trimmed, "@@ "):
+					flushChunk()
+				case trimmed == "*** End of File":
+				case strings.HasPrefix(lines[i], " "):
+					text := strings.TrimPrefix(lines[i], " ")
+					current.oldLines = append(current.oldLines, text)
+					current.newLines = append(current.newLines, text)
+					seenChunkLine = true
+				case strings.HasPrefix(lines[i], "-"):
+					current.oldLines = append(current.oldLines, strings.TrimPrefix(lines[i], "-"))
+					seenChunkLine = true
+				case strings.HasPrefix(lines[i], "+"):
+					current.newLines = append(current.newLines, strings.TrimPrefix(lines[i], "+"))
+					seenChunkLine = true
+				case strings.TrimSpace(lines[i]) == "" && !seenChunkLine:
+				default:
+					return applyPatchCompatSummary{}, fmt.Errorf("unsupported patch line for %s: %s", path, lines[i])
+				}
+				i++
+			}
+			flushChunk()
+			if len(chunks) == 0 {
+				return applyPatchCompatSummary{}, fmt.Errorf("update file %s has no changes", path)
+			}
+			updated, err := applyPatchUpdate(ctx, path, chunks, opts)
+			if err != nil {
+				return applyPatchCompatSummary{}, err
+			}
+			targetPath := path
+			if strings.TrimSpace(movePath) != "" {
+				if err := writePatchFile(ctx, movePath, updated, opts); err != nil {
+					return applyPatchCompatSummary{}, err
+				}
+				if err := removePatchFile(path, opts); err != nil {
+					return applyPatchCompatSummary{}, err
+				}
+				targetPath = movePath
+			} else if err := writePatchFile(ctx, path, updated, opts); err != nil {
+				return applyPatchCompatSummary{}, err
+			}
+			summary.Modified = appendPatchSummaryPath(summary.Modified, targetPath)
+		default:
+			return applyPatchCompatSummary{}, fmt.Errorf("unsupported patch hunk: %s", line)
+		}
+	}
+	return applyPatchCompatSummary{}, fmt.Errorf("patch must end with *** End Patch")
+}
+
+func applyPatchUpdate(ctx context.Context, path string, chunks []applyPatchUpdateChunk, opts BuiltinOptions) (string, error) {
+	content, err := ReadFileToolWithPolicy(ctx, map[string]any{"path": path}, opts.WorkingDir, opts)
+	if err != nil {
+		return "", err
+	}
+	updated := content
+	for _, chunk := range chunks {
+		var changed bool
+		updated, changed = replacePatchBlock(updated, chunk.oldLines, chunk.newLines)
+		if !changed {
+			return "", fmt.Errorf("patch context not found in %s", path)
+		}
+	}
+	if updated == content {
+		return "", fmt.Errorf("patch produced no changes")
+	}
+	return updated, nil
+}
+
+func replacePatchBlock(content string, oldLines []string, newLines []string) (string, bool) {
+	if len(oldLines) == 0 {
+		return content + patchLinesToText(newLines, true), true
+	}
+	oldWithNewline := patchLinesToText(oldLines, true)
+	if strings.Contains(content, oldWithNewline) {
+		return strings.Replace(content, oldWithNewline, patchLinesToText(newLines, true), 1), true
+	}
+	oldWithoutNewline := patchLinesToText(oldLines, false)
+	if strings.Contains(content, oldWithoutNewline) {
+		return strings.Replace(content, oldWithoutNewline, patchLinesToText(newLines, false), 1), true
+	}
+	return content, false
+}
+
+func patchLinesToText(lines []string, trailingNewline bool) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	text := strings.Join(lines, "\n")
+	if trailingNewline {
+		text += "\n"
+	}
+	return text
+}
+
+func writePatchFile(ctx context.Context, path string, content string, opts BuiltinOptions) error {
+	_, err := WriteFileToolWithPolicy(ctx, map[string]any{"path": path, "content": content}, opts.WorkingDir, opts)
+	return err
+}
+
+func removePatchFile(path string, opts BuiltinOptions) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("path is required")
+	}
+	resolved := resolvePath(path, opts.WorkingDir)
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckWritePath(resolved); err != nil {
+			return err
+		}
+	} else if err := validateProtectedPath(resolved, opts.ProtectedPaths); err != nil {
+		return err
+	}
+	if err := ensureWriteAllowed(resolved, opts.WorkingDir, opts.PermissionLevel); err != nil {
+		return err
+	}
+	if err := os.Remove(resolved); err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+	return nil
+}
+
+func appendPatchSummaryPath(paths []string, path string) []string {
+	path = cleanPatchPath(path)
+	for _, existing := range paths {
+		if existing == path {
+			return paths
+		}
+	}
+	return append(paths, path)
+}
+
+func cleanPatchPath(path string) string {
+	path = strings.TrimSpace(path)
+	path = strings.Trim(path, `"`)
+	path = filepath.Clean(path)
+	if path == "." {
+		return ""
+	}
+	return path
+}
+
+func skipBlankPatchLines(lines []string, index int) int {
+	for index < len(lines) && strings.TrimSpace(lines[index]) == "" {
+		index++
+	}
+	return index
+}
+
+type updatePlanCompatStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+}
+
+func updatePlanCompatTool(ctx context.Context, input map[string]any) (string, error) {
+	_ = ctx
+	steps, err := readUpdatePlanSteps(input)
+	if err != nil {
+		return "", err
+	}
+	output := map[string]any{
+		"status": "updated",
+		"plan":   steps,
+	}
+	if explanation := firstStringInput(input, "explanation"); strings.TrimSpace(explanation) != "" {
+		output["explanation"] = strings.TrimSpace(explanation)
+	}
+	return marshalCompactJSON(output)
+}
+
+func readUpdatePlanSteps(input map[string]any) ([]updatePlanCompatStep, error) {
+	raw, ok := input["plan"]
+	if !ok {
+		raw, ok = input["steps"]
+	}
+	if !ok {
+		raw, ok = input["items"]
+	}
+	if !ok {
+		return nil, fmt.Errorf("plan required")
+	}
+
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 {
+		return nil, fmt.Errorf("plan required")
+	}
+
+	steps := make([]updatePlanCompatStep, 0, len(items))
+	inProgress := 0
+	for i, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("plan[%d] must be an object", i)
+		}
+		step := strings.TrimSpace(firstStringInput(entry, "step"))
+		if step == "" {
+			return nil, fmt.Errorf("plan[%d].step is required", i)
+		}
+		status := strings.TrimSpace(firstStringInput(entry, "status"))
+		switch status {
+		case "pending", "in_progress", "completed":
+		default:
+			return nil, fmt.Errorf("plan[%d].status must be one of pending, in_progress, completed", i)
+		}
+		if status == "in_progress" {
+			inProgress++
+		}
+		steps = append(steps, updatePlanCompatStep{Step: step, Status: status})
+	}
+	if inProgress > 1 {
+		return nil, fmt.Errorf("plan can contain at most one in_progress step")
+	}
+	return steps, nil
+}
+
+func sessionStatusCompatTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	now := time.Now()
+	scope := sandboxScopeFromContext(ctx)
+	caller := ToolCallerFromContext(ctx)
+	output := map[string]any{
+		"status":           "ok",
+		"current_time":     now.Format(time.RFC3339),
+		"current_date":     now.Format("2006-01-02"),
+		"weekday":          now.Weekday().String(),
+		"timezone":         now.Location().String(),
+		"session_id":       scope.SessionID,
+		"channel":          scope.Channel,
+		"browser_session":  browserSessionFromContext(ctx),
+		"caller_role":      string(caller.Role),
+		"agent_name":       caller.AgentName,
+		"execution_id":     caller.ExecutionID,
+		"working_dir":      opts.WorkingDir,
+		"permission_level": opts.PermissionLevel,
+		"execution_mode":   opts.ExecutionMode,
+		"sandbox_enabled":  opts.Sandbox != nil && opts.Sandbox.Enabled(),
+	}
+	if requested := firstStringInput(input, "sessionKey", "session_key"); strings.TrimSpace(requested) != "" {
+		output["requested_session_key"] = strings.TrimSpace(requested)
+	}
+	return marshalCompactJSON(output)
+}
+
+func marshalCompactJSON(value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal result: %w", err)
+	}
+	return string(data), nil
+}
+
+func firstStringInput(input map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := input[key].(string); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 func RegisterFileTools(r *Registry, opts BuiltinOptions) {

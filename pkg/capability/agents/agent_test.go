@@ -317,6 +317,27 @@ func TestSelectToolInfosHandlesChineseCreateFolderRequest(t *testing.T) {
 	}
 }
 
+func TestSelectToolInfosExposesOpenClawCompatibleCoreTools(t *testing.T) {
+	registry := tools.NewRegistry()
+	for _, name := range []string{"read", "write", "edit", "apply_patch", "exec", "process", "web_fetch", "image", "update_plan", "session_status"} {
+		registry.RegisterTool(name, "OpenClaw-compatible core tool", map[string]any{}, nil)
+	}
+
+	ag := New(Config{Tools: registry})
+
+	actionable := ag.selectToolInfos("read, edit, execute a command, fetch a URL, and analyze an image")
+	names := make([]string, 0, len(actionable))
+	for _, tool := range actionable {
+		names = append(names, tool.Name)
+	}
+	got := strings.Join(names, ",")
+	for _, name := range []string{"read", "write", "edit", "apply_patch", "exec", "process", "web_fetch", "image", "update_plan", "session_status"} {
+		if !strings.Contains(got, name) {
+			t.Fatalf("expected OpenClaw-compatible tool %q to be exposed, got %q", name, got)
+		}
+	}
+}
+
 func TestAgentRunUsesToolsForNaturalChineseCreateFolderRequest(t *testing.T) {
 	mem := memory.NewFileMemory(t.TempDir())
 	if err := mem.Init(); err != nil {
@@ -782,6 +803,111 @@ func TestAgentRunAddsObservationAndVerificationPromptAfterToolResults(t *testing
 	}
 	if !foundFollowup {
 		t.Fatalf("expected observation/verification follow-up prompt, got %#v", llmStub.messages[1])
+	}
+}
+
+func TestAgentRunStreamExecutesToolLoop(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+	registry := tools.NewRegistry()
+	called := 0
+	registry.RegisterTool("run_command", "Run a shell command", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		called++
+		return "stream build succeeded", nil
+	})
+
+	llmStub := &stubAgentLLM{responses: []*llm.Response{
+		{
+			ToolCalls: []llm.ToolCall{
+				{
+					ID:   "tool-stream-1",
+					Type: "function",
+					Function: llm.FunctionCall{
+						Name:      "run_command",
+						Arguments: `{"command":"go test ./..."}`,
+					},
+				},
+			},
+		},
+		{Content: "stream final response"},
+	}}
+
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		Personality: "Operate like an execution-focused local app agent.",
+		LLM:         llmStub,
+		Memory:      mem,
+		Skills:      skills.NewSkillsManager(""),
+		Tools:       registry,
+	})
+
+	var streamed strings.Builder
+	err := ag.RunStream(context.Background(), "run tests in stream mode", func(chunk string) {
+		streamed.WriteString(chunk)
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("expected stream path to execute one tool call, got %d", called)
+	}
+	if streamed.String() != "stream final response" {
+		t.Fatalf("unexpected streamed response %q", streamed.String())
+	}
+}
+
+func TestAgentRunBlocksRepeatedIdenticalToolLoop(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+	registry := tools.NewRegistry()
+	called := 0
+	registry.RegisterTool("run_command", "Run a shell command", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		called++
+		return "same result", nil
+	})
+
+	repeatedCall := &llm.Response{
+		ToolCalls: []llm.ToolCall{
+			{
+				ID:   "tool-loop",
+				Type: "function",
+				Function: llm.FunctionCall{
+					Name:      "run_command",
+					Arguments: `{"command":"echo stuck"}`,
+				},
+			},
+		},
+	}
+	llmStub := &stubAgentLLM{responses: []*llm.Response{
+		repeatedCall,
+		repeatedCall,
+		repeatedCall,
+		repeatedCall,
+		{Content: "should not reach final"},
+	}}
+
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		Personality: "Operate like an execution-focused local app agent.",
+		LLM:         llmStub,
+		Memory:      mem,
+		Skills:      skills.NewSkillsManager(""),
+		Tools:       registry,
+	})
+
+	_, err := ag.Run(context.Background(), "repeat until stuck")
+	if err == nil || !strings.Contains(err.Error(), "tool loop detected") {
+		t.Fatalf("expected tool loop detected error, got %v", err)
+	}
+	activities := ag.GetLastToolActivities()
+	if len(activities) != 3 {
+		t.Fatalf("expected loop detector to block before fourth identical tool attempt, got %d activities and %d handler calls", len(activities), called)
 	}
 }
 

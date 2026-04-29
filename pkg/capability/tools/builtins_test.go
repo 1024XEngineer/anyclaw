@@ -38,6 +38,145 @@ func TestReviewCommandExecutionRequiresSandboxByDefault(t *testing.T) {
 	}
 }
 
+func TestRegisterBuiltinsAddsOpenClawCompatibleAliases(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "notes.txt")
+	if err := os.WriteFile(target, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	registry := NewRegistry()
+	RegisterBuiltins(registry, BuiltinOptions{
+		WorkingDir:      workspace,
+		PermissionLevel: "full",
+		ExecutionMode:   "host-reviewed",
+		Policy: NewPolicyEngine(PolicyOptions{
+			WorkingDir:      workspace,
+			PermissionLevel: "full",
+		}),
+	})
+
+	readResult, err := registry.Call(context.Background(), "read", map[string]any{"path": target})
+	if err != nil {
+		t.Fatalf("read alias: %v", err)
+	}
+	if readResult != "hello" {
+		t.Fatalf("read alias returned %q", readResult)
+	}
+
+	writeTarget := filepath.Join(workspace, "out.txt")
+	if _, err := registry.Call(context.Background(), "write", map[string]any{"path": writeTarget, "content": "openclaw"}); err != nil {
+		t.Fatalf("write alias: %v", err)
+	}
+	data, err := os.ReadFile(writeTarget)
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	if string(data) != "openclaw" {
+		t.Fatalf("write alias wrote %q", data)
+	}
+}
+
+func TestApplyPatchCompatToolAppliesUpdatePatch(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "notes.txt")
+	if err := os.WriteFile(target, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	registry := NewRegistry()
+	RegisterBuiltins(registry, BuiltinOptions{
+		WorkingDir:      workspace,
+		PermissionLevel: "full",
+		ExecutionMode:   "host-reviewed",
+		Policy: NewPolicyEngine(PolicyOptions{
+			WorkingDir:      workspace,
+			PermissionLevel: "full",
+		}),
+	})
+
+	result, err := registry.Call(context.Background(), "apply_patch", map[string]any{
+		"input": "*** Begin Patch\n*** Update File: notes.txt\n@@\n alpha\n-beta\n+BETA\n gamma\n*** End Patch\n",
+	})
+	if err != nil {
+		t.Fatalf("apply_patch: %v", err)
+	}
+	if !strings.Contains(result, "modified") || !strings.Contains(result, "notes.txt") {
+		t.Fatalf("expected patch summary, got %q", result)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read patched file: %v", err)
+	}
+	if string(data) != "alpha\nBETA\ngamma\n" {
+		t.Fatalf("unexpected patched content %q", data)
+	}
+}
+
+func TestUpdatePlanCompatToolValidatesAndReturnsPlan(t *testing.T) {
+	registry := NewRegistry()
+	RegisterBuiltins(registry, BuiltinOptions{})
+
+	result, err := registry.Call(context.Background(), "update_plan", map[string]any{
+		"explanation": "continue with verification",
+		"plan": []any{
+			map[string]any{"step": "inspect", "status": "completed"},
+			map[string]any{"step": "patch", "status": "in_progress"},
+			map[string]any{"step": "test", "status": "pending"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("update_plan: %v", err)
+	}
+	if !strings.Contains(result, `"status":"updated"`) || !strings.Contains(result, `"in_progress"`) || !strings.Contains(result, "continue with verification") {
+		t.Fatalf("expected update_plan JSON summary, got %q", result)
+	}
+
+	_, err = registry.Call(context.Background(), "update_plan", map[string]any{
+		"plan": []any{
+			map[string]any{"step": "one", "status": "in_progress"},
+			map[string]any{"step": "two", "status": "in_progress"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "at most one in_progress") {
+		t.Fatalf("expected in_progress validation error, got %v", err)
+	}
+}
+
+func TestSessionStatusCompatToolReturnsExecutionContext(t *testing.T) {
+	workspace := t.TempDir()
+	registry := NewRegistry()
+	RegisterBuiltins(registry, BuiltinOptions{
+		WorkingDir:      workspace,
+		PermissionLevel: "full",
+		ExecutionMode:   "host-reviewed",
+	})
+
+	ctx := WithToolCaller(context.Background(), ToolCaller{
+		Role:      ToolCallerRoleMainAgent,
+		AgentName: "main",
+	})
+	ctx = WithSandboxScope(ctx, SandboxScope{SessionID: "sess-1", Channel: "web"})
+
+	result, err := registry.Call(ctx, "session_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("session_status: %v", err)
+	}
+	for _, want := range []string{
+		`"session_id":"sess-1"`,
+		`"channel":"web"`,
+		`"caller_role":"main_agent"`,
+		`"agent_name":"main"`,
+		`"permission_level":"full"`,
+		`"execution_mode":"host-reviewed"`,
+	} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("expected session_status to contain %s, got %q", want, result)
+		}
+	}
+}
+
 func TestWriteFileToolWithPolicyBlocksProtectedPath(t *testing.T) {
 	tempDir := t.TempDir()
 	protected := filepath.Join(tempDir, "private")

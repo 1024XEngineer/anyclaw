@@ -194,12 +194,16 @@ func (a *Agent) RunStream(ctx context.Context, userInput string, onChunk func(st
 	toolDefs := buildToolDefinitionsFromInfos(selectedTools)
 
 	a.heartbeatContextExecution(exec)
-	err = a.llm.StreamChat(ctx, messages, toolDefs, func(chunk string) {
-		onChunk(chunk)
-	})
+	response, err := a.chatWithTools(ctx, messages, toolDefs)
 	if err != nil {
 		return err
 	}
+	if onChunk != nil {
+		onChunk(response)
+	}
+	a.appendHistoryMessage(ctx, "assistant", response)
+	a.memory.Add(memory.MemoryEntry{Type: "conversation", Role: "user", Content: userInput})
+	a.memory.Add(memory.MemoryEntry{Type: "conversation", Role: "assistant", Content: response})
 
 	return nil
 }
@@ -225,6 +229,7 @@ func (a *Agent) handleBootstrapRitual(ctx context.Context, userInput string) (st
 }
 
 func (a *Agent) chatWithTools(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (string, error) {
+	loopDetector := NewToolLoopDetector(3)
 	for toolCalls := 0; ; toolCalls++ {
 		resp, err := a.llm.Chat(ctx, messages, toolDefs)
 		if err != nil {
@@ -259,6 +264,9 @@ func (a *Agent) chatWithTools(ctx context.Context, messages []llm.Message, toolD
 		assistantCallMsg := llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: make([]llm.ToolCall, 0, len(calls))}
 		approvalHook := toolApprovalHookFromContext(ctx)
 		for _, tc := range calls {
+			if loopDetector.Check("agent-turn", tc.Name, toolCallArgsHash(tc.Args)) {
+				return "", fmt.Errorf("tool loop detected: %s repeated with identical arguments", tc.Name)
+			}
 			currentToolCall := llm.ToolCall{ID: tc.ID, Type: "function", Function: llm.FunctionCall{Name: tc.Name, Arguments: mustJSON(tc.Args)}}
 			if approvalHook != nil {
 				if err := approvalHook(ctx, tc); err != nil {
@@ -290,6 +298,17 @@ func (a *Agent) chatWithTools(ctx context.Context, messages []llm.Message, toolD
 		messages = append(messages, toolMessages...)
 		messages = append(messages, llm.Message{Role: "user", Content: a.toolContinuationPrompt(results)})
 	}
+}
+
+func toolCallArgsHash(args map[string]any) string {
+	if len(args) == 0 {
+		return "{}"
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		return fmt.Sprintf("%v", args)
+	}
+	return string(data)
 }
 
 type ToolCall struct {
@@ -680,10 +699,20 @@ func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
 		"list_directory":           {},
 		"search_files":             {},
 		"run_command":              {},
+		"read":                     {},
+		"write":                    {},
+		"edit":                     {},
+		"apply_patch":              {},
+		"exec":                     {},
+		"process":                  {},
 		"memory_search":            {},
 		"memory_get":               {},
 		"web_search":               {},
 		"fetch_url":                {},
+		"web_fetch":                {},
+		"image":                    {},
+		"update_plan":              {},
+		"session_status":           {},
 		"clihub_catalog":           {},
 		"clihub_exec":              {},
 		"intent_route":             {},

@@ -317,6 +317,15 @@ func TestRequireToolApprovalHandlesDangerousAndSafeTools(t *testing.T) {
 	})
 }
 
+func TestRequiresToolApprovalNameIncludesOpenClawCompatibleAliases(t *testing.T) {
+	dangerousAliases := []string{"exec", "process", "write", "edit", "apply_patch"}
+	for _, name := range dangerousAliases {
+		if !RequiresToolApprovalName(name) {
+			t.Fatalf("expected OpenClaw-compatible tool %q to require approval", name)
+		}
+	}
+}
+
 func TestExecutionAndVerificationHelpers(t *testing.T) {
 	task := &state.Task{}
 	if got := executionStageOutput(task, nil); got != "Execution completed using the current runtime." {

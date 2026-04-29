@@ -55,6 +55,12 @@ func TestDefaultConfig(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("default config should be valid: %v", err)
 	}
+	if cfg.Agent.PermissionLevel != "full" {
+		t.Fatalf("default main agent permission_level = %q, want full", cfg.Agent.PermissionLevel)
+	}
+	if cfg.Sandbox.ExecutionMode != "host-reviewed" {
+		t.Fatalf("default sandbox.execution_mode = %q, want host-reviewed", cfg.Sandbox.ExecutionMode)
+	}
 	if cfg.Sandbox.DockerImage != DefaultSandboxDockerImage {
 		t.Fatalf("default sandbox docker image = %q, want %q", cfg.Sandbox.DockerImage, DefaultSandboxDockerImage)
 	}

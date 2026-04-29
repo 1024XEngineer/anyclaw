@@ -12,7 +12,7 @@
     "description": "Your AI assistant with file-based memory",
     "work_dir": ".anyclaw",
     "working_dir": "workflows/default",
-    "permission_level": "limited",
+    "permission_level": "full",
     "require_confirmation_for_dangerous": true,
     "profiles": [],
     "active_profile": "",
@@ -131,7 +131,7 @@
   },
   "sandbox": {
     "enabled": false,
-    "execution_mode": "sandbox",
+    "execution_mode": "host-reviewed",
     "backend": "local",
     "base_dir": ".anyclaw/sandboxes",
     "docker_image": "anyclaw-sandbox:local",
