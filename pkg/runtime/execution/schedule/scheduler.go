@@ -383,11 +383,14 @@ func (s *Scheduler) DisableTask(taskID string) error {
 
 func (s *Scheduler) RunTaskNow(taskID string) error {
 	s.mu.RLock()
-	_, ok := s.tasks[taskID]
+	task, ok := s.tasks[taskID]
 	s.mu.RUnlock()
 
 	if !ok {
 		return fmt.Errorf("task not found: %s", taskID)
+	}
+	if !task.Enabled {
+		return fmt.Errorf("task is disabled: %s", taskID)
 	}
 
 	go s.runTask(taskID)
