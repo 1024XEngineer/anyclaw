@@ -50,6 +50,8 @@ func runStoreCommand(args []string) error {
 		return runStoreVerify(args[1:], opts)
 	case "trust":
 		return runStoreTrust(args[1:], opts)
+	case "sources":
+		return runStoreSources(args[1:], opts)
 	case "update":
 		return runStoreUpdate(args[1:], opts)
 	default:
@@ -70,6 +72,8 @@ Usage:
   anyclaw store sign <plugin-dir> <key-file>
   anyclaw store verify <plugin-dir> <public-key-file>
   anyclaw store trust <key-id> <public-key-file> [name]
+  anyclaw store sources [list]
+  anyclaw store sources add <name> <url> [type]
   anyclaw store update [plugin-id]
 
 Options:
@@ -429,6 +433,60 @@ func publicKeyIdentity(data []byte) (string, string, error) {
 	sum := sha256.Sum256(block.Bytes)
 	fingerprint := fmt.Sprintf("%x", sum)
 	return fingerprint[:16], fingerprint, nil
+}
+
+func runStoreSources(args []string, opts storeCommandOptions) error {
+	resolved, err := resolveStoreCommandOptions(opts)
+	if err != nil {
+		return err
+	}
+	sourcesPath := plugin.SourcesPath(resolved.workDir)
+
+	if len(args) > 0 && strings.EqualFold(strings.TrimSpace(args[0]), "add") {
+		if len(args) < 3 {
+			return fmt.Errorf("usage: anyclaw store sources add <name> <url> [type]")
+		}
+		sourceType := "http"
+		if len(args) > 3 {
+			sourceType = args[3]
+		}
+		source, err := plugin.NormalizeSource(plugin.PluginSource{
+			Name: args[1],
+			URL:  args[2],
+			Type: sourceType,
+		})
+		if err != nil {
+			return err
+		}
+		sources, err := plugin.LoadSources(sourcesPath)
+		if err != nil {
+			return err
+		}
+		sources = plugin.MergeSources(sources, []plugin.PluginSource{source})
+		if err := plugin.SaveSources(sourcesPath, sources); err != nil {
+			return fmt.Errorf("failed to save sources: %w", err)
+		}
+		printSuccess("Added source: %s -> %s", source.Name, source.URL)
+		return nil
+	}
+	if len(args) > 0 && !strings.EqualFold(strings.TrimSpace(args[0]), "list") {
+		return fmt.Errorf("unknown store sources command: %s", args[0])
+	}
+
+	sources, err := plugin.LoadSources(sourcesPath)
+	if err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		printInfo("No custom sources configured.")
+		return nil
+	}
+
+	fmt.Printf("Configured sources (%d):\n\n", len(sources))
+	for _, source := range sources {
+		fmt.Printf("  %s: %s (%s)\n", source.Name, source.URL, source.Type)
+	}
+	return nil
 }
 
 func runStoreUpdate(args []string, opts storeCommandOptions) error {

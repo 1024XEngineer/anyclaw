@@ -43,17 +43,51 @@ func TestRunAnyClawCLIRoutesStoreUsage(t *testing.T) {
 	}
 }
 
-func TestRunStoreSourcesCommandIsNotExposed(t *testing.T) {
+func TestRunStoreSourcesUsesConfiguredWorkDir(t *testing.T) {
 	withStoreCLITempDir(t)
 
-	stdout, _, err := captureCLIOutput(t, func() error {
-		return runAnyClawCLI([]string{"store", "sources"})
-	})
-	if err == nil || !strings.Contains(err.Error(), "unknown store command: sources") {
-		t.Fatalf("expected unknown sources command error, got %v", err)
+	configDir := filepath.Join(t.TempDir(), "configs")
+	cfg := config.DefaultConfig()
+	cfg.Agent.WorkDir = filepath.Join("runtime", ".anyclaw")
+	configPath := filepath.Join(configDir, "anyclaw.json")
+	if err := cfg.Save(configPath); err != nil {
+		t.Fatalf("Save config: %v", err)
 	}
-	if strings.Contains(stdout, "anyclaw store sources") {
-		t.Fatalf("expected usage to omit inactive sources command, got %q", stdout)
+
+	stdout, _, err := captureCLIOutput(t, func() error {
+		return runAnyClawCLI([]string{"store", "--config", configPath, "sources", "add", "internal", "https://market.example.test", "http"})
+	})
+	if err != nil {
+		t.Fatalf("runAnyClawCLI store sources add: %v", err)
+	}
+	if !strings.Contains(stdout, "Added source: internal -> https://market.example.test") {
+		t.Fatalf("unexpected sources add output: %q", stdout)
+	}
+
+	configuredSourcesPath := filepath.Join(configDir, "runtime", ".anyclaw", "sources.json")
+	data, err := os.ReadFile(configuredSourcesPath)
+	if err != nil {
+		t.Fatalf("expected sources file under configured work dir: %v", err)
+	}
+	var sources []plugin.PluginSource
+	if err := json.Unmarshal(data, &sources); err != nil {
+		t.Fatalf("Unmarshal sources.json: %v", err)
+	}
+	if len(sources) != 1 || sources[0].Name != "internal" || sources[0].URL != "https://market.example.test" || sources[0].Type != "http" {
+		t.Fatalf("unexpected sources: %#v", sources)
+	}
+	if _, err := os.Stat(filepath.Join(".anyclaw", "sources.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected cwd .anyclaw sources file to remain unused, got %v", err)
+	}
+
+	stdout, _, err = captureCLIOutput(t, func() error {
+		return runAnyClawCLI([]string{"store", "sources", "list", "--config", configPath})
+	})
+	if err != nil {
+		t.Fatalf("runAnyClawCLI store sources list: %v", err)
+	}
+	if !strings.Contains(stdout, "Configured sources (1):") || !strings.Contains(stdout, "internal: https://market.example.test (http)") {
+		t.Fatalf("unexpected sources list output: %q", stdout)
 	}
 }
 
