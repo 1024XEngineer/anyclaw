@@ -296,4 +296,41 @@ func TestRunStoreSignVerifyAndTrustPlugin(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(".anyclaw", "trust.json")); err != nil {
 		t.Fatalf("expected trust store to be written: %v", err)
 	}
+	trustData, err := os.ReadFile(filepath.Join(".anyclaw", "trust.json"))
+	if err != nil {
+		t.Fatalf("ReadFile trust.json: %v", err)
+	}
+	var trusted map[string]plugin.SignerInfo
+	if err := json.Unmarshal(trustData, &trusted); err != nil {
+		t.Fatalf("Unmarshal trust.json: %v", err)
+	}
+	signer, ok := trusted[keyPair.KeyID]
+	if !ok {
+		t.Fatalf("expected trusted signer %q, got %#v", keyPair.KeyID, trusted)
+	}
+	if signer.KeyID != keyPair.KeyID || signer.Fingerprint == "" {
+		t.Fatalf("expected trusted signer to bind key id and fingerprint, got %#v", signer)
+	}
+}
+
+func TestRunStoreTrustRejectsMismatchedKeyID(t *testing.T) {
+	withStoreCLITempDir(t)
+
+	keyPair, err := plugin.GenerateKeyPair(plugin.SignerTypeRSA, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	if err := os.WriteFile("public.pem", []byte(keyPair.PublicKey), 0o600); err != nil {
+		t.Fatalf("WriteFile public.pem: %v", err)
+	}
+
+	_, _, err = captureCLIOutput(t, func() error {
+		return runAnyClawCLI([]string{"store", "trust", "deadbeefdeadbeef", "public.pem"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match public key") {
+		t.Fatalf("expected key id mismatch error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(".anyclaw", "trust.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected trust store not to be written, got %v", statErr)
+	}
 }

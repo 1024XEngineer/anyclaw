@@ -1,7 +1,11 @@
 package main
 
 import (
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -368,8 +372,16 @@ func runStoreTrust(args []string, opts storeCommandOptions) error {
 	if keyID == "" {
 		return fmt.Errorf("key id is required")
 	}
-	if _, err := os.ReadFile(args[1]); err != nil {
+	keyData, err := os.ReadFile(args[1])
+	if err != nil {
 		return fmt.Errorf("failed to read public key file: %w", err)
+	}
+	derivedKeyID, fingerprint, err := publicKeyIdentity(keyData)
+	if err != nil {
+		return fmt.Errorf("failed to parse public key file: %w", err)
+	}
+	if !strings.EqualFold(keyID, derivedKeyID) {
+		return fmt.Errorf("key id %s does not match public key %s", keyID, derivedKeyID)
 	}
 
 	resolved, err := resolveStoreCommandOptions(opts)
@@ -387,10 +399,11 @@ func runStoreTrust(args []string, opts storeCommandOptions) error {
 		name = strings.TrimSpace(args[2])
 	}
 	trustStore.AddSigner(keyID, &plugin.SignerInfo{
-		KeyID:      keyID,
-		Name:       name,
-		TrustLevel: plugin.TrustLevelTrusted,
-		AddedAt:    time.Now().UTC(),
+		KeyID:       derivedKeyID,
+		Name:        name,
+		Fingerprint: fingerprint,
+		TrustLevel:  plugin.TrustLevelTrusted,
+		AddedAt:     time.Now().UTC(),
 	})
 
 	if err := os.MkdirAll(filepath.Dir(trustPath), 0o755); err != nil {
@@ -402,6 +415,23 @@ func runStoreTrust(args []string, opts storeCommandOptions) error {
 
 	printSuccess("Added %s to trusted signers!", keyID)
 	return nil
+}
+
+func publicKeyIdentity(data []byte) (string, string, error) {
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return "", "", fmt.Errorf("failed to decode public key")
+	}
+	publicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return "", "", err
+	}
+	if _, ok := publicKey.(*rsa.PublicKey); !ok {
+		return "", "", fmt.Errorf("not an RSA public key")
+	}
+	sum := sha256.Sum256(block.Bytes)
+	fingerprint := fmt.Sprintf("%x", sum)
+	return fingerprint[:16], fingerprint, nil
 }
 
 func runStoreSources(args []string, opts storeCommandOptions) error {
