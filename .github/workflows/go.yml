@@ -13,6 +13,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.x
+          cache: false
+      - name: Lint Go code
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 run ./... --timeout=5m
+
   test:
     runs-on: ubuntu-latest
     strategy:
