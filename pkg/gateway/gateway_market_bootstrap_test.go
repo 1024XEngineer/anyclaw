@@ -16,9 +16,9 @@ func TestMarketSourcesLoadsConfiguredSources(t *testing.T) {
 		t.Fatalf("SaveSources: %v", err)
 	}
 
-	sources, err := marketSources(workDir)
+	sources, err := loadConfiguredMarketSources(workDir)
 	if err != nil {
-		t.Fatalf("marketSources: %v", err)
+		t.Fatalf("loadConfiguredMarketSources: %v", err)
 	}
 	if len(sources) != 2 {
 		t.Fatalf("expected default plus configured source, got %#v", sources)
@@ -31,13 +31,18 @@ func TestMarketSourcesLoadsConfiguredSources(t *testing.T) {
 	}
 }
 
-func TestMarketSourcesRejectsMalformedConfig(t *testing.T) {
+func TestMarketSourcesFallsBackOnMalformedConfig(t *testing.T) {
 	workDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workDir, "sources.json"), []byte(`not-json`), 0o644); err != nil {
 		t.Fatalf("WriteFile sources.json: %v", err)
 	}
 
-	if _, err := marketSources(workDir); err == nil {
-		t.Fatal("expected malformed sources config to return an error")
+	sources := marketSources(workDir)
+	if len(sources) != 1 || sources[0].Name != "default" {
+		t.Fatalf("expected malformed config to fall back to default source, got %#v", sources)
+	}
+
+	if _, err := loadConfiguredMarketSources(workDir); err == nil {
+		t.Fatal("expected strict loader to report malformed sources config")
 	}
 }

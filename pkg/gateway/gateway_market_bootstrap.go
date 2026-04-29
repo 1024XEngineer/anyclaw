@@ -1,14 +1,13 @@
 package gateway
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
 )
 
-func (s *Server) initMarketStore() error {
+func (s *Server) initMarketStore() {
 	pluginDir := s.mainRuntime.Config.Plugins.Dir
 	if pluginDir == "" {
 		pluginDir = "plugins"
@@ -19,20 +18,19 @@ func (s *Server) initMarketStore() error {
 	_ = os.MkdirAll(marketDir, 0o755)
 	_ = os.MkdirAll(cacheDir, 0o755)
 
-	sources, err := marketSources(s.mainRuntime.WorkDir)
-	if err != nil {
-		return fmt.Errorf("load market sources: %w", err)
-	}
-
 	trustStore := plugin.NewTrustStore()
-	s.marketStore = plugin.NewStore(pluginDir, marketDir, cacheDir, sources, trustStore, s.plugins)
-	return nil
+	s.marketStore = plugin.NewStore(pluginDir, marketDir, cacheDir, marketSources(s.mainRuntime.WorkDir), trustStore, s.plugins)
 }
 
-func marketSources(workDir string) ([]plugin.PluginSource, error) {
+func marketSources(workDir string) []plugin.PluginSource {
+	sources, _ := loadConfiguredMarketSources(workDir)
+	return sources
+}
+
+func loadConfiguredMarketSources(workDir string) ([]plugin.PluginSource, error) {
 	configured, err := plugin.LoadSources(plugin.SourcesPath(workDir))
 	if err != nil {
-		return nil, err
+		return plugin.DefaultSources(), err
 	}
 	return plugin.MergeSources(plugin.DefaultSources(), configured), nil
 }

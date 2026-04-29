@@ -88,9 +88,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	s.initChannels()
 	s.initMCP(ctx)
-	if err := s.initMarketStore(); err != nil {
-		return err
-	}
+	s.initMarketStore()
 	s.initDiscovery(ctx)
 	if err := s.ensureDefaultWorkspace(); err != nil {
 		return err
