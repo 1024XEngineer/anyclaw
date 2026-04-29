@@ -63,10 +63,10 @@ func (s *Server) registerRuntimeGovernanceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/roles", s.wrap("/auth/roles", s.handleRoles))
 	mux.HandleFunc("/auth/roles/impact", s.wrap("/auth/roles/impact", requirePermission("auth.users.read", s.handleRoleImpact)))
 	mux.HandleFunc("/audit", s.wrap("/audit", requirePermission("audit.read", s.handleAudit)))
-	mux.HandleFunc("/jobs", s.wrap("/jobs", requirePermission("audit.read", s.handleJobs)))
-	mux.HandleFunc("/jobs/", s.wrap("/jobs/", requirePermission("audit.read", s.handleJobByID)))
-	mux.HandleFunc("/jobs/retry", s.wrap("/jobs/retry", requirePermission("audit.read", s.handleRetryJob)))
-	mux.HandleFunc("/jobs/cancel", s.wrap("/jobs/cancel", requirePermission("audit.read", s.handleCancelJob)))
+	mux.HandleFunc("/jobs", s.wrap("/jobs", requirePermission("jobs.read", s.handleJobs)))
+	mux.HandleFunc("/jobs/", s.wrap("/jobs/", requirePermission("jobs.read", s.handleJobByID)))
+	mux.HandleFunc("/jobs/retry", s.wrap("/jobs/retry", requirePermission("jobs.write", s.handleRetryJob)))
+	mux.HandleFunc("/jobs/cancel", s.wrap("/jobs/cancel", requirePermission("jobs.write", s.handleCancelJob)))
 	mux.HandleFunc("/config", s.wrap("/config", s.handleConfigAPI))
 	mux.HandleFunc("/memory", s.wrap("/memory", requirePermission("memory.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.handleMemory))))
 	mux.HandleFunc("/approvals", s.wrap("/approvals", requirePermission("approvals.read", s.handleApprovals)))
@@ -84,7 +84,10 @@ func (s *Server) registerSessionTaskRoutes(mux *http.ServeMux) {
 	}, "sessions.read", requireHierarchyAccess(s.resolveHierarchyFromSessionPath, s.sessionCommandsAPI().HandleByID))))
 	mux.HandleFunc("/sessions/move", s.wrap("/sessions/move", requirePermission("sessions.write", s.sessionMoveCommandsAPI().HandleSingle)))
 	mux.HandleFunc("/sessions/move-batch", s.wrap("/sessions/move-batch", requirePermission("sessions.write", s.sessionMoveCommandsAPI().HandleBatch)))
-	mux.HandleFunc("/tasks", s.wrap("/tasks", requirePermission("tasks.write", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.taskCommandsAPI().HandleCollection))))
+	mux.HandleFunc("/tasks", s.wrap("/tasks", requirePermissionByMethod(map[string]string{
+		http.MethodGet:  "tasks.read",
+		http.MethodPost: "tasks.write",
+	}, "tasks.read", requireHierarchyAccess(s.resolveHierarchyFromQuery, s.taskCommandsAPI().HandleCollection))))
 	mux.HandleFunc("/tasks/", s.wrap("/tasks/", s.taskCommandsAPI().HandleByID))
 	mux.HandleFunc("/v2/tasks", s.wrap("/v2/tasks", requirePermission("tasks.write", s.handleV2Tasks)))
 	mux.HandleFunc("/v2/tasks/", s.wrap("/v2/tasks/", requirePermission("tasks.read", s.handleV2TaskByID)))

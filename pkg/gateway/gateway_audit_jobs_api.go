@@ -67,7 +67,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "job is not cancellable"})
 		return
 	}
-	s.jobCancel[job.ID] = true
+	s.markJobCancelled(job.ID)
 	job.Status = "cancelled"
 	job.CompletedAt = time.Now().UTC().Format(time.RFC3339)
 	job.Cancellable = false
