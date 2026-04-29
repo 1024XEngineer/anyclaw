@@ -3,6 +3,7 @@ package schedule
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -218,6 +219,29 @@ func TestSchedulerRunTaskSuccessAndFailure(t *testing.T) {
 			t.Fatalf("expected one aggregated run, got %d", len(got))
 		}
 	})
+}
+
+func TestSchedulerRunTaskNowRejectsDisabledTask(t *testing.T) {
+	scheduler := New()
+	taskID, err := scheduler.AddTask(&Task{
+		ID:       "disabled-task",
+		Schedule: "@hourly",
+		Command:  "noop",
+	})
+	if err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	if err := scheduler.DisableTask(taskID); err != nil {
+		t.Fatalf("DisableTask: %v", err)
+	}
+
+	err = scheduler.RunTaskNow(taskID)
+	if err == nil {
+		t.Fatal("expected disabled task trigger to fail")
+	}
+	if !strings.Contains(err.Error(), "task is disabled") {
+		t.Fatalf("expected disabled task error, got %v", err)
+	}
 }
 
 func TestSchedulerLoadPersistedAndRetryHelpers(t *testing.T) {
