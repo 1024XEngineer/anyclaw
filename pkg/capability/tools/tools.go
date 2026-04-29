@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -245,8 +246,10 @@ type applyPatchCompatSummary struct {
 }
 
 type applyPatchUpdateChunk struct {
-	oldLines []string
-	newLines []string
+	oldLines    []string
+	newLines    []string
+	oldStart    int
+	hasOldStart bool
 }
 
 func applyPatchCompatTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
@@ -343,6 +346,12 @@ func applyPatchText(ctx context.Context, patch string, opts BuiltinOptions) (app
 				switch {
 				case trimmed == "@@" || strings.HasPrefix(trimmed, "@@ "):
 					flushChunk()
+					oldStart, hasOldStart, err := parsePatchHunkOldStart(trimmed)
+					if err != nil {
+						return applyPatchCompatSummary{}, fmt.Errorf("invalid patch hunk for %s: %w", path, err)
+					}
+					current.oldStart = oldStart
+					current.hasOldStart = hasOldStart
 				case trimmed == "*** End of File":
 				case strings.HasPrefix(lines[i], " "):
 					text := strings.TrimPrefix(lines[i], " ")
@@ -395,11 +404,15 @@ func applyPatchUpdate(ctx context.Context, path string, chunks []applyPatchUpdat
 		return "", err
 	}
 	updated := content
+	lineOffset := 0
 	for _, chunk := range chunks {
 		var changed bool
-		updated, changed = replacePatchBlock(updated, chunk.oldLines, chunk.newLines)
+		updated, changed = replacePatchBlock(updated, chunk, lineOffset)
 		if !changed {
 			return "", fmt.Errorf("patch context not found in %s", path)
+		}
+		if chunk.hasOldStart {
+			lineOffset += len(chunk.newLines) - len(chunk.oldLines)
 		}
 	}
 	if updated == content {
@@ -408,19 +421,93 @@ func applyPatchUpdate(ctx context.Context, path string, chunks []applyPatchUpdat
 	return updated, nil
 }
 
-func replacePatchBlock(content string, oldLines []string, newLines []string) (string, bool) {
+func replacePatchBlock(content string, chunk applyPatchUpdateChunk, lineOffset int) (string, bool) {
+	oldLines := chunk.oldLines
+	newLines := chunk.newLines
+	if chunk.hasOldStart {
+		return replacePatchBlockAtLine(content, oldLines, newLines, chunk.oldStart+lineOffset)
+	}
 	if len(oldLines) == 0 {
 		return content + patchLinesToText(newLines, true), true
 	}
 	oldWithNewline := patchLinesToText(oldLines, true)
-	if strings.Contains(content, oldWithNewline) {
+	if strings.Count(content, oldWithNewline) == 1 {
 		return strings.Replace(content, oldWithNewline, patchLinesToText(newLines, true), 1), true
 	}
 	oldWithoutNewline := patchLinesToText(oldLines, false)
-	if strings.Contains(content, oldWithoutNewline) {
+	if strings.Count(content, oldWithoutNewline) == 1 {
 		return strings.Replace(content, oldWithoutNewline, patchLinesToText(newLines, false), 1), true
 	}
 	return content, false
+}
+
+func replacePatchBlockAtLine(content string, oldLines []string, newLines []string, lineNumber int) (string, bool) {
+	offset, ok := byteOffsetForLine(content, lineNumber)
+	if !ok {
+		return content, false
+	}
+	if len(oldLines) == 0 {
+		return content[:offset] + patchLinesToText(newLines, true) + content[offset:], true
+	}
+	oldWithNewline := patchLinesToText(oldLines, true)
+	if strings.HasPrefix(content[offset:], oldWithNewline) {
+		return content[:offset] + patchLinesToText(newLines, true) + content[offset+len(oldWithNewline):], true
+	}
+	oldWithoutNewline := patchLinesToText(oldLines, false)
+	if strings.HasPrefix(content[offset:], oldWithoutNewline) {
+		return content[:offset] + patchLinesToText(newLines, false) + content[offset+len(oldWithoutNewline):], true
+	}
+	return content, false
+}
+
+func parsePatchHunkOldStart(header string) (int, bool, error) {
+	header = strings.TrimSpace(header)
+	if header == "@@" {
+		return 0, false, nil
+	}
+	if !strings.HasPrefix(header, "@@") {
+		return 0, false, nil
+	}
+	body := strings.TrimSpace(strings.TrimPrefix(header, "@@"))
+	if idx := strings.Index(body, "@@"); idx >= 0 {
+		body = strings.TrimSpace(body[:idx])
+	}
+	for _, field := range strings.Fields(body) {
+		if !strings.HasPrefix(field, "-") {
+			continue
+		}
+		startText := strings.TrimPrefix(field, "-")
+		if idx := strings.Index(startText, ","); idx >= 0 {
+			startText = startText[:idx]
+		}
+		start, err := strconv.Atoi(startText)
+		if err != nil || start < 0 {
+			return 0, false, fmt.Errorf("invalid old range %q", field)
+		}
+		if start == 0 {
+			start = 1
+		}
+		return start, true, nil
+	}
+	return 0, false, nil
+}
+
+func byteOffsetForLine(content string, lineNumber int) (int, bool) {
+	if lineNumber <= 0 {
+		return 0, false
+	}
+	if lineNumber == 1 {
+		return 0, true
+	}
+	offset := 0
+	for line := 1; line < lineNumber; line++ {
+		next := strings.IndexByte(content[offset:], '\n')
+		if next < 0 {
+			return 0, false
+		}
+		offset += next + 1
+	}
+	return offset, true
 }
 
 func patchLinesToText(lines []string, trailingNewline bool) string {

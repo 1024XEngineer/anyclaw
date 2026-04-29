@@ -114,6 +114,64 @@ func TestApplyPatchCompatToolAppliesUpdatePatch(t *testing.T) {
 	}
 }
 
+func TestApplyPatchCompatToolUsesHunkLinePositionForDuplicateContext(t *testing.T) {
+	workspace := t.TempDir()
+	target := filepath.Join(workspace, "notes.txt")
+	original := strings.Join([]string{
+		"first",
+		"same",
+		"target",
+		"same",
+		"middle",
+		"same",
+		"target",
+		"same",
+		"last",
+		"",
+	}, "\n")
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	registry := NewRegistry()
+	RegisterBuiltins(registry, BuiltinOptions{
+		WorkingDir:      workspace,
+		PermissionLevel: "full",
+		ExecutionMode:   "host-reviewed",
+		Policy: NewPolicyEngine(PolicyOptions{
+			WorkingDir:      workspace,
+			PermissionLevel: "full",
+		}),
+	})
+
+	_, err := registry.Call(context.Background(), "apply_patch", map[string]any{
+		"input": "*** Begin Patch\n*** Update File: notes.txt\n@@ -6,3 +6,3 @@\n same\n-target\n+TARGET\n same\n*** End Patch\n",
+	})
+	if err != nil {
+		t.Fatalf("apply_patch: %v", err)
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read patched file: %v", err)
+	}
+	want := strings.Join([]string{
+		"first",
+		"same",
+		"target",
+		"same",
+		"middle",
+		"same",
+		"TARGET",
+		"same",
+		"last",
+		"",
+	}, "\n")
+	if string(data) != want {
+		t.Fatalf("patch should update second matching hunk, got %q", data)
+	}
+}
+
 func TestUpdatePlanCompatToolValidatesAndReturnsPlan(t *testing.T) {
 	registry := NewRegistry()
 	RegisterBuiltins(registry, BuiltinOptions{})
