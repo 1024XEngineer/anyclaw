@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -133,11 +134,7 @@ func runPiSessions(args []string) error {
 		return err
 	}
 
-	path := "/v1/sessions"
-	if strings.TrimSpace(*sessionID) != "" {
-		path += "/" + strings.TrimSpace(*sessionID)
-	}
-	path += "?user_id=" + strings.TrimSpace(*userID)
+	path := buildPiSessionsPath(*userID, *sessionID)
 
 	var result pi.RPCResponse
 	if err := doPiJSON(context.Background(), *host, *port, http.MethodGet, path, nil, &result); err != nil {
@@ -163,10 +160,7 @@ func runPiAgents(args []string) error {
 		return err
 	}
 
-	path := "/v1/agents"
-	if strings.TrimSpace(*userID) != "" {
-		path += "/" + strings.TrimSpace(*userID)
-	}
+	path := buildPiAgentsPath(*userID)
 
 	var result pi.RPCResponse
 	if err := doPiJSON(context.Background(), *host, *port, http.MethodGet, path, nil, &result); err != nil {
@@ -204,6 +198,25 @@ func runPiStatus(args []string) error {
 	printSuccess("Pi Agent Server: %v", data["status"])
 	printInfo("Active agents: %v", data["agents"])
 	return nil
+}
+
+func buildPiSessionsPath(userID string, sessionID string) string {
+	path := "/v1/sessions"
+	if sessionID = strings.TrimSpace(sessionID); sessionID != "" {
+		path += "/" + url.PathEscape(sessionID)
+	}
+
+	query := url.Values{}
+	query.Set("user_id", strings.TrimSpace(userID))
+	return path + "?" + query.Encode()
+}
+
+func buildPiAgentsPath(userID string) string {
+	path := "/v1/agents"
+	if userID = strings.TrimSpace(userID); userID != "" {
+		path += "/" + url.PathEscape(userID)
+	}
+	return path
 }
 
 func doPiJSON(ctx context.Context, host string, port int, method string, path string, body any, out any) error {
