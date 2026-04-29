@@ -49,7 +49,10 @@ func (m *SandboxManager) Enabled() bool {
 }
 
 func (m *SandboxManager) ResolveExecution(ctx context.Context, requestedCwd string) (string, func(context.Context, string) (*exec.Cmd, error), error) {
-	if m == nil || !m.config.Enabled {
+	if m == nil {
+		return strings.TrimSpace(requestedCwd), nil, nil
+	}
+	if !m.config.Enabled {
 		cwd := strings.TrimSpace(requestedCwd)
 		if cwd == "" {
 			cwd = m.workingDir

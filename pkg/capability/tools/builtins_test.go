@@ -128,6 +128,48 @@ func TestRunCommandToolWithPolicyBlocksOutsideWorkingDirCwd(t *testing.T) {
 	}
 }
 
+func TestRunCommandToolWithPolicyNilSandboxUsesRequestedCwd(t *testing.T) {
+	workspace := t.TempDir()
+	requestedCwd := filepath.Join(workspace, "requested")
+	if err := os.MkdirAll(requestedCwd, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	_, err := RunCommandToolWithPolicy(context.Background(), map[string]any{
+		"command": "echo ok > marker.txt",
+		"cwd":     requestedCwd,
+	}, BuiltinOptions{
+		WorkingDir:      workspace,
+		ExecutionMode:   "host-reviewed",
+		PermissionLevel: "full",
+	})
+	if err != nil {
+		t.Fatalf("RunCommandToolWithPolicy: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(requestedCwd, "marker.txt")); err != nil {
+		t.Fatalf("expected command to run in requested cwd: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "marker.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected command to avoid working dir fallback, got %v", err)
+	}
+}
+
+func TestRunCommandToolWithPolicyNilSandboxAllowsEmptyCwd(t *testing.T) {
+	output, err := RunCommandToolWithPolicy(context.Background(), map[string]any{
+		"command": "echo ok",
+	}, BuiltinOptions{
+		ExecutionMode:   "host-reviewed",
+		PermissionLevel: "full",
+	})
+	if err != nil {
+		t.Fatalf("RunCommandToolWithPolicy: %v", err)
+	}
+	if !strings.Contains(output, "ok") {
+		t.Fatalf("expected command output, got %q", output)
+	}
+}
+
 func TestEnsureDesktopAllowedRequiresHostReviewed(t *testing.T) {
 	err := ensureDesktopAllowed("desktop_click", BuiltinOptions{ExecutionMode: "sandbox", PermissionLevel: "limited"}, false)
 	if err == nil {
