@@ -9,7 +9,7 @@ services:
       - "18789:18789"
     volumes:
       - anyclaw-data:/workspace/.anyclaw
-      - ./workspace:/workspace
+      - ./workspace/workflows:/workspace/workflows
     environment:
       ANYCLAW_LLM_PROVIDER: ${ANYCLAW_LLM_PROVIDER:-openai}
       ANYCLAW_LLM_MODEL: ${ANYCLAW_LLM_MODEL:-gpt-4o}
