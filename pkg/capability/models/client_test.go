@@ -2,9 +2,9 @@ package llm
 
 import (
 	"context"
-	"net/url"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -210,6 +210,61 @@ func TestStreamAnthropicUsesConfiguredBaseURL(t *testing.T) {
 	}
 	if strings.Join(chunks, "") != "hello world" {
 		t.Fatalf("expected streamed anthropic content, got %q", strings.Join(chunks, ""))
+	}
+}
+
+func TestStreamChatResponseOpenAICompatibleReturnsContentAndToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"working "}}]}`,
+			`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"run_command","arguments":"{\"command\""}}]}}]}`,
+			`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"go test ./...\"}"}}]},"finish_reason":"tool_calls"}]}`,
+			`data: [DONE]`,
+			``,
+		}, "\n")))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		Provider: "compatible",
+		Model:    "demo-model",
+		APIKey:   "test-key",
+		BaseURL:  server.URL,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	streamer, ok := client.(interface {
+		StreamChatResponse(context.Context, []Message, []ToolDefinition, func(string)) (*Response, error)
+	})
+	if !ok {
+		t.Fatal("expected compatible client to expose StreamChatResponse")
+	}
+
+	var chunks []string
+	resp, err := streamer.StreamChatResponse(context.Background(), []Message{{Role: "user", Content: "hi"}}, []ToolDefinition{
+		{Type: "function", Function: ToolFunctionDefinition{Name: "run_command"}},
+	}, func(chunk string) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatalf("StreamChatResponse: %v", err)
+	}
+	if strings.Join(chunks, "") != "working " {
+		t.Fatalf("expected streamed content chunks, got %q", strings.Join(chunks, ""))
+	}
+	if resp.Content != "working " {
+		t.Fatalf("expected accumulated response content, got %q", resp.Content)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected one streamed tool call, got %#v", resp.ToolCalls)
+	}
+	if resp.ToolCalls[0].ID != "call-1" || resp.ToolCalls[0].Function.Name != "run_command" {
+		t.Fatalf("unexpected tool call metadata: %#v", resp.ToolCalls[0])
+	}
+	if resp.ToolCalls[0].Function.Arguments != `{"command":"go test ./..."}` {
+		t.Fatalf("unexpected tool call arguments: %q", resp.ToolCalls[0].Function.Arguments)
 	}
 }
 

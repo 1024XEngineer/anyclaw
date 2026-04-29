@@ -9,14 +9,28 @@ import (
 )
 
 type StreamChunk struct {
-	Type   string   `json:"type"`
-	Delta  Delta    `json:"delta,omitempty"`
-	Choice []Choice `json:"choices,omitempty"`
+	Type         string   `json:"type"`
+	Delta        Delta    `json:"delta,omitempty"`
+	Choice       []Choice `json:"choices,omitempty"`
+	FinishReason string   `json:"finish_reason,omitempty"`
 }
 
 type Delta struct {
-	Content string `json:"content,omitempty"`
-	Role    string `json:"role,omitempty"`
+	Content   string          `json:"content,omitempty"`
+	Role      string          `json:"role,omitempty"`
+	ToolCalls []ToolCallDelta `json:"tool_calls,omitempty"`
+}
+
+type ToolCallDelta struct {
+	Index    *int              `json:"index,omitempty"`
+	ID       string            `json:"id,omitempty"`
+	Type     string            `json:"type,omitempty"`
+	Function FunctionCallDelta `json:"function,omitempty"`
+}
+
+type FunctionCallDelta struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 type Choice struct {
@@ -54,6 +68,7 @@ func (d *OpenAIDecoder) Decode() (*StreamChunk, error) {
 
 		if len(chunk.Choice) > 0 {
 			chunk.Delta = chunk.Choice[0].Delta
+			chunk.FinishReason = chunk.Choice[0].FinishReason
 		}
 
 		chunk.Type = "chunk"
@@ -68,20 +83,33 @@ func (d *OpenAIDecoder) Decode() (*StreamChunk, error) {
 }
 
 type AnthropicChunk struct {
-	Type              string            `json:"type"`
-	Delta             AnthropicDelta    `json:"delta,omitempty"`
-	ContentBlockDelta ContentBlockDelta `json:"content_block_delta,omitempty"`
-	Index             int               `json:"index,omitempty"`
+	Type              string                `json:"type"`
+	Delta             AnthropicDelta        `json:"delta,omitempty"`
+	ContentBlockDelta ContentBlockDelta     `json:"content_block_delta,omitempty"`
+	ContentBlock      AnthropicContentBlock `json:"content_block,omitempty"`
+	Index             int                   `json:"index,omitempty"`
+	Usage             Usage                 `json:"usage,omitempty"`
 }
 
 type AnthropicDelta struct {
-	Type string `json:"type,omitempty"`
-	Text string `json:"text,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
 }
 
 type ContentBlockDelta struct {
-	Type string `json:"type,omitempty"`
-	Text string `json:"text,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Text        string `json:"text,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+}
+
+type AnthropicContentBlock struct {
+	Type  string         `json:"type,omitempty"`
+	Text  string         `json:"text,omitempty"`
+	ID    string         `json:"id,omitempty"`
+	Name  string         `json:"name,omitempty"`
+	Input map[string]any `json:"input,omitempty"`
 }
 
 type AnthropicDecoder struct {
@@ -108,10 +136,20 @@ func (d *AnthropicDecoder) Decode() (*AnthropicChunk, error) {
 			continue
 		}
 
+		if chunk.ContentBlockDelta.Type != "" || chunk.ContentBlockDelta.Text != "" || chunk.ContentBlockDelta.PartialJSON != "" {
+			if chunk.Delta.Type == "" {
+				chunk.Delta.Type = chunk.ContentBlockDelta.Type
+			}
+			if chunk.Delta.Text == "" {
+				chunk.Delta.Text = chunk.ContentBlockDelta.Text
+			}
+			if chunk.Delta.PartialJSON == "" {
+				chunk.Delta.PartialJSON = chunk.ContentBlockDelta.PartialJSON
+			}
+		}
+
 		switch chunk.Type {
-		case "content_block_delta":
-			chunk.Delta.Type = chunk.ContentBlockDelta.Type
-			chunk.Delta.Text = chunk.ContentBlockDelta.Text
+		case "content_block_start", "content_block_delta", "content_block_stop", "message_delta":
 			return &chunk, nil
 		case "message_stop":
 			return &chunk, nil

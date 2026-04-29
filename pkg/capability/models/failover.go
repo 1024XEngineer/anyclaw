@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -119,6 +120,62 @@ func (fc *FailoverClient) StreamChat(ctx context.Context, messages []Message, to
 	}
 
 	return fmt.Errorf("all providers failed: %w", err)
+}
+
+type streamResponseClient interface {
+	StreamChatResponse(context.Context, []Message, []ToolDefinition, func(string)) (*Response, error)
+}
+
+// StreamChatResponse streams content while preserving the final response metadata.
+func (fc *FailoverClient) StreamChatResponse(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) (*Response, error) {
+	if !fc.config.Enabled {
+		return streamClientResponse(ctx, fc.primary, messages, tools, onChunk)
+	}
+
+	var emitted bool
+	forwardingChunk := func(chunk string) {
+		if chunk == "" {
+			return
+		}
+		emitted = true
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+	}
+
+	resp, err := streamClientResponse(ctx, fc.primary, messages, tools, forwardingChunk)
+	if err == nil {
+		return resp, nil
+	}
+	if emitted {
+		return nil, fmt.Errorf("stream interrupted after partial output from %s: %w", fc.primary.Name(), err)
+	}
+
+	for _, fallback := range fc.fallbacks {
+		resp, err = streamClientResponse(ctx, fallback, messages, tools, onChunk)
+		if err == nil {
+			return resp, nil
+		}
+	}
+
+	return nil, fmt.Errorf("all providers failed: %w", err)
+}
+
+func streamClientResponse(ctx context.Context, client Client, messages []Message, tools []ToolDefinition, onChunk func(string)) (*Response, error) {
+	if streamer, ok := client.(streamResponseClient); ok {
+		return streamer.StreamChatResponse(ctx, messages, tools, onChunk)
+	}
+	var content strings.Builder
+	err := client.StreamChat(ctx, messages, tools, func(chunk string) {
+		content.WriteString(chunk)
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Response{Content: content.String()}, nil
 }
 
 // Name returns the client name

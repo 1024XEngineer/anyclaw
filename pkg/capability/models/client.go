@@ -105,6 +105,10 @@ func (c *configurationRequiredClient) StreamChat(_ context.Context, _ []Message,
 	return c.err
 }
 
+func (c *configurationRequiredClient) StreamChatResponse(_ context.Context, _ []Message, _ []ToolDefinition, _ func(string)) (*Response, error) {
+	return nil, c.err
+}
+
 func (c *configurationRequiredClient) Name() string {
 	return c.provider
 }
@@ -214,14 +218,19 @@ func (c *client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 }
 
 func (c *client) StreamChat(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
+	_, err := c.StreamChatResponse(ctx, messages, tools, onChunk)
+	return err
+}
+
+func (c *client) StreamChatResponse(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) (*Response, error) {
 	provider := normalizeProvider(c.provider)
 	switch provider {
 	case "openai", "ollama", "compatible", "qwen":
-		return c.streamOpenAICompatible(ctx, messages, tools, onChunk)
+		return c.streamOpenAICompatibleResponse(ctx, messages, tools, onChunk)
 	case "anthropic":
-		return c.streamAnthropic(ctx, messages, tools, onChunk)
+		return c.streamAnthropicResponse(ctx, messages, tools, onChunk)
 	default:
-		return c.streamOpenAICompatible(ctx, messages, tools, onChunk)
+		return c.streamOpenAICompatibleResponse(ctx, messages, tools, onChunk)
 	}
 }
 
@@ -300,7 +309,7 @@ func (c *client) chatOpenAICompatible(ctx context.Context, messages []Message, t
 	}, nil
 }
 
-func (c *client) streamOpenAICompatible(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
+func (c *client) streamOpenAICompatibleResponse(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) (*Response, error) {
 	url := fmt.Sprintf("%s/chat/completions", c.baseURL)
 
 	serializedMessages := serializeMessagesOpenAI(messages)
@@ -320,7 +329,7 @@ func (c *client) streamOpenAICompatible(ctx context.Context, messages []Message,
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -328,25 +337,107 @@ func (c *client) streamOpenAICompatible(ctx context.Context, messages []Message,
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(respBody))
+	}
 
 	decoder := NewDecoder(resp.Body)
+	var content strings.Builder
+	toolCalls := map[int]*streamingToolCall{}
+	toolCallOrder := []int{}
+	stopReason := ""
 	for {
 		data, err := decoder.Decode()
 		if err != nil {
-			break
+			return nil, err
 		}
 		if data.Type == "chunk" && data.Delta.Content != "" {
-			onChunk(data.Delta.Content)
+			content.WriteString(data.Delta.Content)
+			if onChunk != nil {
+				onChunk(data.Delta.Content)
+			}
+		}
+		if data.Type == "chunk" {
+			for _, tc := range data.Delta.ToolCalls {
+				mergeStreamingToolCall(toolCalls, &toolCallOrder, tc)
+			}
+			if data.FinishReason != "" {
+				stopReason = data.FinishReason
+			}
 		}
 		if data.Type == "done" {
 			break
 		}
 	}
 
-	return nil
+	return &Response{
+		Content:    content.String(),
+		ToolCalls:  buildStreamingToolCalls(toolCalls, toolCallOrder),
+		StopReason: stopReason,
+	}, nil
+}
+
+type streamingToolCall struct {
+	id        string
+	callType  string
+	name      string
+	arguments strings.Builder
+}
+
+func mergeStreamingToolCall(calls map[int]*streamingToolCall, order *[]int, delta ToolCallDelta) {
+	index := len(*order)
+	if delta.Index != nil {
+		index = *delta.Index
+	}
+	call, ok := calls[index]
+	if !ok {
+		call = &streamingToolCall{callType: "function"}
+		calls[index] = call
+		*order = append(*order, index)
+	}
+	if delta.ID != "" {
+		call.id = delta.ID
+	}
+	if delta.Type != "" {
+		call.callType = delta.Type
+	}
+	if delta.Function.Name != "" {
+		call.name = delta.Function.Name
+	}
+	if delta.Function.Arguments != "" {
+		call.arguments.WriteString(delta.Function.Arguments)
+	}
+}
+
+func buildStreamingToolCalls(calls map[int]*streamingToolCall, order []int) []ToolCall {
+	result := make([]ToolCall, 0, len(order))
+	for _, index := range order {
+		call := calls[index]
+		if call == nil || call.name == "" {
+			continue
+		}
+		id := call.id
+		if id == "" {
+			id = fmt.Sprintf("call-%d", index)
+		}
+		callType := call.callType
+		if callType == "" {
+			callType = "function"
+		}
+		result = append(result, ToolCall{
+			ID:   id,
+			Type: callType,
+			Function: FunctionCall{
+				Name:      call.name,
+				Arguments: call.arguments.String(),
+			},
+		})
+	}
+	return result
 }
 
 func extractOpenAICompatibleContent(raw json.RawMessage) string {
@@ -381,7 +472,7 @@ func extractOpenAICompatibleContent(raw json.RawMessage) string {
 	return strings.Join(parts, "")
 }
 
-func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
+func (c *client) streamAnthropicResponse(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) (*Response, error) {
 	url := fmt.Sprintf("%s/messages", strings.TrimRight(c.baseURL, "/"))
 
 	filteredMessages, systemPrompt := serializeMessagesAnthropic(messages)
@@ -411,7 +502,7 @@ func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools 
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -420,25 +511,72 @@ func (c *client) streamAnthropic(ctx context.Context, messages []Message, tools 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(respBody))
+	}
 
 	decoder := NewAnthropicDecoder(resp.Body)
+	var content strings.Builder
+	toolCalls := map[int]*streamingToolCall{}
+	toolCallOrder := []int{}
+	stopReason := ""
+	usage := Usage{}
 	for {
 		data, err := decoder.Decode()
 		if err != nil {
-			break
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		if data.Type == "content_block_start" && data.ContentBlock.Type == "tool_use" {
+			call := &streamingToolCall{
+				id:       data.ContentBlock.ID,
+				callType: "function",
+				name:     data.ContentBlock.Name,
+			}
+			if len(data.ContentBlock.Input) > 0 {
+				if encoded, err := json.Marshal(data.ContentBlock.Input); err == nil && string(encoded) != "{}" {
+					call.arguments.Write(encoded)
+				}
+			}
+			toolCalls[data.Index] = call
+			toolCallOrder = append(toolCallOrder, data.Index)
 		}
 		if data.Type == "content_block_delta" && data.Delta.Type == "text_delta" && data.Delta.Text != "" {
-			onChunk(data.Delta.Text)
+			content.WriteString(data.Delta.Text)
+			if onChunk != nil {
+				onChunk(data.Delta.Text)
+			}
+		}
+		if data.Type == "content_block_delta" && data.Delta.Type == "input_json_delta" {
+			call, ok := toolCalls[data.Index]
+			if !ok {
+				call = &streamingToolCall{callType: "function"}
+				toolCalls[data.Index] = call
+				toolCallOrder = append(toolCallOrder, data.Index)
+			}
+			call.arguments.WriteString(data.Delta.PartialJSON)
+		}
+		if data.Type == "message_delta" {
+			stopReason = data.Delta.StopReason
+			usage.OutputTokens = data.Usage.OutputTokens
 		}
 		if data.Type == "message_stop" {
 			break
 		}
 	}
 
-	return nil
+	return &Response{
+		Content:    content.String(),
+		ToolCalls:  buildStreamingToolCalls(toolCalls, toolCallOrder),
+		Usage:      usage,
+		StopReason: stopReason,
+	}, nil
 }
 
 func (c *client) chatAnthropic(ctx context.Context, messages []Message, tools []ToolDefinition) (*Response, error) {
@@ -591,6 +729,25 @@ func (w *ClientWrapper) Chat(ctx context.Context, messages []Message, tools []To
 
 func (w *ClientWrapper) StreamChat(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) error {
 	return w.client.StreamChat(ctx, messages, tools, onChunk)
+}
+
+func (w *ClientWrapper) StreamChatResponse(ctx context.Context, messages []Message, tools []ToolDefinition, onChunk func(string)) (*Response, error) {
+	if streamer, ok := w.client.(interface {
+		StreamChatResponse(context.Context, []Message, []ToolDefinition, func(string)) (*Response, error)
+	}); ok {
+		return streamer.StreamChatResponse(ctx, messages, tools, onChunk)
+	}
+	var content strings.Builder
+	err := w.client.StreamChat(ctx, messages, tools, func(chunk string) {
+		content.WriteString(chunk)
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &Response{Content: content.String()}, nil
 }
 
 func (w *ClientWrapper) Name() string {

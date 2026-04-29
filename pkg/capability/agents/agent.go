@@ -28,6 +28,10 @@ type LLMCaller interface {
 	Name() string
 }
 
+type LLMStreamResponder interface {
+	StreamChatResponse(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, onChunk func(string)) (*llm.Response, error)
+}
+
 type Agent struct {
 	config             Config
 	llm                LLMCaller
@@ -194,12 +198,9 @@ func (a *Agent) RunStream(ctx context.Context, userInput string, onChunk func(st
 	toolDefs := buildToolDefinitionsFromInfos(selectedTools)
 
 	a.heartbeatContextExecution(exec)
-	response, err := a.chatWithTools(ctx, messages, toolDefs)
+	response, err := a.chatWithToolsStream(ctx, messages, toolDefs, onChunk)
 	if err != nil {
 		return err
-	}
-	if onChunk != nil {
-		onChunk(response)
 	}
 	a.appendHistoryMessage(ctx, "assistant", response)
 	a.memory.Add(memory.MemoryEntry{Type: "conversation", Role: "user", Content: userInput})
@@ -229,9 +230,35 @@ func (a *Agent) handleBootstrapRitual(ctx context.Context, userInput string) (st
 }
 
 func (a *Agent) chatWithTools(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (string, error) {
+	return a.chatWithToolsUsing(ctx, messages, toolDefs, nil)
+}
+
+func (a *Agent) chatWithToolsStream(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition, onChunk func(string)) (string, error) {
+	if onChunk == nil {
+		return a.chatWithToolsUsing(ctx, messages, toolDefs, nil)
+	}
+	var emitted bool
+	forwardChunk := func(chunk string) {
+		if chunk == "" {
+			return
+		}
+		emitted = true
+		onChunk(chunk)
+	}
+	response, err := a.chatWithToolsUsing(ctx, messages, toolDefs, forwardChunk)
+	if err != nil {
+		return "", err
+	}
+	if !emitted && response != "" {
+		forwardChunk(response)
+	}
+	return response, nil
+}
+
+func (a *Agent) chatWithToolsUsing(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition, onChunk func(string)) (string, error) {
 	loopDetector := NewToolLoopDetector(3)
 	for toolCalls := 0; ; toolCalls++ {
-		resp, err := a.llm.Chat(ctx, messages, toolDefs)
+		resp, err := a.chatModelTurn(ctx, messages, toolDefs, onChunk)
 		if err != nil {
 			return "", fmt.Errorf("LLM error: %w", err)
 		}
@@ -298,6 +325,49 @@ func (a *Agent) chatWithTools(ctx context.Context, messages []llm.Message, toolD
 		messages = append(messages, toolMessages...)
 		messages = append(messages, llm.Message{Role: "user", Content: a.toolContinuationPrompt(results)})
 	}
+}
+
+func (a *Agent) chatModelTurn(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition, onChunk func(string)) (*llm.Response, error) {
+	if onChunk == nil {
+		return a.llm.Chat(ctx, messages, toolDefs)
+	}
+
+	var emitted bool
+	forwardChunk := func(chunk string) {
+		if chunk == "" {
+			return
+		}
+		emitted = true
+		onChunk(chunk)
+	}
+
+	if streamer, ok := a.llm.(LLMStreamResponder); ok {
+		resp, err := streamer.StreamChatResponse(ctx, messages, toolDefs, forwardChunk)
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			resp = &llm.Response{}
+		}
+		if !emitted && len(resp.ToolCalls) == 0 && resp.Content != "" {
+			forwardChunk(resp.Content)
+		}
+		return resp, nil
+	}
+
+	if len(toolDefs) == 0 {
+		var content strings.Builder
+		err := a.llm.StreamChat(ctx, messages, toolDefs, func(chunk string) {
+			content.WriteString(chunk)
+			forwardChunk(chunk)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &llm.Response{Content: content.String()}, nil
+	}
+
+	return a.llm.Chat(ctx, messages, toolDefs)
 }
 
 func toolCallArgsHash(args map[string]any) string {

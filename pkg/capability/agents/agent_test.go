@@ -27,6 +27,36 @@ type stubAgentLLM struct {
 	toolDefs  [][]llm.ToolDefinition
 }
 
+type streamAgentTurn struct {
+	response *llm.Response
+	chunks   []string
+}
+
+type streamingAgentLLM struct {
+	stubAgentLLM
+	streamTurns []streamAgentTurn
+	streamIndex int
+}
+
+func (s *streamingAgentLLM) StreamChatResponse(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition, onChunk func(string)) (*llm.Response, error) {
+	s.messages = append(s.messages, append([]llm.Message(nil), messages...))
+	s.toolDefs = append(s.toolDefs, append([]llm.ToolDefinition(nil), toolDefs...))
+	if s.streamIndex >= len(s.streamTurns) {
+		return s.Chat(ctx, messages, toolDefs)
+	}
+	turn := s.streamTurns[s.streamIndex]
+	s.streamIndex++
+	for _, chunk := range turn.chunks {
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+	}
+	if turn.response == nil {
+		return &llm.Response{Content: strings.Join(turn.chunks, "")}, nil
+	}
+	return turn.response, nil
+}
+
 func (s *stubAgentLLM) Chat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error) {
 	s.messages = append(s.messages, append([]llm.Message(nil), messages...))
 	s.toolDefs = append(s.toolDefs, append([]llm.ToolDefinition(nil), toolDefs...))
@@ -856,6 +886,70 @@ func TestAgentRunStreamExecutesToolLoop(t *testing.T) {
 	}
 	if streamed.String() != "stream final response" {
 		t.Fatalf("unexpected streamed response %q", streamed.String())
+	}
+}
+
+func TestAgentRunStreamEmitsModelChunksDuringToolLoop(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+	registry := tools.NewRegistry()
+	called := 0
+	registry.RegisterTool("run_command", "Run a shell command", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		called++
+		return "stream build succeeded", nil
+	})
+
+	toolTurn := &llm.Response{
+		ToolCalls: []llm.ToolCall{
+			{
+				ID:   "tool-stream-1",
+				Type: "function",
+				Function: llm.FunctionCall{
+					Name:      "run_command",
+					Arguments: `{"command":"go test ./..."}`,
+				},
+			},
+		},
+	}
+	finalTurn := &llm.Response{Content: "stream final response"}
+	llmStub := &streamingAgentLLM{
+		stubAgentLLM: stubAgentLLM{responses: []*llm.Response{
+			toolTurn,
+			finalTurn,
+		}},
+		streamTurns: []streamAgentTurn{
+			{response: toolTurn},
+			{response: finalTurn, chunks: []string{"stream final ", "response"}},
+		},
+	}
+
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		Personality: "Operate like an execution-focused local app agent.",
+		LLM:         llmStub,
+		Memory:      mem,
+		Skills:      skills.NewSkillsManager(""),
+		Tools:       registry,
+	})
+
+	var chunks []string
+	err := ag.RunStream(context.Background(), "run tests in stream mode", func(chunk string) {
+		chunks = append(chunks, chunk)
+	})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if called != 1 {
+		t.Fatalf("expected stream path to execute one tool call, got %d", called)
+	}
+	if got := strings.Join(chunks, ""); got != "stream final response" {
+		t.Fatalf("unexpected streamed response %q", got)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected streamed model chunks to be forwarded individually, got %#v", chunks)
 	}
 }
 

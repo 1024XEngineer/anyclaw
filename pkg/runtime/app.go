@@ -196,6 +196,13 @@ func (a *MainRuntime) StreamChat(ctx context.Context, messages []llm.Message, to
 	return a.LLM.StreamChat(ctx, messages, toolDefs, onChunk)
 }
 
+func (a *MainRuntime) StreamChatResponse(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition, onChunk func(string)) (*llm.Response, error) {
+	if a == nil || a.LLM == nil {
+		return nil, fmt.Errorf("runtime llm is unavailable")
+	}
+	return a.LLM.StreamChatResponse(ctx, messages, toolDefs, onChunk)
+}
+
 func (a *MainRuntime) LLMName() string {
 	if a == nil || a.LLM == nil {
 		return ""
