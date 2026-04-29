@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -37,6 +38,22 @@ const (
 	desktopPetHeight    = 92
 	desktopPetTopOffset = 18
 )
+
+var runDesktopControlUIBuild = func(ctx context.Context, repoRoot string) error {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		return fmt.Errorf("automatic control UI build requires Node.js in PATH: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, node, filepath.Join(repoRoot, "scripts", "ui.mjs"), "build")
+	cmd.Dir = repoRoot
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("run control UI build: %w", err)
+	}
+	return nil
+}
 
 type LaunchResult struct {
 	URL        string `json:"url,omitempty"`
@@ -333,10 +350,11 @@ func (a *DesktopApp) startDesktop() LaunchResult {
 		}
 	}
 
-	if bundleRoot != "" {
-		controlUIRoot := filepath.Join(bundleRoot, "dist", "control-ui")
-		if pathExists(controlUIRoot) {
-			_ = os.Setenv("ANYCLAW_CONTROL_UI_ROOT", controlUIRoot)
+	if err := ensureDesktopControlUIBuilt(context.Background(), configPath, bundleRoot); err != nil {
+		return LaunchResult{
+			Error:      err.Error(),
+			BundleRoot: bundleRoot,
+			ConfigPath: configPath,
 		}
 	}
 
@@ -595,6 +613,106 @@ func ensureDesktopConfig(configPath string, bundleRoot string) error {
 	setup.EnsurePrimaryProviderProfile(cfg, cfg.LLM.Provider, cfg.LLM.Model, cfg.LLM.APIKey, cfg.LLM.BaseURL)
 
 	return cfg.Save(configPath)
+}
+
+func ensureDesktopControlUIBuilt(ctx context.Context, configPath string, bundleRoot string) error {
+	if envRoot := strings.TrimSpace(os.Getenv("ANYCLAW_CONTROL_UI_ROOT")); envRoot != "" {
+		if desktopControlUIBuildExists(envRoot) {
+			return nil
+		}
+		return fmt.Errorf("ANYCLAW_CONTROL_UI_ROOT points to a missing control UI build: %s", envRoot)
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config for control UI: %w", err)
+	}
+
+	configuredRoot := config.ResolvePath(configPath, cfg.Gateway.ControlUI.Root)
+	if desktopControlUIBuildExists(configuredRoot) {
+		return nil
+	}
+
+	buildRoot := ""
+	if strings.TrimSpace(bundleRoot) != "" {
+		buildRoot = filepath.Join(bundleRoot, "dist", "control-ui")
+		if desktopControlUIBuildExists(buildRoot) {
+			return os.Setenv("ANYCLAW_CONTROL_UI_ROOT", buildRoot)
+		}
+	}
+
+	repoRoot, ok := discoverDesktopControlUIRepoRoot(configPath, bundleRoot)
+	if !ok {
+		if configuredRoot != "" {
+			return fmt.Errorf("configured control UI root is missing: %s", configuredRoot)
+		}
+		return fmt.Errorf("control UI build is missing; run `corepack pnpm -C ui build` from the repo root or set ANYCLAW_CONTROL_UI_ROOT")
+	}
+
+	buildRoot = filepath.Join(repoRoot, "dist", "control-ui")
+	if desktopControlUIBuildExists(buildRoot) {
+		return os.Setenv("ANYCLAW_CONTROL_UI_ROOT", buildRoot)
+	}
+
+	if err := runDesktopControlUIBuild(ctx, repoRoot); err != nil {
+		return fmt.Errorf("auto-build control UI: %w", err)
+	}
+	if !desktopControlUIBuildExists(buildRoot) {
+		return fmt.Errorf("control UI build completed but %s is still missing", buildRoot)
+	}
+	return os.Setenv("ANYCLAW_CONTROL_UI_ROOT", buildRoot)
+}
+
+func desktopControlUIBuildExists(root string) bool {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(root, "index.html"))
+	return err == nil && !info.IsDir()
+}
+
+func discoverDesktopControlUIRepoRoot(configPath string, bundleRoot string) (string, bool) {
+	starts := []string{bundleRoot}
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		starts = append(starts, cwd)
+	}
+	if resolvedConfig := config.ResolveConfigPath(configPath); strings.TrimSpace(resolvedConfig) != "" {
+		starts = append(starts, filepath.Dir(resolvedConfig))
+	}
+	if executable, err := os.Executable(); err == nil && strings.TrimSpace(executable) != "" {
+		starts = append(starts, filepath.Dir(executable))
+	}
+
+	seen := map[string]bool{}
+	for _, start := range starts {
+		for _, dir := range expandDesktopPathCandidates([]string{start}) {
+			if seen[dir] {
+				continue
+			}
+			seen[dir] = true
+			if looksLikeDesktopControlUIRepoRoot(dir) {
+				return dir, true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func looksLikeDesktopControlUIRepoRoot(dir string) bool {
+	required := []string{
+		filepath.Join(dir, "package.json"),
+		filepath.Join(dir, "scripts", "ui.mjs"),
+		filepath.Join(dir, "ui", "package.json"),
+		filepath.Join(dir, "cmd", "anyclaw"),
+	}
+	for _, item := range required {
+		if _, err := os.Stat(item); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func resolveAbsPath(path string) string {
