@@ -292,18 +292,16 @@ func RunCommandToolWithPolicy(ctx context.Context, input map[string]any, opts Bu
 		return shellCommandWithShell(cmdCtx, command, shellName)
 	}
 	applyDir := true
-	if opts.Sandbox != nil {
-		sandboxCwd, factory, err := opts.Sandbox.ResolveExecution(ctx, cwd)
-		if err != nil {
-			return "", err
-		}
-		if factory != nil {
-			commandFactory = factory
-			applyDir = false
-		}
-		if sandboxCwd != "" {
-			resolvedCwd = sandboxCwd
-		}
+	sandboxCwd, factory, err := opts.Sandbox.ResolveExecution(ctx, cwd)
+	if err != nil {
+		return "", err
+	}
+	if factory != nil {
+		commandFactory = factory
+		applyDir = false
+	}
+	if sandboxCwd != "" {
+		resolvedCwd = sandboxCwd
 	}
 
 	cmd, err := commandFactory(ctx, cmdStr)
