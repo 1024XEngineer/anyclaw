@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const DefaultSandboxDockerImage = "anyclaw-sandbox:local"
+
 func DefaultConfig() *Config {
 	return &Config{
 		LLM: LLMConfig{
@@ -60,7 +62,7 @@ func DefaultConfig() *Config {
 			ExecutionMode: "sandbox",
 			Backend:       "local",
 			BaseDir:       ".anyclaw/sandboxes",
-			DockerImage:   "alpine:3.20",
+			DockerImage:   DefaultSandboxDockerImage,
 			DockerNetwork: "none",
 			ReusePerScope: true,
 		},

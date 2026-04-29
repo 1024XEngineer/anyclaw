@@ -102,7 +102,7 @@ func (m *SandboxManager) ensureDockerContainer(key string) (string, error) {
 	}
 	image := strings.TrimSpace(m.config.DockerImage)
 	if image == "" {
-		image = "alpine:3.20"
+		image = config.DefaultSandboxDockerImage
 	}
 	name := "anyclaw-sbx-" + key
 	cmd := exec.Command("docker", "inspect", name)

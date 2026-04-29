@@ -43,6 +43,7 @@
 
 ```bash
 docker build -t anyclaw:local .
+docker build -f Dockerfile.sandbox -t anyclaw-sandbox:local .
 docker run --rm -p 18789:18789 \
   -v "$PWD/anyclaw.example.json:/workspace/anyclaw.json:ro" \
   -v anyclaw-data:/workspace/.anyclaw \

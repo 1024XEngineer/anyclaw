@@ -134,7 +134,7 @@
     "execution_mode": "sandbox",
     "backend": "local",
     "base_dir": ".anyclaw/sandboxes",
-    "docker_image": "alpine:3.20",
+    "docker_image": "anyclaw-sandbox:local",
     "docker_network": "none",
     "reuse_per_scope": true,
     "default_channel": ""

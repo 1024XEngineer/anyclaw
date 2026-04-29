@@ -55,6 +55,12 @@ func TestDefaultConfig(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("default config should be valid: %v", err)
 	}
+	if cfg.Sandbox.DockerImage != DefaultSandboxDockerImage {
+		t.Fatalf("default sandbox docker image = %q, want %q", cfg.Sandbox.DockerImage, DefaultSandboxDockerImage)
+	}
+	if cfg.Sandbox.DockerImage == "alpine:3.20" {
+		t.Fatal("default sandbox docker image should use the bundled sandbox image, not plain Alpine")
+	}
 }
 
 func TestValidateMissingProvider(t *testing.T) {
@@ -233,6 +239,9 @@ func TestExampleConfigPreservesSecureDefaults(t *testing.T) {
 
 	if cfg.Sandbox.ExecutionMode != defaults.Sandbox.ExecutionMode {
 		t.Fatalf("example sandbox.execution_mode = %q, want default %q", cfg.Sandbox.ExecutionMode, defaults.Sandbox.ExecutionMode)
+	}
+	if cfg.Sandbox.DockerImage != defaults.Sandbox.DockerImage {
+		t.Fatalf("example sandbox.docker_image = %q, want default %q", cfg.Sandbox.DockerImage, defaults.Sandbox.DockerImage)
 	}
 	if !reflect.DeepEqual(cfg.Security.ProtectedPaths, defaults.Security.ProtectedPaths) {
 		t.Fatalf("example protected_paths should preserve defaults, got %#v want %#v", cfg.Security.ProtectedPaths, defaults.Security.ProtectedPaths)
