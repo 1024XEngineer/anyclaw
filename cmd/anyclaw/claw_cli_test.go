@@ -55,10 +55,58 @@ func TestRunClawLookupPrintsJSON(t *testing.T) {
 	}
 }
 
+func TestRunClawStatusRootFlagOverridesEnvRoot(t *testing.T) {
+	envRoot := writeNamedClawBridgeFixture(t, "env")
+	explicitRoot := writeNamedClawBridgeFixture(t, "explicit")
+	t.Setenv("ANYCLAW_CLAW_CODE_ROOT", envRoot)
+
+	stdout, _, err := captureCLIOutput(t, func() error {
+		return runClawCommand([]string{"status", "--root", explicitRoot})
+	})
+	if err != nil {
+		t.Fatalf("runClawCommand status: %v", err)
+	}
+	if !strings.Contains(stdout, explicitRoot) {
+		t.Fatalf("expected explicit root %q in output, got %q", explicitRoot, stdout)
+	}
+	if strings.Contains(stdout, envRoot) {
+		t.Fatalf("expected env root %q to be ignored, got %q", envRoot, stdout)
+	}
+}
+
+func TestRunClawSummaryWorkspaceFlagOverridesEnvRoot(t *testing.T) {
+	envRoot := writeNamedClawBridgeFixture(t, "env")
+	workspaceRoot := writeNamedClawBridgeFixture(t, "workspace-parent")
+	workspace := filepath.Join(filepath.Dir(workspaceRoot), "anyclaw", "workflows", "default")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	t.Setenv("ANYCLAW_CLAW_CODE_ROOT", envRoot)
+
+	stdout, _, err := captureCLIOutput(t, func() error {
+		return runClawCommand([]string{"summary", "--workspace", workspace})
+	})
+	if err != nil {
+		t.Fatalf("runClawCommand summary: %v", err)
+	}
+	if !strings.Contains(stdout, workspaceRoot) {
+		t.Fatalf("expected workspace-discovered root %q in output, got %q", workspaceRoot, stdout)
+	}
+	if strings.Contains(stdout, envRoot) {
+		t.Fatalf("expected env root %q to be ignored, got %q", envRoot, stdout)
+	}
+}
+
 func writeClawBridgeFixture(t *testing.T) string {
 	t.Helper()
 
-	root := filepath.Join(t.TempDir(), "claw-code-main")
+	return writeNamedClawBridgeFixture(t, "claw-code-main")
+}
+
+func writeNamedClawBridgeFixture(t *testing.T, name string) string {
+	t.Helper()
+
+	root := filepath.Join(t.TempDir(), name, "claw-code-main")
 	refDir := filepath.Join(root, "src", "reference_data")
 	subsystemsDir := filepath.Join(refDir, "subsystems")
 	if err := os.MkdirAll(subsystemsDir, 0o755); err != nil {

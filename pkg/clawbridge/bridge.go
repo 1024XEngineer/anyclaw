@@ -56,7 +56,10 @@ func DiscoverRoot(start string) (string, bool) {
 			return root, true
 		}
 	}
+	return DiscoverRootFromStart(start)
+}
 
+func DiscoverRootFromStart(start string) (string, bool) {
 	start = strings.TrimSpace(start)
 	if start == "" {
 		return "", false

@@ -60,7 +60,7 @@ func runClawStatus(args []string) error {
 		return err
 	}
 
-	root, ok := clawbridge.DiscoverRoot(start)
+	root, ok := discoverClawRoot(start, strings.TrimSpace(*rootFlag) != "" || strings.TrimSpace(*workspaceFlag) != "")
 	if !ok {
 		if *jsonFlag {
 			return writePrettyJSON(map[string]any{"available": false})
@@ -153,11 +153,18 @@ func resolveClawRoot(root string, workspace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	discovered, ok := clawbridge.DiscoverRoot(start)
+	discovered, ok := discoverClawRoot(start, strings.TrimSpace(root) != "" || strings.TrimSpace(workspace) != "")
 	if !ok {
 		return "", fmt.Errorf("claw-code-main reference not found; set %s or pass --root", clawbridge.EnvRoot)
 	}
 	return discovered, nil
+}
+
+func discoverClawRoot(start string, explicitStart bool) (string, bool) {
+	if explicitStart {
+		return clawbridge.DiscoverRootFromStart(start)
+	}
+	return clawbridge.DiscoverRoot(start)
 }
 
 func printClawLookupJSON(summary *clawbridge.Summary, section string, family string, limit int) error {

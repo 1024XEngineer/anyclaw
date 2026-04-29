@@ -50,6 +50,22 @@ func TestDiscoverRootPrefersEnvOverride(t *testing.T) {
 	}
 }
 
+func TestDiscoverRootFromStartIgnoresEnvOverride(t *testing.T) {
+	envRoot := filepath.Join(t.TempDir(), "env", "claw-code-main")
+	if err := writeFixtureBridge(envRoot); err != nil {
+		t.Fatalf("writeFixtureBridge env: %v", err)
+	}
+	explicitRoot := filepath.Join(t.TempDir(), "explicit", "claw-code-main")
+	if err := writeFixtureBridge(explicitRoot); err != nil {
+		t.Fatalf("writeFixtureBridge explicit: %v", err)
+	}
+
+	t.Setenv(EnvRoot, envRoot)
+	if discovered, ok := DiscoverRootFromStart(explicitRoot); !ok || discovered != explicitRoot {
+		t.Fatalf("expected explicit root %q, got %q ok=%v", explicitRoot, discovered, ok)
+	}
+}
+
 func TestLookupAndRenderJSON(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "claw-code-main")
 	if err := writeFixtureBridge(root); err != nil {
