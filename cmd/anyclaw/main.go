@@ -42,6 +42,8 @@ func runAnyClawCLI(args []string) error {
 		return runStoreCommand(args[1:])
 	case "claw":
 		return runClawCommand(args[1:])
+	case "pairing":
+		return runPairingCommand(context.Background(), args[1:])
 	case "status":
 		return runStatusCommand(args[1:])
 	case "health":
@@ -75,6 +77,7 @@ Usage:
   anyclaw channels <subcommand>       Run channels management commands
   anyclaw store <subcommand>          Browse and install agent packages
   anyclaw claw <subcommand>           Inspect claw-code-main bridge reference data
+  anyclaw pairing <subcommand>        Manage Gateway device pairing
   anyclaw status [options]            Show gateway runtime status
   anyclaw health [options]            Show gateway health summary
   anyclaw sessions [options]          List recent sessions
