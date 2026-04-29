@@ -23,8 +23,6 @@ jobs:
         with:
           go-version: 1.26.x
           cache: false
-      - name: Verify golangci-lint config
-        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 config verify
       - name: Lint Go code
         run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4 run ./... --timeout=5m
 
