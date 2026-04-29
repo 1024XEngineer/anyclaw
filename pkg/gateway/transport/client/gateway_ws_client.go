@@ -965,8 +965,14 @@ func (c *WSClient) UnpairDevice(ctx context.Context, deviceID string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, err := c.call(ctx, frame)
-	return err
+	resp, err := c.call(ctx, frame)
+	if err != nil {
+		return err
+	}
+	if !resp.OK {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
 }
 
 func (c *WSClient) GetPairingStatus(ctx context.Context) (map[string]any, error) {

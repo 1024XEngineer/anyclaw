@@ -181,6 +181,50 @@ func TestWSClientEndToEnd(t *testing.T) {
 	}
 }
 
+func TestWSClientUnpairDeviceReturnsGatewayError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		_ = conn.WriteJSON(openClawWSFrame{Type: "event", Event: "connect.challenge", Data: map[string]any{"nonce": "challenge-token"}})
+		var connectReq openClawWSFrame
+		if err := conn.ReadJSON(&connectReq); err != nil {
+			return
+		}
+		_ = conn.WriteJSON(openClawWSFrame{Type: "res", ID: connectReq.ID, OK: true, Data: map[string]any{"connected": true}})
+
+		var frame openClawWSFrame
+		if err := conn.ReadJSON(&frame); err != nil {
+			return
+		}
+		if frame.Method != "device.pairing.unpair" {
+			t.Fatalf("expected unpair method, got %q", frame.Method)
+		}
+		_ = conn.WriteJSON(openClawWSFrame{Type: "res", ID: frame.ID, OK: false, Error: "device not found"})
+	}))
+	defer server.Close()
+
+	client := NewWSClient("ws"+strings.TrimPrefix(server.URL, "http"), "token")
+	client.keepAliveInterval = 0
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := client.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer client.Close()
+
+	err := client.UnpairDevice(ctx, "missing-device")
+	if err == nil || !strings.Contains(err.Error(), "device not found") {
+		t.Fatalf("expected gateway unpair error, got %v", err)
+	}
+}
+
 func TestGatewayClientReadLoopCallbacks(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
