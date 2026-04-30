@@ -281,7 +281,7 @@ func (m *Manager) ToolApprovalHook(session *state.Session, cfg *config.Config, m
 		return nil
 	}
 	return func(ctx context.Context, tc agent.ToolCall) error {
-		return m.RequireToolApproval(session, meta, tc.Name, tc.Args)
+		return m.RequireToolApproval(session, meta, tc.Name, tc.Args, tc.RequiresApproval)
 	}
 }
 
@@ -294,11 +294,11 @@ func (m *Manager) ProtocolApprovalHook(session *state.Session, cfg *config.Confi
 	}
 }
 
-func (m *Manager) RequireToolApproval(session *state.Session, meta ApprovalContext, toolName string, args map[string]any) error {
+func (m *Manager) RequireToolApproval(session *state.Session, meta ApprovalContext, toolName string, args map[string]any, forceApproval ...bool) error {
 	if m == nil || session == nil {
 		return nil
 	}
-	if !taskrunner.RequiresToolApprovalName(toolName) {
+	if !requiresToolApprovalNameOrFlag(toolName, forceApproval...) {
 		return nil
 	}
 
@@ -341,6 +341,15 @@ func (m *Manager) RequireToolApproval(session *state.Session, meta ApprovalConte
 		"source":      firstNonEmpty(strings.TrimSpace(meta.Source), "session"),
 	})
 	return ErrTaskWaitingApproval
+}
+
+func requiresToolApprovalNameOrFlag(name string, forceApproval ...bool) bool {
+	for _, force := range forceApproval {
+		if force {
+			return true
+		}
+	}
+	return taskrunner.RequiresToolApprovalName(name)
 }
 
 func (m *Manager) ResumeApproved(ctx context.Context, approval *state.Approval) error {

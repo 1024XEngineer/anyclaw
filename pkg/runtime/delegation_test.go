@@ -102,6 +102,74 @@ func TestDelegationServiceAllowsExplicitMultiAgentSelection(t *testing.T) {
 	}
 }
 
+func TestDelegationServiceAutoSelectionUsesScoredPersistentAgents(t *testing.T) {
+	service := newDelegationService(&MainRuntime{
+		Orchestrator: newTestOrchestratorWithDefinitions(t,
+			orchestrator.AgentDefinition{
+				Name:            "generalist",
+				Description:     "Handles broad delegated sub-tasks",
+				PermissionLevel: "limited",
+			},
+			orchestrator.AgentDefinition{
+				Name:            "security-reviewer",
+				Description:     "Reviews permission and governance changes",
+				Domain:          "security",
+				Expertise:       []string{"permissions"},
+				PermissionLevel: "limited",
+			},
+		),
+	})
+
+	result, err := service.Delegate(context.Background(), DelegationRequest{
+		Task:          "security permissions review",
+		SelectionMode: "auto",
+	})
+	if err != nil {
+		t.Fatalf("Delegate: %v", err)
+	}
+	if len(result.SelectedAgents) != 1 || result.SelectedAgents[0] != "security-reviewer" {
+		t.Fatalf("expected auto mode to select security-reviewer, got %#v", result.SelectedAgents)
+	}
+	if result.SelectionMode != "auto" {
+		t.Fatalf("expected result selection mode auto, got %#v", result)
+	}
+}
+
+func TestDelegationServiceExplicitSelectionRequiresAgentNames(t *testing.T) {
+	service := newDelegationService(&MainRuntime{
+		Orchestrator: newTestOrchestratorWithNames(t, "specialist"),
+	})
+
+	result, err := service.Delegate(context.Background(), DelegationRequest{
+		Task:          "Inspect the repository",
+		SelectionMode: "explicit",
+	})
+	if err == nil {
+		t.Fatalf("expected explicit mode without agent names to fail, got %#v", result)
+	}
+	if !strings.Contains(err.Error(), "requires at least one agent name") {
+		t.Fatalf("expected explicit mode validation error, got %v", err)
+	}
+}
+
+func TestDelegationServiceExplicitSelectionRejectsUnknownAgent(t *testing.T) {
+	service := newDelegationService(&MainRuntime{
+		Orchestrator: newTestOrchestratorWithNames(t, "specialist"),
+	})
+
+	result, err := service.Delegate(context.Background(), DelegationRequest{
+		Task:          "Inspect the repository",
+		AgentNames:    []string{"ghost"},
+		SelectionMode: "explicit",
+	})
+	if err == nil {
+		t.Fatalf("expected explicit mode with unknown agent to fail, got %#v", result)
+	}
+	if !strings.Contains(err.Error(), "unknown target agents") {
+		t.Fatalf("expected unknown target agent error, got %v", err)
+	}
+}
+
 func TestDelegationServiceCreatesTemporarySubagentWhenNoPersistentAgentsExist(t *testing.T) {
 	service := newDelegationService(&MainRuntime{
 		Orchestrator: newTestOrchestratorWithNames(t),
@@ -146,9 +214,6 @@ func newTestOrchestrator(t *testing.T) *orchestrator.Orchestrator {
 func newTestOrchestratorWithNames(t *testing.T, names ...string) *orchestrator.Orchestrator {
 	t.Helper()
 
-	mem := newTestMemory(t)
-	t.Cleanup(func() { mem.Close() })
-
 	defs := make([]orchestrator.AgentDefinition, 0, len(names))
 	for _, name := range names {
 		defs = append(defs, orchestrator.AgentDefinition{
@@ -157,6 +222,14 @@ func newTestOrchestratorWithNames(t *testing.T, names ...string) *orchestrator.O
 			PermissionLevel: "limited",
 		})
 	}
+	return newTestOrchestratorWithDefinitions(t, defs...)
+}
+
+func newTestOrchestratorWithDefinitions(t *testing.T, defs ...orchestrator.AgentDefinition) *orchestrator.Orchestrator {
+	t.Helper()
+
+	mem := newTestMemory(t)
+	t.Cleanup(func() { mem.Close() })
 
 	orch, err := orchestrator.NewOrchestrator(orchestrator.OrchestratorConfig{
 		MaxConcurrentAgents: 1,

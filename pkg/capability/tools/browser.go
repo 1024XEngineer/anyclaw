@@ -223,6 +223,19 @@ func BrowserNavigateTool(ctx context.Context, input map[string]any) (string, err
 	return fmt.Sprintf("Navigated tab %s to %s (title: %s)", pageCtx.id, urlStr, title), nil
 }
 
+func BrowserNavigateToolWithPolicy(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	urlStr, _ := input["url"].(string)
+	if strings.TrimSpace(urlStr) == "" {
+		return "", fmt.Errorf("url is required")
+	}
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckEgressURL(urlStr); err != nil {
+			return "", err
+		}
+	}
+	return BrowserNavigateTool(ctx, input)
+}
+
 func BrowserClickTool(ctx context.Context, input map[string]any) (string, error) {
 	selector, _ := input["selector"].(string)
 	sessionID := resolveBrowserSessionID(ctx, input)
@@ -636,6 +649,13 @@ func BrowserDownloadToolWithPolicy(ctx context.Context, input map[string]any, op
 	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("path is required")
 	}
+	if opts.Policy != nil {
+		if urlStr, _ := input["url"].(string); strings.TrimSpace(urlStr) != "" {
+			if err := opts.Policy.CheckEgressURL(urlStr); err != nil {
+				return "", err
+			}
+		}
+	}
 	resolved := normalizePolicyArtifactPath(path, opts.WorkingDir)
 	if opts.Policy != nil {
 		if err := opts.Policy.CheckWritePath(resolved); err != nil {
@@ -673,6 +693,17 @@ func BrowserTabNewTool(ctx context.Context, input map[string]any) (string, error
 		}
 	}
 	return fmt.Sprintf("Created tab %s in browser session %s", page.id, sessionID), nil
+}
+
+func BrowserTabNewToolWithPolicy(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
+	if opts.Policy != nil {
+		if urlStr, _ := input["url"].(string); strings.TrimSpace(urlStr) != "" {
+			if err := opts.Policy.CheckEgressURL(urlStr); err != nil {
+				return "", err
+			}
+		}
+	}
+	return BrowserTabNewTool(ctx, input)
 }
 
 func BrowserTabListTool(ctx context.Context, input map[string]any) (string, error) {

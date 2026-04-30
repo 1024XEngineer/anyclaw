@@ -9,7 +9,7 @@ import (
 
 func TestBuiltinOperatorCanUseMutablePlatformRoutes(t *testing.T) {
 	permissions := ResolveRolePermissions(&config.SecurityConfig{}, "operator")
-	for _, permission := range []string{"market.write", "mcp.write", "nodes.write"} {
+	for _, permission := range []string{"market.write", "mcp.write", "nodes.write", "tools.write"} {
 		if !slices.Contains(permissions, permission) {
 			t.Fatalf("builtin operator missing %q in %v", permission, permissions)
 		}
@@ -18,7 +18,7 @@ func TestBuiltinOperatorCanUseMutablePlatformRoutes(t *testing.T) {
 
 func TestBuiltinViewerDoesNotGetPlatformWritePermissions(t *testing.T) {
 	permissions := ResolveRolePermissions(&config.SecurityConfig{}, "viewer")
-	for _, permission := range []string{"market.write", "mcp.write", "nodes.write"} {
+	for _, permission := range []string{"market.write", "mcp.write", "nodes.write", "tools.write"} {
 		if slices.Contains(permissions, permission) {
 			t.Fatalf("builtin viewer unexpectedly has %q in %v", permission, permissions)
 		}

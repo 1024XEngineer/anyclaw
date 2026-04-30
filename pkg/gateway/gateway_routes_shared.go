@@ -61,7 +61,7 @@ func (s *Server) registerRuntimeGovernanceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/runtimes/metrics", s.wrap("/runtimes/metrics", requirePermission("runtimes.read", s.controlPlaneRuntimeAPI().HandleMetrics)))
 	mux.HandleFunc("/auth/users", s.wrap("/auth/users", s.handleUsers))
 	mux.HandleFunc("/auth/roles", s.wrap("/auth/roles", s.handleRoles))
-	mux.HandleFunc("/auth/roles/impact", s.wrap("/auth/roles/impact", requirePermission("auth.users.read", s.handleRoleImpact)))
+	mux.HandleFunc("/auth/roles/impact", s.wrap("/auth/roles/impact", requirePermission("auth.roles.read", s.handleRoleImpact)))
 	mux.HandleFunc("/audit", s.wrap("/audit", requirePermission("audit.read", s.handleAudit)))
 	mux.HandleFunc("/jobs", s.wrap("/jobs", requirePermission("jobs.read", s.handleJobs)))
 	mux.HandleFunc("/jobs/", s.wrap("/jobs/", requirePermission("jobs.read", s.handleJobByID)))

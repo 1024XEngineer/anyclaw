@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/1024XEngineer/anyclaw/pkg/capability/skills"
 	"github.com/1024XEngineer/anyclaw/pkg/config"
 	"github.com/1024XEngineer/anyclaw/pkg/runtime/orchestrator"
 )
@@ -72,6 +73,10 @@ func BuildOrchestratorConfig(cfg *config.Config, workDir string, workingDir stri
 		AgentDefinitions:    defs,
 		EnableDecomposition: orchCfg.EnableDecomposition,
 		DefaultWorkingDir:   workingDir,
+		SkillExecution: &skills.ExecutionOptions{
+			AllowExec:          cfg.Plugins.AllowExec,
+			ExecTimeoutSeconds: cfg.Plugins.ExecTimeoutSeconds,
+		},
 	}
 }
 
@@ -82,6 +87,8 @@ func resolveSubAgentDefinition(saCfg config.SubAgentConfig, global config.LLMCon
 		Role:            saCfg.Role,
 		ParentRef:       saCfg.ParentRef,
 		Persona:         saCfg.Personality,
+		Domain:          saCfg.Domain,
+		Expertise:       append([]string(nil), saCfg.Expertise...),
 		PrivateSkills:   saCfg.PrivateSkills,
 		PermissionLevel: saCfg.PermissionLevel,
 		WorkingDir:      saCfg.WorkingDir,

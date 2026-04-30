@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
 const maxFetchBytes = 2 * 1024 * 1024
+const SearchEndpoint = "https://ddg-api.vercel.app/search"
 
 type SearchResult struct {
 	Title       string
@@ -24,7 +26,14 @@ func Search(ctx context.Context, query string, maxResults int) ([]SearchResult, 
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://ddg-api.vercel.app/search?q="+query, nil)
+	endpoint, err := url.Parse(SearchEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	params := endpoint.Query()
+	params.Set("q", query)
+	endpoint.RawQuery = params.Encode()
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint.String(), nil)
 	if err != nil {
 		return nil, err
 	}

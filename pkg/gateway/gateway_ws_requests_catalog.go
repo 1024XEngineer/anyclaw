@@ -2,7 +2,12 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	"github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
 )
 
 func (c *openClawWSConn) handleCatalogWSRequest(ctx context.Context, frame openClawWSFrame, method string) (bool, error) {
@@ -61,6 +66,15 @@ func (c *openClawWSConn) handleCatalogWSRequest(ctx context.Context, frame openC
 			return true, c.writeResponse(frame.ID, true, []any{}, "")
 		}
 		return true, c.writeResponse(frame.ID, true, c.server.mainRuntime.ListTools(), "")
+	case "tools.invoke", "tools_invoke":
+		if err := c.requirePermission("tools.write"); err != nil {
+			return true, err
+		}
+		result, err := c.invokeToolFromWS(ctx, frame)
+		if err != nil {
+			return true, err
+		}
+		return true, c.writeResponse(frame.ID, true, result, "")
 	case "plugins.list":
 		if err := c.requirePermission("plugins.read"); err != nil {
 			return true, err
@@ -72,4 +86,93 @@ func (c *openClawWSConn) handleCatalogWSRequest(ctx context.Context, frame openC
 	default:
 		return false, nil
 	}
+}
+
+func (c *openClawWSConn) invokeToolFromWS(ctx context.Context, frame openClawWSFrame) (string, error) {
+	if c == nil || c.server == nil || c.server.mainRuntime == nil {
+		return "", fmt.Errorf("runtime tool registry is unavailable")
+	}
+	toolName := firstNonEmpty(mapString(frame.Params, "tool"), mapString(frame.Params, "name"))
+	if toolName == "" {
+		return "", fmt.Errorf("tool parameter required")
+	}
+	args, err := wsToolArgs(frame.Params)
+	if err != nil {
+		return "", err
+	}
+	registry := c.server.mainRuntime.ToolRegistry()
+	if toolRequiresWSApproval(registry, toolName) {
+		return "", fmt.Errorf("tool %s requires approval; invoke it through a task or session", toolName)
+	}
+	sessionScope := c.wsToolSessionScope()
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(toolName)), "browser_") {
+		args["session_id"] = sessionScope
+	}
+	callCtx := tools.WithBrowserSession(ctx, sessionScope)
+	callCtx = tools.WithSandboxScope(callCtx, tools.SandboxScope{
+		SessionID: sessionScope,
+		Channel:   "ws",
+	})
+	callCtx = tools.WithToolCaller(callCtx, tools.ToolCaller{
+		Role:        tools.ToolCallerRoleControlAPI,
+		AgentName:   mapString(c.userSummary(), "name"),
+		ExecutionID: frame.ID,
+	})
+	return c.server.mainRuntime.CallTool(callCtx, toolName, args)
+}
+
+func wsToolArgs(params map[string]any) (map[string]any, error) {
+	if params == nil {
+		return map[string]any{}, nil
+	}
+	raw, ok := params["args"]
+	if !ok {
+		raw = params["input"]
+	}
+	if raw == nil {
+		return map[string]any{}, nil
+	}
+	switch value := raw.(type) {
+	case map[string]any:
+		return value, nil
+	case json.RawMessage:
+		return decodeWSToolArgs(value)
+	case []byte:
+		return decodeWSToolArgs(value)
+	case string:
+		if value == "" {
+			return map[string]any{}, nil
+		}
+		return decodeWSToolArgs([]byte(value))
+	default:
+		return nil, fmt.Errorf("args must be an object")
+	}
+}
+
+func decodeWSToolArgs(data []byte) (map[string]any, error) {
+	var args map[string]any
+	if err := json.Unmarshal(data, &args); err != nil {
+		return nil, fmt.Errorf("invalid tool args: %w", err)
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return args, nil
+}
+
+func toolRequiresWSApproval(registry *tools.Registry, name string) bool {
+	return taskrunner.RequiresToolApprovalName(name) || (registry != nil && registry.RequiresApproval(name))
+}
+
+func (c *openClawWSConn) wsToolSessionScope() string {
+	if c == nil {
+		return uniqueID("ws_tool")
+	}
+	if scope := strings.TrimSpace(c.challenge); scope != "" {
+		return "ws-" + scope
+	}
+	if clientID := strings.TrimSpace(c.transport.ClientID); clientID != "" {
+		return "ws-" + clientID
+	}
+	return uniqueID("ws_tool")
 }

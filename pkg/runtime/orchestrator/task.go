@@ -20,19 +20,23 @@ const (
 )
 
 type SubTask struct {
-	ID            string        `json:"id"`
-	Title         string        `json:"title"`
-	Description   string        `json:"description"`
-	AssignedAgent string        `json:"assigned_agent"`
-	Input         string        `json:"input"`
-	DependsOn     []string      `json:"depends_on,omitempty"`
-	Status        SubTaskStatus `json:"status"`
-	Output        string        `json:"output,omitempty"`
-	Error         string        `json:"error,omitempty"`
-	StartedAt     *time.Time    `json:"started_at,omitempty"`
-	CompletedAt   *time.Time    `json:"completed_at,omitempty"`
-	Duration      time.Duration `json:"duration"`
-	Index         int           `json:"index"`
+	ID                   string        `json:"id"`
+	Title                string        `json:"title"`
+	Description          string        `json:"description"`
+	AssignedAgent        string        `json:"assigned_agent"`
+	Input                string        `json:"input"`
+	DependsOn            []string      `json:"depends_on,omitempty"`
+	Status               SubTaskStatus `json:"status"`
+	Output               string        `json:"output,omitempty"`
+	Error                string        `json:"error,omitempty"`
+	StartedAt            *time.Time    `json:"started_at,omitempty"`
+	CompletedAt          *time.Time    `json:"completed_at,omitempty"`
+	Duration             time.Duration `json:"duration"`
+	Index                int           `json:"index"`
+	AssignmentReason     string        `json:"assignment_reason,omitempty"`
+	AssignmentScore      int           `json:"assignment_score,omitempty"`
+	AssignmentConfidence float64       `json:"assignment_confidence,omitempty"`
+	RequiredCapabilities []string      `json:"required_capabilities,omitempty"`
 }
 
 type DecompositionPlan struct {
@@ -41,11 +45,15 @@ type DecompositionPlan struct {
 }
 
 type AgentCapability struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Domain      string   `json:"domain"`
-	Expertise   []string `json:"expertise"`
-	Skills      []string `json:"skills"`
+	Name            string   `json:"name"`
+	Description     string   `json:"description"`
+	Domain          string   `json:"domain"`
+	Expertise       []string `json:"expertise"`
+	Skills          []string `json:"skills"`
+	Tools           []string `json:"tools,omitempty"`
+	ToolCategories  []string `json:"tool_categories,omitempty"`
+	PermissionLevel string   `json:"permission_level,omitempty"`
+	Keywords        []string `json:"keywords,omitempty"`
 }
 
 type TaskDecomposer struct {
@@ -68,10 +76,13 @@ type planPayload struct {
 }
 
 type planStep struct {
-	Title         string `json:"title"`
-	Description   string `json:"description"`
-	AssignedAgent string `json:"assigned_agent"`
-	DependsOn     []int  `json:"depends_on,omitempty"`
+	Title                string   `json:"title"`
+	Description          string   `json:"description"`
+	AssignedAgent        string   `json:"assigned_agent"`
+	DependsOn            []int    `json:"depends_on,omitempty"`
+	RequiredCapabilities []string `json:"required_capabilities,omitempty"`
+	Confidence           float64  `json:"confidence,omitempty"`
+	Reason               string   `json:"reason,omitempty"`
 }
 
 func NewTaskDecomposer(llm TaskPlannerLLM) *TaskDecomposer {
@@ -83,13 +94,17 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, taskID string, input str
 		return d.defaultDecompose(taskID, input, agents), nil
 	}
 
-	agentDescs := make([]string, len(agents))
-	for i, a := range agents {
-		expertise := ""
-		if len(a.Expertise) > 0 {
-			expertise = "，擅长：" + strings.Join(a.Expertise, "、")
-		}
-		agentDescs[i] = fmt.Sprintf("- %s：%s（领域：%s%s）", a.Name, a.Description, a.Domain, expertise)
+	ranked := rankAgentCandidates(input, agents)
+	candidateScores := selectCandidateWindow(ranked, defaultAgentCandidateLimit)
+	candidates := candidatesToCapabilities(candidateScores)
+	if len(candidates) == 0 {
+		candidates = agents
+		candidateScores = rankAgentCandidates(input, candidates)
+	}
+
+	agentDescs := make([]string, len(candidateScores))
+	for i, score := range candidateScores {
+		agentDescs[i] = formatAgentCandidateForPrompt(score)
 	}
 	agentList := strings.Join(agentDescs, "\n")
 
@@ -103,8 +118,10 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, taskID string, input str
 2. 子任务之间可以有依赖关系（depends_on 使用子任务索引，从0开始）
 3. 前一个子任务的输出会自动传递给依赖它的子任务作为上下文
 4. 每个子任务的 description 要足够详细，让智能体知道具体该做什么
-5. 返回 2-8 个子任务
-6. 只返回 JSON：
+5. 候选智能体已经按 skill、工具类别、权限和关键词预筛选；assigned_agent 只能从候选列表选择
+6. confidence 使用 0-1；低置信度或能力冲突会被系统评分兜底覆盖
+7. 返回 2-8 个子任务
+8. 只返回 JSON：
 
 {
   "summary": "任务总体描述和执行策略",
@@ -113,6 +130,9 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, taskID string, input str
       "title": "子任务标题",
       "description": "详细描述，包括要做什么、输出什么格式",
       "assigned_agent": "智能体名称",
+      "required_capabilities": ["需要的 skill、工具类别或专业能力"],
+      "confidence": 0.85,
+      "reason": "为什么这个智能体最合适",
       "depends_on": []
     }
   ]
@@ -120,32 +140,32 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, taskID string, input str
 		},
 		map[string]string{
 			"role":    "user",
-			"content": fmt.Sprintf("任务：%s\n\n可用智能体：\n%s\n\n请将任务分解并分配给合适的智能体。", input, agentList),
+			"content": fmt.Sprintf("任务：%s\n\n候选智能体：\n%s\n\n请将任务分解并分配给合适的智能体。", input, agentList),
 		},
 	}
 
 	resp, err := d.llm.Chat(ctx, messages, nil)
 	if err != nil {
-		return d.defaultDecompose(taskID, input, agents), nil
+		return d.defaultDecompose(taskID, input, candidates), nil
 	}
 
 	var payload planPayload
 	raw := strings.TrimSpace(resp.Content)
 	if raw == "" {
-		return d.defaultDecompose(taskID, input, agents), nil
+		return d.defaultDecompose(taskID, input, candidates), nil
 	}
 
 	jsonStr := extractJSON(raw)
 	if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
-		return d.defaultDecompose(taskID, input, agents), nil
+		return d.defaultDecompose(taskID, input, candidates), nil
 	}
 
 	if len(payload.SubTasks) == 0 {
-		return d.defaultDecompose(taskID, input, agents), nil
+		return d.defaultDecompose(taskID, input, candidates), nil
 	}
 
-	agentNames := make(map[string]bool, len(agents))
-	for _, a := range agents {
+	agentNames := make(map[string]bool, len(candidates))
+	for _, a := range candidates {
 		agentNames[a.Name] = true
 	}
 
@@ -155,11 +175,27 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, taskID string, input str
 			continue
 		}
 
-		// Validate assigned agent
-		agentName := step.AssignedAgent
+		description := strings.TrimSpace(step.Description)
+		if description == "" {
+			description = strings.TrimSpace(step.Title)
+		}
+		requiredCaps := normalizeAssignmentCapabilities(step.RequiredCapabilities)
+		assignment := chooseAgentAssignment(step.AssignedAgent, description, step.Confidence, requiredCaps, candidates)
+		agentName := assignment.Name
 		if !agentNames[agentName] {
-			// Fallback: find best match
-			agentName = d.findBestAgent(step.Description, agents)
+			agentName = d.findBestAgent(description, candidates)
+			assignment = bestAgentAssignment(description, candidates)
+		}
+		reason := strings.TrimSpace(step.Reason)
+		if reason == "" || agentName != strings.TrimSpace(step.AssignedAgent) {
+			reason = assignment.Reason
+		}
+		confidence := step.Confidence
+		if confidence <= 0 || agentName != strings.TrimSpace(step.AssignedAgent) {
+			confidence = assignment.Confidence
+		}
+		if len(requiredCaps) == 0 {
+			requiredCaps = assignment.RequiredCaps
 		}
 
 		deps := make([]string, 0)
@@ -169,22 +205,26 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, taskID string, input str
 			}
 		}
 
-		inputText := fmt.Sprintf("任务：%s\n子任务：%s\n要求：%s", input, step.Title, step.Description)
+		inputText := fmt.Sprintf("任务：%s\n子任务：%s\n要求：%s", input, step.Title, description)
 
 		subTasks = append(subTasks, SubTask{
-			ID:            fmt.Sprintf("%s_sub_%d", taskID, i),
-			Title:         step.Title,
-			Description:   step.Description,
-			AssignedAgent: agentName,
-			Input:         inputText,
-			DependsOn:     deps,
-			Status:        SubTaskPending,
-			Index:         i,
+			ID:                   fmt.Sprintf("%s_sub_%d", taskID, i),
+			Title:                step.Title,
+			Description:          description,
+			AssignedAgent:        agentName,
+			Input:                inputText,
+			DependsOn:            deps,
+			Status:               SubTaskPending,
+			Index:                i,
+			AssignmentReason:     reason,
+			AssignmentScore:      assignment.Score,
+			AssignmentConfidence: confidence,
+			RequiredCapabilities: requiredCaps,
 		})
 	}
 
 	if len(subTasks) == 0 {
-		return d.defaultDecompose(taskID, input, agents), nil
+		return d.defaultDecompose(taskID, input, candidates), nil
 	}
 
 	// Mark tasks with no dependencies as ready
@@ -208,8 +248,8 @@ func (d *TaskDecomposer) defaultDecompose(taskID string, input string, agents []
 		}
 	}
 
-	// Smart default: pick the agent whose domain/expertise best matches the input
-	agentName := d.findBestAgent(input, agents)
+	assignment := bestAgentAssignment(input, agents)
+	agentName := assignment.Name
 	if agentName == "" {
 		agentName = agents[0].Name
 	}
@@ -218,36 +258,36 @@ func (d *TaskDecomposer) defaultDecompose(taskID string, input string, agents []
 		Summary: fmt.Sprintf("将任务分配给 %s 执行", agentName),
 		SubTasks: []SubTask{
 			{
-				ID:            fmt.Sprintf("%s_sub_0", taskID),
-				Title:         "执行任务",
-				Description:   input,
-				AssignedAgent: agentName,
-				Input:         input,
-				Status:        SubTaskReady,
-				Index:         0,
+				ID:                   fmt.Sprintf("%s_sub_0", taskID),
+				Title:                "执行任务",
+				Description:          input,
+				AssignedAgent:        agentName,
+				Input:                input,
+				Status:               SubTaskReady,
+				Index:                0,
+				AssignmentReason:     assignment.Reason,
+				AssignmentScore:      assignment.Score,
+				AssignmentConfidence: assignment.Confidence,
+				RequiredCapabilities: assignment.RequiredCaps,
 			},
 		},
 	}
 }
 
 func (d *TaskDecomposer) findBestAgent(description string, agents []AgentCapability) string {
-	lower := strings.ToLower(description)
+	return bestAgentAssignment(description, agents).Name
+}
 
-	for _, a := range agents {
-		if a.Domain != "" && strings.Contains(lower, strings.ToLower(a.Domain)) {
-			return a.Name
+func normalizeAssignmentCapabilities(items []string) []string {
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" || containsString(normalized, item) {
+			continue
 		}
-		for _, exp := range a.Expertise {
-			if strings.Contains(lower, strings.ToLower(exp)) {
-				return a.Name
-			}
-		}
+		normalized = append(normalized, item)
 	}
-
-	if len(agents) > 0 {
-		return agents[0].Name
-	}
-	return ""
+	return normalized
 }
 
 type TaskQueue struct {

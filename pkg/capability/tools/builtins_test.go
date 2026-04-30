@@ -254,6 +254,52 @@ func TestFetchURLToolHonorsEgressPolicy(t *testing.T) {
 	}
 }
 
+func TestWebSearchToolHonorsEgressPolicy(t *testing.T) {
+	registry := NewRegistry()
+	RegisterBuiltins(registry, BuiltinOptions{
+		Policy: NewPolicyEngine(PolicyOptions{
+			AllowedEgressDomains: []string{"allowed.example"},
+		}),
+	})
+
+	_, err := registry.Call(context.Background(), "web_search", map[string]any{
+		"query": "anyclaw",
+	})
+	if err == nil || !strings.Contains(err.Error(), "egress denied") {
+		t.Fatalf("expected egress policy denial, got %v", err)
+	}
+}
+
+func TestBrowserNavigationToolsHonorEgressPolicy(t *testing.T) {
+	opts := BuiltinOptions{
+		Policy: NewPolicyEngine(PolicyOptions{
+			AllowedEgressDomains: []string{"allowed.example"},
+		}),
+	}
+
+	_, err := BrowserNavigateToolWithPolicy(context.Background(), map[string]any{
+		"url": "https://blocked.example.invalid",
+	}, opts)
+	if err == nil || !strings.Contains(err.Error(), "egress denied") {
+		t.Fatalf("expected browser navigate egress denial, got %v", err)
+	}
+
+	_, err = BrowserTabNewToolWithPolicy(context.Background(), map[string]any{
+		"url": "https://blocked.example.invalid",
+	}, opts)
+	if err == nil || !strings.Contains(err.Error(), "egress denied") {
+		t.Fatalf("expected browser tab egress denial, got %v", err)
+	}
+
+	_, err = BrowserDownloadToolWithPolicy(context.Background(), map[string]any{
+		"url":  "https://blocked.example.invalid/file.txt",
+		"path": filepath.Join(t.TempDir(), "file.txt"),
+	}, opts)
+	if err == nil || !strings.Contains(err.Error(), "egress denied") {
+		t.Fatalf("expected browser download egress denial, got %v", err)
+	}
+}
+
 func TestFetchURLToolRejectsOversizedResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(strings.Repeat("x", 2*1024*1024+1)))

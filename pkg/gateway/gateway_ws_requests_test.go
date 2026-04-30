@@ -2,12 +2,14 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	gatewayauth "github.com/1024XEngineer/anyclaw/pkg/gateway/auth"
 	gatewaysurface "github.com/1024XEngineer/anyclaw/pkg/gateway/surface"
 	"github.com/gorilla/websocket"
@@ -164,5 +166,110 @@ func TestOpenClawWSCoreMutationAndDeviceRequests(t *testing.T) {
 
 	if ok, err := conn.handleDeviceWSRequest(ctx, openClawWSFrame{}, "unknown.device"); err != nil || ok {
 		t.Fatalf("unexpected unknown device result ok=%v err=%v", ok, err)
+	}
+}
+
+func TestOpenClawWSToolsInvokeDispatch(t *testing.T) {
+	server := newSplitAPITestServer(t)
+	server.mainRuntime.Tools = tools.NewRegistry()
+	tools.RegisterBuiltins(server.mainRuntime.Tools, tools.BuiltinOptions{})
+	server.mainRuntime.Tools.RegisterTool("echo_text", "Echo text", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		text, _ := input["text"].(string)
+		return text, nil
+	})
+	server.mainRuntime.Tools.RegisterTool("browser_probe", "Probe browser scope", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		sessionID, _ := input["session_id"].(string)
+		return sessionID, nil
+	})
+
+	conn, clientConn := newWSTestConn(t, server)
+	ctx := gatewayauth.WithUser(context.Background(), conn.user)
+	handled, err := conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID: "invoke-1",
+		Params: map[string]any{
+			"tool": "echo_text",
+			"args": map[string]any{"text": "hello"},
+		},
+	}, "tools.invoke")
+	if err != nil || !handled {
+		t.Fatalf("tools.invoke handled=%v err=%v", handled, err)
+	}
+	if frame := readWSFrame(t, clientConn); !frame.OK || frame.Data != "hello" {
+		t.Fatalf("tools.invoke response = %+v, want ok hello", frame)
+	}
+
+	handled, err = conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID:     "invoke-status",
+		Params: map[string]any{"tool": "session_status"},
+	}, "tools.invoke")
+	if err != nil || !handled {
+		t.Fatalf("tools.invoke session_status handled=%v err=%v", handled, err)
+	}
+	frame := readWSFrame(t, clientConn)
+	statusRaw, _ := frame.Data.(string)
+	var status map[string]any
+	if !frame.OK || json.Unmarshal([]byte(statusRaw), &status) != nil {
+		t.Fatalf("session_status response = %+v", frame)
+	}
+	scope := conn.wsToolSessionScope()
+	if status["session_id"] != scope || status["browser_session"] != scope || status["channel"] != "ws" || status["caller_role"] != "control_api" {
+		t.Fatalf("expected isolated WS context scope %q, got %#v", scope, status)
+	}
+
+	handled, err = conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID: "invoke-browser-probe",
+		Params: map[string]any{
+			"tool": "browser_probe",
+			"args": map[string]any{"session_id": "default"},
+		},
+	}, "tools.invoke")
+	if err != nil || !handled {
+		t.Fatalf("tools.invoke browser_probe handled=%v err=%v", handled, err)
+	}
+	if frame := readWSFrame(t, clientConn); !frame.OK || frame.Data != scope {
+		t.Fatalf("browser probe response = %+v, want scoped session %q", frame, scope)
+	}
+
+	server.mainRuntime.Tools.Register(&tools.Tool{
+		Name:             "dynamic_runner",
+		Description:      "Dynamic executable wrapper",
+		InputSchema:      map[string]any{},
+		RequiresApproval: true,
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			return "ran", nil
+		},
+	})
+	handled, err = conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID:     "invoke-approval",
+		Params: map[string]any{"tool": "dynamic_runner"},
+	}, "tools.invoke")
+	if !handled || err == nil || !strings.Contains(err.Error(), "requires approval") {
+		t.Fatalf("expected approval-required WS invoke to be rejected, handled=%v err=%v", handled, err)
+	}
+
+	server.mainRuntime.Tools.Register(&tools.Tool{
+		Name:        "internal_agent_tool",
+		Description: "Internal main-agent-only helper",
+		InputSchema: map[string]any{},
+		Visibility:  tools.ToolVisibilityMainAgentOnly,
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			return "internal", nil
+		},
+	})
+	handled, err = conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID:     "invoke-internal",
+		Params: map[string]any{"tool": "internal_agent_tool"},
+	}, "tools.invoke")
+	if !handled || err == nil || !strings.Contains(err.Error(), "not available for caller role control_api") {
+		t.Fatalf("expected main-agent-only WS invoke to be rejected, handled=%v err=%v", handled, err)
+	}
+
+	conn.user = &gatewayauth.User{Name: "reader", Permissions: []string{"tools.read"}}
+	handled, err = conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID:     "invoke-forbidden",
+		Params: map[string]any{"tool": "echo_text"},
+	}, "tools.invoke")
+	if !handled || err == nil || !strings.Contains(err.Error(), "tools.write") {
+		t.Fatalf("expected tools.write permission failure, handled=%v err=%v", handled, err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +55,7 @@ type BuiltinOptions struct {
 	ProtectedPaths          []string
 	AllowedReadPaths        []string
 	AllowedWritePaths       []string
+	AllowedEgressDomains    []string
 	Policy                  *PolicyEngine
 	CommandTimeoutSeconds   int
 	ConfirmDangerousCommand DangerousCommandConfirmer
@@ -105,21 +107,23 @@ const (
 const (
 	ToolCachePolicyDefault ToolCachePolicy = "default"
 	ToolCachePolicyNever   ToolCachePolicy = "never"
+	ToolCachePolicyCache   ToolCachePolicy = "cache"
 )
 
 // Tool 工具结构
 type Tool struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-	Handler     ToolFunc
-	Category    ToolCategory
-	AccessLevel ToolAccessLevel
-	Visibility  ToolVisibility
-	CachePolicy ToolCachePolicy
-	Timeout     time.Duration
-	Retryable   bool
-	MaxRetries  int
+	Name             string
+	Description      string
+	InputSchema      map[string]any
+	Handler          ToolFunc
+	Category         ToolCategory
+	AccessLevel      ToolAccessLevel
+	Visibility       ToolVisibility
+	CachePolicy      ToolCachePolicy
+	RequiresApproval bool
+	Timeout          time.Duration
+	Retryable        bool
+	MaxRetries       int
 }
 
 // Registry 工具注册表
@@ -147,16 +151,16 @@ func (r *Registry) RegisterTool(name string, desc string, schema map[string]any,
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.tools[name] = &Tool{
+	r.registerLocked(&Tool{
 		Name:        name,
 		Description: desc,
 		InputSchema: schema,
 		Handler:     handler,
-		Category:    ToolCategoryCustom,
+		Category:    inferToolCategory(name),
 		AccessLevel: ToolAccessPublic,
 		Visibility:  ToolVisibilityAll,
 		CachePolicy: ToolCachePolicyDefault,
-	}
+	})
 }
 
 // Register 注册工具
@@ -164,15 +168,70 @@ func (r *Registry) Register(t *Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.registerLocked(t)
+}
+
+func (r *Registry) registerLocked(t *Tool) {
+	if t == nil {
+		return
+	}
 	if t.Visibility == "" {
 		t.Visibility = ToolVisibilityAll
+	}
+	if t.Category == "" {
+		t.Category = inferToolCategory(t.Name)
 	}
 	if t.CachePolicy == "" {
 		t.CachePolicy = ToolCachePolicyDefault
 	}
+	if existing, ok := r.tools[t.Name]; ok && existing != nil && existing.Category != "" {
+		r.removeCategoryLocked(existing.Category, t.Name)
+	}
 	r.tools[t.Name] = t
-	if t.Category != "" {
+	if t.Category != "" && !toolNameInCategory(r.categories[t.Category], t.Name) {
 		r.categories[t.Category] = append(r.categories[t.Category], t.Name)
+	}
+}
+
+func (r *Registry) removeCategoryLocked(category ToolCategory, name string) {
+	names := r.categories[category]
+	for i, item := range names {
+		if item == name {
+			r.categories[category] = append(names[:i], names[i+1:]...)
+			return
+		}
+	}
+}
+
+func toolNameInCategory(names []string, name string) bool {
+	for _, item := range names {
+		if item == name {
+			return true
+		}
+	}
+	return false
+}
+
+func inferToolCategory(name string) ToolCategory {
+	name = strings.TrimSpace(name)
+	switch {
+	case name == "read" || name == "write" || name == "edit" || name == "apply_patch",
+		name == "read_file" || name == "write_file" || name == "list_directory" || name == "search_files":
+		return ToolCategoryFile
+	case name == "exec" || name == "process" || name == "run_command":
+		return ToolCategoryCommand
+	case name == "web_fetch" || name == "web_search" || name == "fetch_url":
+		return ToolCategoryWeb
+	case strings.HasPrefix(name, "browser_"):
+		return ToolCategoryBrowser
+	case strings.HasPrefix(name, "desktop_"):
+		return ToolCategoryDesktop
+	case strings.HasPrefix(name, "memory_"):
+		return ToolCategoryMemory
+	case strings.HasPrefix(name, "channel_"):
+		return ToolCategoryChannel
+	default:
+		return ToolCategoryCustom
 	}
 }
 
@@ -231,7 +290,7 @@ func (r *Registry) Call(ctx context.Context, name string, input map[string]any) 
 	}
 
 	// 检查缓存
-	cacheEnabled := t.CachePolicy != ToolCachePolicyNever
+	cacheEnabled := t.CachePolicy == ToolCachePolicyCache
 	cacheKey := ""
 	if cacheEnabled {
 		cacheKey = r.generateCacheKey(name, input)
@@ -376,13 +435,14 @@ func (r *Registry) GetToolDefinitionsForRole(isSubAgent bool) []map[string]any {
 			continue
 		}
 		defs = append(defs, map[string]any{
-			"name":         tool.Name,
-			"description":  tool.Description,
-			"category":     string(tool.Category),
-			"access_level": string(tool.AccessLevel),
-			"visibility":   string(tool.Visibility),
-			"cache_policy": string(tool.CachePolicy),
-			"input_schema": tool.InputSchema,
+			"name":              tool.Name,
+			"description":       tool.Description,
+			"category":          string(tool.Category),
+			"access_level":      string(tool.AccessLevel),
+			"visibility":        string(tool.Visibility),
+			"cache_policy":      string(tool.CachePolicy),
+			"requires_approval": tool.RequiresApproval,
+			"input_schema":      tool.InputSchema,
 		})
 	}
 
@@ -402,11 +462,14 @@ func (r *Registry) GetToolDefinitionsJSON() (string, error) {
 
 // ToolInfo 工具信息
 type ToolInfo struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-	Visibility  ToolVisibility
-	CachePolicy ToolCachePolicy
+	Name             string
+	Description      string
+	InputSchema      map[string]any
+	Category         ToolCategory
+	AccessLevel      ToolAccessLevel
+	Visibility       ToolVisibility
+	CachePolicy      ToolCachePolicy
+	RequiresApproval bool
 }
 
 // List 列出工具信息
@@ -425,14 +488,28 @@ func (r *Registry) ListForRole(isSubAgent bool) []ToolInfo {
 			continue
 		}
 		list = append(list, ToolInfo{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-			Visibility:  t.Visibility,
-			CachePolicy: t.CachePolicy,
+			Name:             t.Name,
+			Description:      t.Description,
+			InputSchema:      t.InputSchema,
+			Category:         t.Category,
+			AccessLevel:      t.AccessLevel,
+			Visibility:       t.Visibility,
+			CachePolicy:      t.CachePolicy,
+			RequiresApproval: t.RequiresApproval,
 		})
 	}
 	return list
+}
+
+func (r *Registry) RequiresApproval(name string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	t, ok := r.tools[name]
+	return ok && t != nil && t.RequiresApproval
 }
 
 func toolVisibleForRole(tool *Tool, isSubAgent bool) bool {
@@ -464,6 +541,8 @@ func toolVisibleForCaller(tool *Tool, role ToolCallerRole) bool {
 	switch role {
 	case ToolCallerRoleSubAgent:
 		return toolVisibleForRole(tool, true)
+	case ToolCallerRoleControlAPI:
+		return tool.Visibility != ToolVisibilityMainAgentOnly
 	case ToolCallerRoleMainAgent, ToolCallerRoleSystem:
 		return true
 	default:

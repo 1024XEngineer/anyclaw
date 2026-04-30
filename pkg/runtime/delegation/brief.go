@@ -10,6 +10,7 @@ import (
 type Request struct {
 	Task            string   `json:"task"`
 	AgentNames      []string `json:"agent_names,omitempty"`
+	SelectionMode   string   `json:"selection_mode,omitempty"`
 	Reason          string   `json:"reason,omitempty"`
 	SuccessCriteria string   `json:"success_criteria,omitempty"`
 	UserContext     string   `json:"user_context,omitempty"`
@@ -26,7 +27,14 @@ type Result struct {
 	ErrorSummary    string                 `json:"error_summary,omitempty"`
 	Stats           orchestrator.TaskStats `json:"stats"`
 	SubTasks        []orchestrator.SubTask `json:"sub_tasks,omitempty"`
+	SelectionMode   string                 `json:"selection_mode,omitempty"`
 }
+
+const (
+	SelectionModeConservative = "conservative"
+	SelectionModeAuto         = "auto"
+	SelectionModeExplicit     = "explicit"
+)
 
 func BuildBrief(req Request) string {
 	lines := []string{
@@ -71,6 +79,17 @@ func NormalizeNames(items []string) []string {
 		result = append(result, name)
 	}
 	return result
+}
+
+func NormalizeSelectionMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case SelectionModeAuto:
+		return SelectionModeAuto
+	case SelectionModeExplicit:
+		return SelectionModeExplicit
+	default:
+		return SelectionModeConservative
+	}
 }
 
 func StatusForResult(result *orchestrator.OrchestratorResult, runErr error) string {

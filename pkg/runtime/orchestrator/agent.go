@@ -75,11 +75,24 @@ type LLMConfig struct {
 	Proxy       string
 }
 
+type SubAgentRuntimeOptions struct {
+	SkillExecution *skills.ExecutionOptions
+	BuiltinTools   *tools.BuiltinOptions
+}
+
 func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem memory.MemoryBackend) (*SubAgent, error) {
 	return NewSubAgentWithContext(def, llmClient, allSkills, baseTools, mem, nil, "")
 }
 
-func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem memory.MemoryBackend, isoManager *isolation.ContextIsolationManager, parentScopeID string) (*SubAgent, error) {
+func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem memory.MemoryBackend, isoManager *isolation.ContextIsolationManager, parentScopeID string, skillExecutionOptions ...skills.ExecutionOptions) (*SubAgent, error) {
+	runtimeOpts := SubAgentRuntimeOptions{}
+	if len(skillExecutionOptions) > 0 {
+		runtimeOpts.SkillExecution = &skillExecutionOptions[0]
+	}
+	return NewSubAgentWithRuntimeOptions(def, llmClient, allSkills, baseTools, mem, isoManager, parentScopeID, runtimeOpts)
+}
+
+func NewSubAgentWithRuntimeOptions(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem memory.MemoryBackend, isoManager *isolation.ContextIsolationManager, parentScopeID string, runtimeOpts SubAgentRuntimeOptions) (*SubAgent, error) {
 	if strings.TrimSpace(def.Name) == "" {
 		return nil, fmt.Errorf("agent name is required")
 	}
@@ -122,25 +135,33 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 	var privateSkills *skills.SkillsManager
 	if len(def.PrivateSkills) > 0 && allSkills != nil {
 		privateSkills = allSkills.FilterEnabled(def.PrivateSkills)
-	} else if allSkills != nil {
-		privateSkills = allSkills
 	} else {
 		privateSkills = skills.NewSkillsManager("")
 	}
 
 	// Build private tool registry filtered by permission
 	privateTools := tools.NewRegistry()
+	if runtimeOpts.BuiltinTools != nil {
+		builtinTools := tools.NewRegistry()
+		toolOpts := subAgentBuiltinOptions(*runtimeOpts.BuiltinTools, def, permLevel)
+		tools.RegisterBuiltins(builtinTools, toolOpts)
+		copyAllowedTools(privateTools, builtinTools.ListToolsForRole(true), permLevel)
+	}
 	if baseTools != nil {
 		for _, tool := range baseTools.ListToolsForRole(true) {
-			if isToolAllowedForPermission(tool.Name, permLevel) {
-				privateTools.Register(tool)
+			if !isToolAllowedForPermission(tool.Name, permLevel) {
+				continue
 			}
+			if _, exists := privateTools.Get(tool.Name); exists {
+				continue
+			}
+			privateTools.Register(tool)
 		}
 	}
 
-	// Register skills as tools
+	// Register skills as tools.
 	if privateSkills != nil {
-		privateSkills.RegisterTools(privateTools, skills.ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: 30})
+		privateSkills.RegisterTools(privateTools, resolveSubAgentSkillExecutionOptions(runtimeOpts.SkillExecution))
 	}
 
 	// Each agent gets its own memory instance for isolation
@@ -249,6 +270,51 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 	return subAgent, nil
 }
 
+func subAgentBuiltinOptions(base tools.BuiltinOptions, def AgentDefinition, permLevel string) tools.BuiltinOptions {
+	opts := base
+	if workingDir := strings.TrimSpace(def.WorkingDir); workingDir != "" {
+		opts.WorkingDir = workingDir
+	}
+	opts.PermissionLevel = permLevel
+	if opts.Policy != nil {
+		opts.Policy = tools.NewPolicyEngine(tools.PolicyOptions{
+			WorkingDir:           opts.WorkingDir,
+			PermissionLevel:      permLevel,
+			ProtectedPaths:       opts.ProtectedPaths,
+			AllowedReadPaths:     opts.AllowedReadPaths,
+			AllowedWritePaths:    opts.AllowedWritePaths,
+			AllowedEgressDomains: opts.AllowedEgressDomains,
+		})
+	}
+	return opts
+}
+
+func copyAllowedTools(target *tools.Registry, candidates []*tools.Tool, permLevel string) {
+	if target == nil {
+		return
+	}
+	for _, tool := range candidates {
+		if tool == nil || !isToolAllowedForPermission(tool.Name, permLevel) {
+			continue
+		}
+		if _, exists := target.Get(tool.Name); exists {
+			continue
+		}
+		target.Register(tool)
+	}
+}
+
+func defaultSubAgentSkillExecutionOptions() skills.ExecutionOptions {
+	return skills.ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: 30}
+}
+
+func resolveSubAgentSkillExecutionOptions(options *skills.ExecutionOptions) skills.ExecutionOptions {
+	if options == nil {
+		return defaultSubAgentSkillExecutionOptions()
+	}
+	return *options
+}
+
 func maxTokensForAgent(def AgentDefinition) int {
 	if def.LLMMaxTokens != nil && *def.LLMMaxTokens > 0 {
 		return *def.LLMMaxTokens
@@ -304,6 +370,8 @@ func isToolAllowedForPermission(toolName string, permLevel string) bool {
 			"browser_close", "browser_eval", "browser_select", "browser_press", "browser_type",
 			"desktop_screenshot", "desktop_screenshot_window", "desktop_list_windows", "desktop_wait_window", "desktop_inspect_ui", "desktop_resolve_target", "desktop_match_image", "desktop_wait_image", "desktop_ocr", "desktop_verify_text", "desktop_find_text", "desktop_wait_text", "desktop_clipboard_get":
 			return true
+		case "write", "edit", "apply_patch", "exec", "process":
+			return false
 		default:
 			return !strings.HasPrefix(toolName, "write_") &&
 				!strings.HasPrefix(toolName, "run_command") &&
@@ -370,6 +438,41 @@ func (sa *SubAgent) Skills() []string {
 		names[i] = s.Name
 	}
 	return names
+}
+
+func (sa *SubAgent) Tools() []string {
+	if sa.tools == nil {
+		return nil
+	}
+	list := sa.tools.ListForRole(true)
+	names := make([]string, 0, len(list))
+	for _, tool := range list {
+		if strings.TrimSpace(tool.Name) != "" {
+			names = append(names, tool.Name)
+		}
+	}
+	return names
+}
+
+func (sa *SubAgent) ToolCategories() []string {
+	if sa.tools == nil {
+		return nil
+	}
+	list := sa.tools.ListForRole(true)
+	seen := make(map[string]struct{}, len(list))
+	categories := make([]string, 0)
+	for _, tool := range list {
+		category := strings.TrimSpace(string(tool.Category))
+		if category == "" {
+			continue
+		}
+		if _, ok := seen[category]; ok {
+			continue
+		}
+		seen[category] = struct{}{}
+		categories = append(categories, category)
+	}
+	return categories
 }
 
 func (sa *SubAgent) PermissionLevel() string {
@@ -455,6 +558,8 @@ type AgentInfo struct {
 	Domain            string   `json:"domain,omitempty"`
 	Expertise         []string `json:"expertise,omitempty"`
 	Skills            []string `json:"skills,omitempty"`
+	Tools             []string `json:"tools,omitempty"`
+	ToolCategories    []string `json:"tool_categories,omitempty"`
 	PermissionLevel   string   `json:"permission_level,omitempty"`
 	LLMProvider       string   `json:"llm_provider,omitempty"`
 	LLMModel          string   `json:"llm_model,omitempty"`
@@ -563,6 +668,8 @@ func (p *AgentPool) ListInfos() []AgentInfo {
 			Domain:            sa.Domain(),
 			Expertise:         sa.Expertise(),
 			Skills:            sa.Skills(),
+			Tools:             sa.Tools(),
+			ToolCategories:    sa.ToolCategories(),
 			PermissionLevel:   sa.PermissionLevel(),
 			LLMProvider:       sa.definition.LLMProvider,
 			LLMModel:          sa.definition.LLMModel,

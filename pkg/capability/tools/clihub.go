@@ -80,10 +80,14 @@ func RegisterCLIHubTools(r *Registry, opts BuiltinOptions) {
 			},
 			"required": []string{"name", "args"},
 		},
-		Category:    ToolCategoryCustom,
-		AccessLevel: ToolAccessPublic,
+		Category:         ToolCategoryCustom,
+		AccessLevel:      ToolAccessPublic,
+		RequiresApproval: true,
 		Handler: func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "clihub_exec", input, func(ctx context.Context, input map[string]any) (string, error) {
+				if err := RequestToolApproval(ctx, "clihub_exec", input); err != nil {
+					return "", err
+				}
 				cat, err := clihub.Load(root)
 				if err != nil {
 					return "", err

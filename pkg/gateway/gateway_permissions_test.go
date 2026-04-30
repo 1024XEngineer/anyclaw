@@ -100,6 +100,111 @@ func TestGatewayMutablePlatformRoutesRequireWritePermission(t *testing.T) {
 	}
 }
 
+func TestGatewayAuthUserMutationsRequireUserWritePermission(t *testing.T) {
+	_, mux := newPermissionRouteServer(t, []config.SecurityUser{
+		{
+			Name:                "user-reader",
+			Token:               "user-read-token",
+			PermissionOverrides: []string{"auth.users.read"},
+		},
+		{
+			Name:                "user-writer",
+			Token:               "user-write-token",
+			PermissionOverrides: []string{"auth.users.write"},
+		},
+		{
+			Name:  "target",
+			Token: "target-token",
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodGet, "/auth/users", "user-read-token", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /auth/users with auth.users.read = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodPost, "/auth/users", "user-read-token", `{"name":"new-user","token":"new-token"}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /auth/users without auth.users.write = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodDelete, "/auth/users?name=target", "user-read-token", ""))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("DELETE /auth/users without auth.users.write = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodPost, "/auth/users", "user-write-token", `{"name":"new-user","token":"new-token"}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /auth/users with auth.users.write = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodDelete, "/auth/users?name=target", "user-write-token", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /auth/users with auth.users.write = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGatewayAuthRoleMutationsRequireRoleWritePermission(t *testing.T) {
+	server, mux := newPermissionRouteServer(t, []config.SecurityUser{
+		{
+			Name:                "role-reader",
+			Token:               "role-read-token",
+			PermissionOverrides: []string{"auth.roles.read"},
+		},
+		{
+			Name:                "role-writer",
+			Token:               "role-write-token",
+			PermissionOverrides: []string{"auth.roles.write"},
+		},
+	})
+	server.mainRuntime.Config.Security.Roles = []config.SecurityRole{{
+		Name:        "custom",
+		Description: "Custom",
+		Permissions: []string{"status.read"},
+	}}
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodGet, "/auth/roles", "role-read-token", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /auth/roles with auth.roles.read = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodPost, "/auth/roles", "role-read-token", `{"name":"ops","permissions":["status.read"]}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /auth/roles without auth.roles.write = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodDelete, "/auth/roles?name=custom", "role-read-token", ""))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("DELETE /auth/roles without auth.roles.write = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodPost, "/auth/roles", "role-write-token", `{"name":"ops","permissions":["status.read"]}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /auth/roles with auth.roles.write = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodDelete, "/auth/roles?name=custom", "role-write-token", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /auth/roles with auth.roles.write = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodPost, "/auth/roles", "role-write-token", `{"name":"bad","permissions":["unknown.permission"]}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST /auth/roles with unknown permission = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestGatewayCronRoutesInitializeLazilyAndRequireWritePermission(t *testing.T) {
 	cronInitOnce = sync.Once{}
 	cronScheduler = nil

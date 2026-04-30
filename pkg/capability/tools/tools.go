@@ -930,7 +930,9 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 			"required": []string{"query"},
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
-			return auditCall(opts, "web_search", input, WebSearchTool)(ctx, input)
+			return auditCall(opts, "web_search", input, func(ctx context.Context, input map[string]any) (string, error) {
+				return WebSearchToolWithPolicy(ctx, input, opts)
+			})(ctx, input)
 		},
 	)
 
@@ -964,7 +966,7 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 			"required": []string{"url"},
 		},
 		func(ctx context.Context, input map[string]any) (string, error) {
-			return BrowserNavigateTool(ctx, input)
+			return BrowserNavigateToolWithPolicy(ctx, input, opts)
 		},
 	)
 
@@ -1190,7 +1192,9 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 				"url":        map[string]string{"type": "string", "description": "Optional URL to open immediately"},
 			},
 		},
-		func(ctx context.Context, input map[string]any) (string, error) { return BrowserTabNewTool(ctx, input) },
+		func(ctx context.Context, input map[string]any) (string, error) {
+			return BrowserTabNewToolWithPolicy(ctx, input, opts)
+		},
 	)
 
 	r.RegisterTool(

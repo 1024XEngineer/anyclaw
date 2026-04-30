@@ -20,8 +20,8 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		if !HasPermission(UserFromContext(r.Context()), "auth.users.read") {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.users.read"})
+		if !HasPermission(UserFromContext(r.Context()), "auth.roles.read") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.roles.read"})
 			return
 		}
 		roles := append([]map[string]any{}, builtinRoles...)
@@ -30,8 +30,8 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, roles)
 	case http.MethodPost:
-		if !HasPermission(UserFromContext(r.Context()), "auth.users.read") {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.users.read"})
+		if !HasPermission(UserFromContext(r.Context()), "auth.roles.write") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.roles.write"})
 			return
 		}
 		var role config.SecurityRole
@@ -42,6 +42,12 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(role.Name) == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role name is required"})
 			return
+		}
+		for _, permission := range role.Permissions {
+			if !allowedSecurityPermissions()[permission] {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown permission", "permission": permission})
+				return
+			}
 		}
 		updated := false
 		for i := range s.mainRuntime.Config.Security.Roles {
@@ -61,8 +67,8 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 		s.appendAudit(UserFromContext(r.Context()), "auth.roles.write", role.Name, nil)
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	case http.MethodDelete:
-		if !HasPermission(UserFromContext(r.Context()), "auth.users.read") {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.users.read"})
+		if !HasPermission(UserFromContext(r.Context()), "auth.roles.write") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.roles.write"})
 			return
 		}
 		name := strings.TrimSpace(r.URL.Query().Get("name"))

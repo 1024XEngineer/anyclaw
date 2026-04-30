@@ -318,11 +318,15 @@ func TestRequireToolApprovalHandlesDangerousAndSafeTools(t *testing.T) {
 }
 
 func TestRequiresToolApprovalNameIncludesOpenClawCompatibleAliases(t *testing.T) {
-	dangerousAliases := []string{"exec", "process", "write", "edit", "apply_patch", "fetch_url", "web_fetch", "image", "image_analyze"}
+	dangerousAliases := []string{"exec", "process", "write", "edit", "apply_patch", "fetch_url", "web_fetch", "image", "image_analyze", "skill_runner", "clihub_exec", "intent_route", "delegate_task"}
 	for _, name := range dangerousAliases {
 		if !RequiresToolApprovalName(name) {
 			t.Fatalf("expected OpenClaw-compatible tool %q to require approval", name)
 		}
+	}
+
+	if !RequiresToolApproval(agent.ToolCall{Name: "shotcut_create-project", RequiresApproval: true}) {
+		t.Fatal("expected registry-marked dynamic CLIHub skill tools to require approval")
 	}
 }
 

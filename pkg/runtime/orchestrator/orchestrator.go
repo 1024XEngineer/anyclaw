@@ -15,12 +15,14 @@ import (
 )
 
 type OrchestratorConfig struct {
-	MaxConcurrentAgents int               `json:"max_concurrent_agents"`
-	MaxRetries          int               `json:"max_retries"`
-	Timeout             time.Duration     `json:"timeout"`
-	AgentDefinitions    []AgentDefinition `json:"agent_definitions"`
-	EnableDecomposition bool              `json:"enable_decomposition"`
-	DefaultWorkingDir   string            `json:"default_working_dir,omitempty"`
+	MaxConcurrentAgents int                      `json:"max_concurrent_agents"`
+	MaxRetries          int                      `json:"max_retries"`
+	Timeout             time.Duration            `json:"timeout"`
+	AgentDefinitions    []AgentDefinition        `json:"agent_definitions"`
+	EnableDecomposition bool                     `json:"enable_decomposition"`
+	DefaultWorkingDir   string                   `json:"default_working_dir,omitempty"`
+	SkillExecution      *skills.ExecutionOptions `json:"skill_execution,omitempty"`
+	ToolOptions         *tools.BuiltinOptions    `json:"-"`
 }
 
 type OrchestratorStatus string
@@ -128,7 +130,7 @@ func (o *Orchestrator) initAgents(defs []AgentDefinition) error {
 	failures := make([]string, 0)
 	registered := 0
 	for _, def := range defs {
-		sa, err := NewSubAgent(def, o.llm, o.allSkills, o.baseTools, o.memory)
+		sa, err := NewSubAgentWithRuntimeOptions(def, o.llm, o.allSkills, o.baseTools, o.memory, nil, "", o.subAgentRuntimeOptions())
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", def.Name, err))
 			continue
@@ -157,6 +159,23 @@ func (o *Orchestrator) initAgents(defs []AgentDefinition) error {
 		return fmt.Errorf("failed to initialize all orchestrator agents: %s", strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+func (o *Orchestrator) subAgentSkillExecutionOptions() skills.ExecutionOptions {
+	if o != nil && o.config.SkillExecution != nil {
+		return *o.config.SkillExecution
+	}
+	return defaultSubAgentSkillExecutionOptions()
+}
+
+func (o *Orchestrator) subAgentRuntimeOptions() SubAgentRuntimeOptions {
+	skillOptions := o.subAgentSkillExecutionOptions()
+	opts := SubAgentRuntimeOptions{SkillExecution: &skillOptions}
+	if o != nil && o.config.ToolOptions != nil {
+		toolOptions := *o.config.ToolOptions
+		opts.BuiltinTools = &toolOptions
+	}
+	return opts
 }
 
 func (o *Orchestrator) Run(ctx context.Context, input string) (string, error) {
@@ -225,11 +244,14 @@ func (o *Orchestrator) runTaskResult(ctx context.Context, input string, agentNam
 	capabilities := make([]AgentCapability, len(agents))
 	for i, sa := range agents {
 		capabilities[i] = AgentCapability{
-			Name:        sa.Name(),
-			Description: sa.Description(),
-			Domain:      sa.Domain(),
-			Expertise:   sa.Expertise(),
-			Skills:      sa.Skills(),
+			Name:            sa.Name(),
+			Description:     sa.Description(),
+			Domain:          sa.Domain(),
+			Expertise:       sa.Expertise(),
+			Skills:          sa.Skills(),
+			Tools:           sa.Tools(),
+			ToolCategories:  sa.ToolCategories(),
+			PermissionLevel: sa.PermissionLevel(),
 		}
 	}
 
@@ -254,7 +276,7 @@ func (o *Orchestrator) runTaskResult(ctx context.Context, input string, agentNam
 
 	exec.Log("info", fmt.Sprintf("plan ready: %s (%d sub-tasks)", plan.Summary, len(plan.SubTasks)), "", exec.id)
 	for _, st := range plan.SubTasks {
-		exec.Log("info", fmt.Sprintf("[%d] %s -> %s deps=%v", st.Index+1, st.Title, st.AssignedAgent, st.DependsOn), st.AssignedAgent, st.ID)
+		exec.Log("info", fmt.Sprintf("[%d] %s -> %s score=%d confidence=%.2f reason=%s deps=%v", st.Index+1, st.Title, st.AssignedAgent, st.AssignmentScore, st.AssignmentConfidence, st.AssignmentReason, st.DependsOn), st.AssignedAgent, st.ID)
 	}
 
 	exec.queue.Load(plan)
@@ -370,16 +392,24 @@ func (o *Orchestrator) buildPlan(ctx context.Context, taskID string, input strin
 	if o.decomposer != nil {
 		return o.decomposer.defaultDecompose(taskID, input, capabilities), nil
 	}
+	assignment := bestAgentAssignment(input, capabilities)
+	if assignment.Name == "" {
+		assignment.Name = capabilities[0].Name
+	}
 	return &DecompositionPlan{
-		Summary: fmt.Sprintf("Delegate the task to %s for execution", capabilities[0].Name),
+		Summary: fmt.Sprintf("Delegate the task to %s for execution", assignment.Name),
 		SubTasks: []SubTask{{
-			ID:            fmt.Sprintf("%s_sub_0", taskID),
-			Title:         "Execute task",
-			Description:   input,
-			AssignedAgent: capabilities[0].Name,
-			Input:         input,
-			Status:        SubTaskReady,
-			Index:         0,
+			ID:                   fmt.Sprintf("%s_sub_0", taskID),
+			Title:                "Execute task",
+			Description:          input,
+			AssignedAgent:        assignment.Name,
+			Input:                input,
+			Status:               SubTaskReady,
+			Index:                0,
+			AssignmentReason:     assignment.Reason,
+			AssignmentScore:      assignment.Score,
+			AssignmentConfidence: assignment.Confidence,
+			RequiredCapabilities: assignment.RequiredCaps,
 		}},
 	}, nil
 }

@@ -31,7 +31,7 @@ func (o *Orchestrator) registerTemporaryAgent(requestedName string) (string, fun
 	}
 
 	def := o.buildTemporaryAgentDefinition(requestedName)
-	subAgent, err := NewSubAgent(def, o.llm, o.allSkills, o.baseTools, o.memory)
+	subAgent, err := NewSubAgentWithRuntimeOptions(def, o.llm, o.allSkills, o.baseTools, o.memory, nil, "", o.subAgentRuntimeOptions())
 	if err != nil {
 		return "", nil, fmt.Errorf("create temporary subagent %q: %w", def.Name, err)
 	}
