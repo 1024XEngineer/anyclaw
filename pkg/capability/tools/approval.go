@@ -12,10 +12,11 @@ type ToolApprovalHook func(ctx context.Context, call ToolApprovalCall) error
 type ToolCallerRole string
 
 const (
-	ToolCallerRoleUnknown   ToolCallerRole = ""
-	ToolCallerRoleMainAgent ToolCallerRole = "main_agent"
-	ToolCallerRoleSubAgent  ToolCallerRole = "sub_agent"
-	ToolCallerRoleSystem    ToolCallerRole = "system"
+	ToolCallerRoleUnknown    ToolCallerRole = ""
+	ToolCallerRoleMainAgent  ToolCallerRole = "main_agent"
+	ToolCallerRoleSubAgent   ToolCallerRole = "sub_agent"
+	ToolCallerRoleSystem     ToolCallerRole = "system"
+	ToolCallerRoleControlAPI ToolCallerRole = "control_api"
 )
 
 type ToolCaller struct {

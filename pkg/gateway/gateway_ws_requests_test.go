@@ -209,6 +209,23 @@ func TestOpenClawWSToolsInvokeDispatch(t *testing.T) {
 		t.Fatalf("expected approval-required WS invoke to be rejected, handled=%v err=%v", handled, err)
 	}
 
+	server.mainRuntime.Tools.Register(&tools.Tool{
+		Name:        "internal_agent_tool",
+		Description: "Internal main-agent-only helper",
+		InputSchema: map[string]any{},
+		Visibility:  tools.ToolVisibilityMainAgentOnly,
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			return "internal", nil
+		},
+	})
+	handled, err = conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID:     "invoke-internal",
+		Params: map[string]any{"tool": "internal_agent_tool"},
+	}, "tools.invoke")
+	if !handled || err == nil || !strings.Contains(err.Error(), "not available for caller role control_api") {
+		t.Fatalf("expected main-agent-only WS invoke to be rejected, handled=%v err=%v", handled, err)
+	}
+
 	conn.user = &gatewayauth.User{Name: "reader", Permissions: []string{"tools.read"}}
 	handled, err = conn.handleCatalogWSRequest(ctx, openClawWSFrame{
 		ID:     "invoke-forbidden",

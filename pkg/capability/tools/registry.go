@@ -479,6 +479,8 @@ func toolVisibleForCaller(tool *Tool, role ToolCallerRole) bool {
 	switch role {
 	case ToolCallerRoleSubAgent:
 		return toolVisibleForRole(tool, true)
+	case ToolCallerRoleControlAPI:
+		return tool.Visibility != ToolVisibilityMainAgentOnly
 	case ToolCallerRoleMainAgent, ToolCallerRoleSystem:
 		return true
 	default:

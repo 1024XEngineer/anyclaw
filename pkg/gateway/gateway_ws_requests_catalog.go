@@ -104,7 +104,7 @@ func (c *openClawWSConn) invokeToolFromWS(ctx context.Context, frame openClawWSF
 		return "", fmt.Errorf("tool %s requires approval; invoke it through a task or session", toolName)
 	}
 	callCtx := tools.WithToolCaller(ctx, tools.ToolCaller{
-		Role:        tools.ToolCallerRoleMainAgent,
+		Role:        tools.ToolCallerRoleControlAPI,
 		AgentName:   mapString(c.userSummary(), "name"),
 		ExecutionID: frame.ID,
 	})
