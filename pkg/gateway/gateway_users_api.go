@@ -156,6 +156,16 @@ func allowedSecurityPermissions() map[string]bool {
 		"config.read":     true,
 		"config.write":    true,
 		"audit.read":      true,
+		"jobs.read":       true,
+		"jobs.write":      true,
+		"cron.read":       true,
+		"cron.write":      true,
+		"market.read":     true,
+		"market.write":    true,
+		"mcp.read":        true,
+		"mcp.write":       true,
+		"nodes.read":      true,
+		"nodes.write":     true,
 		"auth.users.read": true,
 	}
 }

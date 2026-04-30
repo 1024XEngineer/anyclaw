@@ -1,0 +1,137 @@
+package gateway
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/state"
+)
+
+func newBearerRequest(method string, target string, token string, body string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	return req
+}
+
+func newPermissionRouteServer(t *testing.T, users []config.SecurityUser) (*Server, *http.ServeMux) {
+	t.Helper()
+	server := New(newTestMainRuntime(t))
+	if err := server.ensureDefaultWorkspace(); err != nil {
+		t.Fatalf("ensure default workspace: %v", err)
+	}
+	server.mainRuntime.Config.Security.Users = users
+	mux := http.NewServeMux()
+	server.registerGatewayRoutes(mux)
+	return server, mux
+}
+
+func TestGatewayRoutesUseMethodSpecificTaskPermissions(t *testing.T) {
+	_, mux := newPermissionRouteServer(t, []config.SecurityUser{{
+		Name:                "task-reader",
+		Token:               "task-read-token",
+		PermissionOverrides: []string{"tasks.read"},
+	}})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodGet, "/tasks", "task-read-token", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /tasks with tasks.read = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodPost, "/tasks", "task-read-token", `{"input":"hello"}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /tasks without tasks.write = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGatewayJobMutationRoutesRequireWritePermission(t *testing.T) {
+	server, mux := newPermissionRouteServer(t, []config.SecurityUser{{
+		Name:                "job-reader",
+		Token:               "job-read-token",
+		PermissionOverrides: []string{"jobs.read"},
+	}})
+	if err := server.store.AppendJob(&state.Job{ID: "queued-job", Kind: "noop", Status: "queued", Cancellable: true}); err != nil {
+		t.Fatalf("append job: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodGet, "/jobs", "job-read-token", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /jobs with jobs.read = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodPost, "/jobs/cancel", "job-read-token", `{"job_id":"queued-job"}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /jobs/cancel without jobs.write = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGatewayMutablePlatformRoutesRequireWritePermission(t *testing.T) {
+	_, mux := newPermissionRouteServer(t, []config.SecurityUser{{
+		Name:  "platform-reader",
+		Token: "platform-read-token",
+		PermissionOverrides: []string{
+			"market.read",
+			"mcp.read",
+			"nodes.read",
+		},
+	}})
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodPost, path: "/market/plugins/demo/install"},
+		{method: http.MethodPost, path: "/mcp/servers/demo/connect"},
+		{method: http.MethodDelete, path: "/nodes/demo"},
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, newBearerRequest(tc.method, tc.path, "platform-read-token", tc.body))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s without write permission = %d, want 403; body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestGatewayCronRoutesInitializeLazilyAndRequireWritePermission(t *testing.T) {
+	cronInitOnce = sync.Once{}
+	cronScheduler = nil
+	defer func() {
+		if cronScheduler != nil {
+			cronScheduler.Stop()
+		}
+		cronInitOnce = sync.Once{}
+		cronScheduler = nil
+	}()
+
+	_, mux := newPermissionRouteServer(t, []config.SecurityUser{{
+		Name:                "cron-reader",
+		Token:               "cron-read-token",
+		PermissionOverrides: []string{"cron.read"},
+	}})
+	if cronScheduler != nil {
+		t.Fatal("expected cron scheduler to remain uninitialized until the first cron request")
+	}
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodGet, "/cron/?json=1", "cron-read-token", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /cron/?json=1 with cron.read = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if cronScheduler == nil {
+		t.Fatal("expected cron scheduler to initialize lazily on first cron request")
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodPost, "/cron/", "cron-read-token", `{"name":"hourly","schedule":"@hourly","command":"echo hi"}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /cron/ without cron.write = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}

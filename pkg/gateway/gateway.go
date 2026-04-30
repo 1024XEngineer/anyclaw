@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	openaicompat "github.com/1024XEngineer/anyclaw/pkg/api/openai"
@@ -55,6 +56,7 @@ type Server struct {
 	plugins        *plugin.Registry
 	ingressPlugins []plugin.IngressRunner
 	jobQueue       chan func()
+	jobCancelMu    sync.RWMutex
 	jobCancel      map[string]bool
 	jobMaxAttempts int
 	webhooks       *webhookext.Handler

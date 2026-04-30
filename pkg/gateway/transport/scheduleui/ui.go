@@ -12,31 +12,65 @@ import (
 
 // RegisterUIHandler registers the cron web UI and API handlers on the given mux.
 func RegisterUIHandler(mux *http.ServeMux, scheduler *runtimeschedule.Scheduler, prefix string) {
+	RegisterUIHandlerWithProvider(mux, func() *runtimeschedule.Scheduler {
+		return scheduler
+	}, prefix, nil)
+}
+
+type SchedulerProvider func() *runtimeschedule.Scheduler
+type Middleware func(path string, next http.HandlerFunc) http.HandlerFunc
+
+// RegisterUIHandlerWithProvider registers cron UI handlers with optional lazy scheduler lookup and middleware.
+func RegisterUIHandlerWithProvider(mux *http.ServeMux, schedulerProvider SchedulerProvider, prefix string, middleware Middleware) {
 	if !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
 
-	mux.HandleFunc(prefix, func(w http.ResponseWriter, r *http.Request) {
+	handle := func(path string, handler http.HandlerFunc) {
+		if middleware != nil {
+			handler = middleware(path, handler)
+		}
+		mux.HandleFunc(path, handler)
+	}
+
+	scheduler := func() *runtimeschedule.Scheduler {
+		if schedulerProvider == nil {
+			return nil
+		}
+		return schedulerProvider()
+	}
+
+	handle(prefix, func(w http.ResponseWriter, r *http.Request) {
+		s := scheduler()
+		if s == nil {
+			http.Error(w, "cron scheduler not initialized", http.StatusServiceUnavailable)
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			if r.URL.Query().Get("json") == "1" {
-				serveCronJSON(w, scheduler)
+				serveCronJSON(w, s)
 			} else {
-				serveCronUI(w, scheduler)
+				serveCronUI(w, s)
 			}
 		case http.MethodPost:
-			handleCreateTask(w, r, scheduler)
+			handleCreateTask(w, r, s)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
 
-	mux.HandleFunc(prefix+"stats", func(w http.ResponseWriter, r *http.Request) {
+	handle(prefix+"stats", func(w http.ResponseWriter, r *http.Request) {
+		s := scheduler()
+		if s == nil {
+			http.Error(w, "cron scheduler not initialized", http.StatusServiceUnavailable)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(scheduler.Stats())
+		_ = json.NewEncoder(w).Encode(s.Stats())
 	})
 
-	mux.HandleFunc(prefix+"validate", func(w http.ResponseWriter, r *http.Request) {
+	handle(prefix+"validate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -53,7 +87,7 @@ func RegisterUIHandler(mux *http.ServeMux, scheduler *runtimeschedule.Scheduler,
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	mux.HandleFunc(prefix+"next", func(w http.ResponseWriter, r *http.Request) {
+	handle(prefix+"next", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return

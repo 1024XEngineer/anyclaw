@@ -67,7 +67,24 @@ func (s *Server) startWorkers(ctx context.Context) {
 }
 
 func (s *Server) shouldCancelJob(id string) bool {
+	if s == nil {
+		return false
+	}
+	s.jobCancelMu.RLock()
+	defer s.jobCancelMu.RUnlock()
 	return s.jobCancel[id]
+}
+
+func (s *Server) markJobCancelled(id string) {
+	if s == nil {
+		return
+	}
+	s.jobCancelMu.Lock()
+	defer s.jobCancelMu.Unlock()
+	if s.jobCancel == nil {
+		s.jobCancel = map[string]bool{}
+	}
+	s.jobCancel[id] = true
 }
 
 func (s *Server) wrap(path string, next http.HandlerFunc) http.HandlerFunc {

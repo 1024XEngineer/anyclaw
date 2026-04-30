@@ -5,6 +5,7 @@ import (
 
 	gatewayintake "github.com/1024XEngineer/anyclaw/pkg/gateway/intake"
 	scheduleui "github.com/1024XEngineer/anyclaw/pkg/gateway/transport/scheduleui"
+	runtimeschedule "github.com/1024XEngineer/anyclaw/pkg/runtime/execution/schedule"
 )
 
 func (s *Server) registerGatewayPlatformRoutes(mux *http.ServeMux) {
@@ -14,7 +15,7 @@ func (s *Server) registerGatewayPlatformRoutes(mux *http.ServeMux) {
 	s.registerDiscoveryRoutes(mux)
 	s.registerMCPRoutes(mux)
 	s.registerMarketRoutes(mux)
-	scheduleui.RegisterUIHandler(mux, cronScheduler, "/cron")
+	s.registerCronRoutes(mux)
 }
 
 func (s *Server) registerOpenAIRoutes(mux *http.ServeMux) {
@@ -36,7 +37,10 @@ func (s *Server) registerExtensionRoutes(mux *http.ServeMux) {
 
 func (s *Server) registerNodeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/nodes", s.wrap("/nodes", requirePermission("nodes.read", s.nodesAPI().HandleList)))
-	mux.HandleFunc("/nodes/", s.wrap("/nodes/", s.nodesAPI().HandleByID))
+	mux.HandleFunc("/nodes/", s.wrap("/nodes/", requirePermissionByMethod(map[string]string{
+		http.MethodDelete: "nodes.write",
+		http.MethodGet:    "nodes.read",
+	}, "nodes.read", s.nodesAPI().HandleByID)))
 	mux.HandleFunc("/nodes/invoke", s.wrap("/nodes/invoke", requirePermission("nodes.write", s.nodesAPI().HandleInvoke)))
 }
 
@@ -51,13 +55,33 @@ func (s *Server) registerMCPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/mcp/resources", s.wrap("/mcp/resources", requirePermission("mcp.read", s.handleMCPResources)))
 	mux.HandleFunc("/mcp/prompts", s.wrap("/mcp/prompts", requirePermission("mcp.read", s.handleMCPPrompts)))
 	mux.HandleFunc("/mcp/call", s.wrap("/mcp/call", requirePermission("mcp.write", s.handleMCPCall)))
-	mux.HandleFunc("/mcp/servers/", s.wrap("/mcp/servers/", s.handleMCPServerAction))
+	mux.HandleFunc("/mcp/servers/", s.wrap("/mcp/servers/", requirePermissionByMethod(map[string]string{
+		http.MethodGet:  "mcp.read",
+		http.MethodPost: "mcp.write",
+	}, "mcp.read", s.handleMCPServerAction)))
 }
 
 func (s *Server) registerMarketRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/market/search", s.wrap("/market/search", requirePermission("market.read", s.handleMarketSearch)))
 	mux.HandleFunc("/market/plugins", s.wrap("/market/plugins", requirePermission("market.read", s.handleMarketPlugins)))
-	mux.HandleFunc("/market/plugins/", s.wrap("/market/plugins/", s.handleMarketPluginAction))
+	mux.HandleFunc("/market/plugins/", s.wrap("/market/plugins/", requirePermissionByMethod(map[string]string{
+		http.MethodGet:  "market.read",
+		http.MethodPost: "market.write",
+	}, "market.read", s.handleMarketPluginAction)))
 	mux.HandleFunc("/market/installed", s.wrap("/market/installed", requirePermission("market.read", s.handleMarketInstalled)))
 	mux.HandleFunc("/market/categories", s.wrap("/market/categories", requirePermission("market.read", s.handleMarketCategories)))
+}
+
+func (s *Server) registerCronRoutes(mux *http.ServeMux) {
+	scheduleui.RegisterUIHandlerWithProvider(mux, func() *runtimeschedule.Scheduler {
+		s.initCronScheduler()
+		return cronScheduler
+	}, "/cron", func(path string, next http.HandlerFunc) http.HandlerFunc {
+		return s.wrap(path, requirePermissionByMethod(map[string]string{
+			http.MethodDelete: "cron.write",
+			http.MethodGet:    "cron.read",
+			http.MethodPost:   "cron.write",
+			http.MethodPut:    "cron.write",
+		}, "cron.read", next))
+	})
 }
