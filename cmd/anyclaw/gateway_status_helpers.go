@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -25,6 +28,41 @@ func loadGatewayConfig(configPath string) (*config.Config, error) {
 
 func newGatewayRequestContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), gatewayRequestTimeout)
+}
+
+func isGatewayReachabilityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var urlErr *url.Error
+	var netErr net.Error
+	if !errors.As(err, &urlErr) && !errors.As(err, &netErr) {
+		return false
+	}
+	return errorsContainAny(err.Error(),
+		"connection refused",
+		"actively refused",
+		"no such host",
+		"server misbehaving",
+		"timeout",
+		"deadline exceeded",
+		"connectex",
+	)
+}
+
+func errorsContainAny(message string, fragments ...string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	for _, fragment := range fragments {
+		if strings.Contains(lower, strings.ToLower(fragment)) {
+			return true
+		}
+	}
+	return false
+}
+
+func printGatewayUnreachableHint(cfg *config.Config, commandName string) {
+	printInfo("Gateway not reachable at %s", gatewayHTTPBaseURL(cfg))
+	printInfo("Start it with `anyclaw gateway start` or `anyclaw gateway daemon start`, then rerun `anyclaw %s`", commandName)
 }
 
 func channelStateLabel(item inputlayer.Status, disabledLabel string) string {

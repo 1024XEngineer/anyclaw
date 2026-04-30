@@ -3,21 +3,21 @@
 // Do not edit manually.
 
 export const workspaceSnapshot = {
-  "generatedAt": "2026-04-23T17:39:44.786Z",
+  "generatedAt": "static-workspace-snapshot",
   "agent": {
     "name": "AnyClaw",
-    "description": "",
+    "description": "Your AI assistant with file-based memory",
     "permissionLevel": "limited",
-    "workDir": "",
-    "workingDir": "",
+    "workDir": ".anyclaw",
+    "workingDir": "workflows/default",
     "language": "CN",
     "activeProfile": ""
   },
   "orchestrator": {
-    "enabled": false,
-    "maxConcurrentAgents": 0,
-    "retryCount": 0,
-    "timeoutSeconds": 0,
+    "enabled": true,
+    "maxConcurrentAgents": 4,
+    "retryCount": 2,
+    "timeoutSeconds": 300,
     "namedAgents": 0,
     "subAgents": 0
   },
@@ -27,14 +27,25 @@ export const workspaceSnapshot = {
     "port": 18789,
     "bind": "loopback"
   },
-  "providers": [],
+  "providers": [
+    {
+      "id": "primary-openai",
+      "name": "Primary OpenAI",
+      "type": "openai",
+      "provider": "openai",
+      "defaultModel": "gpt-4o-mini",
+      "enabled": true,
+      "isDefault": true,
+      "capabilitiesCount": 0
+    }
+  ],
   "agents": [
     {
       "name": "AnyClaw",
-      "description": "",
+      "description": "Your AI assistant with file-based memory",
       "role": "main",
       "permissionLevel": "limited",
-      "workingDir": "",
+      "workingDir": "workflows/default",
       "providerRef": "",
       "defaultModel": "",
       "enabled": true,
@@ -42,8 +53,288 @@ export const workspaceSnapshot = {
       "skills": []
     }
   ],
-  "skills": [],
-  "extensions": [],
+  "skills": [
+    {
+      "name": "app-controller",
+      "description": "Desktop app control guidance for local Windows workflows",
+      "source": "anyclaw-local",
+      "registry": "",
+      "version": "1.0.0",
+      "installCommand": ""
+    },
+    {
+      "name": "cli-anything",
+      "description": "Use CLI-Anything methodology to build, refine, validate, test, and operate CLI harnesses from local source trees or repos",
+      "source": "anyclaw-local",
+      "registry": "anyclaw-local",
+      "version": "0.2.0",
+      "installCommand": ""
+    },
+    {
+      "name": "coder",
+      "description": "Skill from Skillhub",
+      "source": "skillhub",
+      "registry": "",
+      "version": "1.0.0",
+      "installCommand": ""
+    },
+    {
+      "name": "github",
+      "description": "Interact with GitHub using the gh CLI. Use gh issue, gh pr, gh run, and gh api for issues, PRs, CI runs, and advanced queries.",
+      "source": "skillhub",
+      "registry": "",
+      "version": "1.0.0",
+      "installCommand": ""
+    },
+    {
+      "name": "github-issues",
+      "description": "Create, update, search, and manage GitHub issues safely using MCP tools and GitHub CLI/API when available.",
+      "source": "skills.sh",
+      "registry": "skills.sh",
+      "version": "1.0.0",
+      "installCommand": "anyclaw skill install github-issues"
+    },
+    {
+      "name": "summarize",
+      "description": "Skill from Skillhub",
+      "source": "skillhub",
+      "registry": "",
+      "version": "1.0.0",
+      "installCommand": ""
+    },
+    {
+      "name": "vision-agent",
+      "description": "Siri-like autonomous desktop control",
+      "source": "local",
+      "registry": "",
+      "version": "1.0.0",
+      "installCommand": ""
+    },
+    {
+      "name": "voice-assistant",
+      "description": "Voice-first interaction guidance with graceful text fallback",
+      "source": "anyclaw-local",
+      "registry": "",
+      "version": "1.0.0",
+      "installCommand": ""
+    },
+    {
+      "name": "weather",
+      "description": "Get current weather and forecasts with no API key required.",
+      "source": "anyclaw-local",
+      "registry": "skills.sh",
+      "version": "1.0.0",
+      "installCommand": "anyclaw skill install weather"
+    },
+    {
+      "name": "web-search",
+      "description": "Skill from Skillhub",
+      "source": "skillhub",
+      "registry": "",
+      "version": "1.0.0",
+      "installCommand": ""
+    }
+  ],
+  "extensions": [
+    {
+      "id": "bluebubbles",
+      "name": "BlueBubbles Channel",
+      "description": "BlueBubbles iMessage bridge channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "bluebubbles"
+      ]
+    },
+    {
+      "id": "discord",
+      "name": "Discord Channel",
+      "description": "Discord messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "discord"
+      ]
+    },
+    {
+      "id": "feishu",
+      "name": "Feishu/Lark Channel",
+      "description": "Feishu/Lark messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "feishu"
+      ]
+    },
+    {
+      "id": "googlechat",
+      "name": "Google Chat Channel",
+      "description": "Google Chat messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "googlechat"
+      ]
+    },
+    {
+      "id": "imessage",
+      "name": "iMessage Channel",
+      "description": "iMessage channel adapter for AnyClaw (macOS only)",
+      "kind": "channel",
+      "channels": [
+        "imessage"
+      ]
+    },
+    {
+      "id": "irc",
+      "name": "IRC Channel",
+      "description": "IRC messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "irc"
+      ]
+    },
+    {
+      "id": "line",
+      "name": "LINE Channel",
+      "description": "LINE messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "line"
+      ]
+    },
+    {
+      "id": "matrix",
+      "name": "Matrix Channel",
+      "description": "Matrix messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "matrix"
+      ]
+    },
+    {
+      "id": "mattermost",
+      "name": "Mattermost Channel",
+      "description": "Mattermost messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "mattermost"
+      ]
+    },
+    {
+      "id": "msteams",
+      "name": "Microsoft Teams Channel",
+      "description": "Microsoft Teams messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "msteams"
+      ]
+    },
+    {
+      "id": "nextcloud-talk",
+      "name": "Nextcloud Talk Channel",
+      "description": "Nextcloud Talk messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "nextcloud-talk"
+      ]
+    },
+    {
+      "id": "nostr",
+      "name": "Nostr Channel",
+      "description": "Nostr decentralized messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "nostr"
+      ]
+    },
+    {
+      "id": "signal",
+      "name": "Signal Channel",
+      "description": "Signal messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "signal"
+      ]
+    },
+    {
+      "id": "slack",
+      "name": "Slack Channel",
+      "description": "Slack messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "slack"
+      ]
+    },
+    {
+      "id": "synology-chat",
+      "name": "Synology Chat Channel",
+      "description": "Synology Chat messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "synology-chat"
+      ]
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram Channel",
+      "description": "Telegram messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "telegram"
+      ]
+    },
+    {
+      "id": "tlon",
+      "name": "Tlon/Urbit Channel",
+      "description": "Tlon/Urbit messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "tlon"
+      ]
+    },
+    {
+      "id": "twitch",
+      "name": "Twitch Channel",
+      "description": "Twitch chat messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "twitch"
+      ]
+    },
+    {
+      "id": "wechat",
+      "name": "WeChat Channel",
+      "description": "WeChat messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "wechat"
+      ]
+    },
+    {
+      "id": "whatsapp",
+      "name": "WhatsApp Channel",
+      "description": "WhatsApp messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "whatsapp"
+      ]
+    },
+    {
+      "id": "zalo",
+      "name": "Zalo Channel",
+      "description": "Zalo messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "zalo"
+      ]
+    },
+    {
+      "id": "zalouser",
+      "name": "Zalo Personal Channel",
+      "description": "Zalo personal account messaging channel adapter for AnyClaw",
+      "kind": "channel",
+      "channels": [
+        "zalouser"
+      ]
+    }
+  ],
   "configuredChannels": [
     {
       "key": "wechat",
@@ -82,9 +373,9 @@ export const workspaceSnapshot = {
     }
   ],
   "security": {
-    "mentionGate": false,
+    "mentionGate": true,
     "pairingEnabled": false,
-    "defaultDenyDM": false
+    "defaultDenyDM": true
   }
 } as const;
 

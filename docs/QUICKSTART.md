@@ -58,8 +58,7 @@ Check the resulting configuration:
 ./anyclaw config validate
 ```
 
-By default, commands read `anyclaw.json` from the current directory. Pass
-`--config <path>` to commands that support an alternate config file.
+By default, `onboard` writes `anyclaw.json` in the current directory, and commands read that file unless you pass `--config <path>`. The committed `anyclaw.example.json` is only a template/reference file.
 
 ## Environment Variables
 

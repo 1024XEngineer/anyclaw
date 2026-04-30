@@ -8,6 +8,15 @@ const uiRoot = path.resolve(here, "..");
 const repoRoot = path.resolve(uiRoot, "..");
 const outFile = path.join(uiRoot, "src", "generated", "workspaceSnapshot.generated.ts");
 
+function writeSnapshotFile(content) {
+  const existing = fs.existsSync(outFile) ? fs.readFileSync(outFile, "utf8") : null;
+  if (existing === content) {
+    return false;
+  }
+  fs.writeFileSync(outFile, content, "utf8");
+  return true;
+}
+
 function readJSON(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -338,7 +347,7 @@ function buildSnapshot() {
   const extensions = readExtensionManifests(path.join(repoRoot, "extensions"));
 
   return {
-    generatedAt: new Date().toISOString(),
+    generatedAt: "static-workspace-snapshot",
     agent: {
       name: safeString(config.agent?.name) || "AnyClaw",
       description: compactText(config.agent?.description),
@@ -386,5 +395,5 @@ export type WorkspaceSnapshot = typeof workspaceSnapshot;
 `;
 
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
-fs.writeFileSync(outFile, content, "utf8");
-process.stdout.write(`Generated workspace snapshot -> ${path.relative(uiRoot, outFile)}\n`);
+const wrote = writeSnapshotFile(content);
+process.stdout.write(`${wrote ? "Generated" : "Workspace snapshot unchanged"} workspace snapshot -> ${path.relative(uiRoot, outFile)}\n`);

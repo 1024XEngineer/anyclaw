@@ -98,14 +98,20 @@ Windows:
 
 AnyClaw 现在默认不会直接把用户带到本地模型。
 
-首次运行时，更推荐你先配置自己的模型供应商信息：
+首次运行时，更推荐你先执行 `anyclaw onboard`，让 CLI 在当前目录生成或更新活动配置文件 `anyclaw.json`。
+
+随后再填写你自己的模型供应商信息：
 
 - `Provider`
 - `Base URL`
 - `API Key`
 - 默认模型名称
 
-也就是说，仓库里的 `anyclaw.json` 只是一个安全的示例起点，不是可以直接聊天的私人配置。
+说明：
+
+- `anyclaw.json` 是 CLI 默认读取的活动配置文件
+- `anyclaw.example.json` 是仓库里可提交的模板/参考配置，不会被 CLI 自动当作运行配置
+- 如果 `anyclaw.json` 里还是示例值或缺少 API Key，`doctor` 会继续提示你完成配置
 
 如果你更想走纯本地路线，也可以在初始化或设置页中切换到 `Ollama`。
 
@@ -233,7 +239,7 @@ workflows/       工作区上下文与引导文件
 
 ## 注意事项
 
-- `anyclaw.json` 是仓库内可提交的起始配置，请不要把私人密钥直接提交到仓库
+- `anyclaw.json` 是本地活动配置文件；仓库里的 `anyclaw.example.json` 只是模板，请不要把私人密钥提交到仓库
 - 本地运行状态默认保存在 `./.anyclaw/`
 - 工作区相关上下文与记忆保存在 `workflows/`
 - 如果你修改了 UI 源码，建议重新执行 `pnpm ui:build` 再启动网关

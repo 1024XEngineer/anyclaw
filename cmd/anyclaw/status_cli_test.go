@@ -282,6 +282,42 @@ func TestRunHealthCommandVerboseJSON(t *testing.T) {
 	}
 }
 
+func TestRunStatusCommandPrintsGatewayStartHintWhenUnreachable(t *testing.T) {
+	clearModelsCLIEnv(t)
+
+	configPath := writeStatusCLIConfig(t, "http://127.0.0.1:1", "")
+	stdout, _, err := captureCLIOutput(t, func() error {
+		return runStatusCommand([]string{"--config", configPath})
+	})
+	if err == nil {
+		t.Fatal("expected status command to fail when gateway is unreachable")
+	}
+	if !strings.Contains(stdout, "Gateway not reachable at http://127.0.0.1:1") {
+		t.Fatalf("expected gateway address hint, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "anyclaw gateway start") || !strings.Contains(stdout, "anyclaw status") {
+		t.Fatalf("expected restart guidance in output, got %q", stdout)
+	}
+}
+
+func TestRunHealthCommandPrintsGatewayStartHintWhenUnreachable(t *testing.T) {
+	clearModelsCLIEnv(t)
+
+	configPath := writeStatusCLIConfig(t, "http://127.0.0.1:1", "")
+	stdout, _, err := captureCLIOutput(t, func() error {
+		return runHealthCommand([]string{"--config", configPath, "--verbose"})
+	})
+	if err == nil {
+		t.Fatal("expected health command to fail when gateway is unreachable")
+	}
+	if !strings.Contains(stdout, "Gateway not reachable at http://127.0.0.1:1") {
+		t.Fatalf("expected gateway address hint, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "anyclaw gateway daemon start") || !strings.Contains(stdout, "anyclaw health") {
+		t.Fatalf("expected restart guidance in output, got %q", stdout)
+	}
+}
+
 func TestRunSessionsCommandFiltersActiveSessions(t *testing.T) {
 	clearModelsCLIEnv(t)
 

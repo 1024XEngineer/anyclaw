@@ -63,6 +63,9 @@ func runStatusCommand(args []string) error {
 
 	var status gateway.Status
 	if err := doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/status", nil, &status); err != nil {
+		if isGatewayReachabilityError(err) {
+			printGatewayUnreachableHint(cfg, "status")
+		}
 		return err
 	}
 
@@ -144,6 +147,9 @@ func runHealthCommand(args []string) error {
 
 	health := map[string]any{}
 	if err := doGatewayJSONRequest(ctx, cfg, httpMethodGet, "/healthz", nil, &health); err != nil {
+		if isGatewayReachabilityError(err) {
+			printGatewayUnreachableHint(cfg, "health")
+		}
 		return err
 	}
 
