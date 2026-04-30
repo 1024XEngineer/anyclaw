@@ -179,7 +179,8 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, taskID string, input str
 		if description == "" {
 			description = strings.TrimSpace(step.Title)
 		}
-		assignment := chooseAgentAssignment(step.AssignedAgent, description, step.Confidence, candidates)
+		requiredCaps := normalizeAssignmentCapabilities(step.RequiredCapabilities)
+		assignment := chooseAgentAssignment(step.AssignedAgent, description, step.Confidence, requiredCaps, candidates)
 		agentName := assignment.Name
 		if !agentNames[agentName] {
 			agentName = d.findBestAgent(description, candidates)
@@ -193,7 +194,6 @@ func (d *TaskDecomposer) Decompose(ctx context.Context, taskID string, input str
 		if confidence <= 0 || agentName != strings.TrimSpace(step.AssignedAgent) {
 			confidence = assignment.Confidence
 		}
-		requiredCaps := normalizeAssignmentCapabilities(step.RequiredCapabilities)
 		if len(requiredCaps) == 0 {
 			requiredCaps = assignment.RequiredCaps
 		}

@@ -148,6 +148,45 @@ func TestLowConfidencePlannerSelectionFallsBackToScoredAgent(t *testing.T) {
 	}
 }
 
+func TestRequiredCapabilitiesOverridePlannerAgentWhenDescriptionIsAmbiguous(t *testing.T) {
+	planner := &capturePlanner{response: `{
+		"summary": "perform browser work",
+		"sub_tasks": [{
+			"title": "Handle browser step",
+			"description": "Complete the requested step",
+			"assigned_agent": "generalist",
+			"required_capabilities": ["tool_category:browser"],
+			"confidence": 0.9
+		}]
+	}`}
+	decomposer := NewTaskDecomposer(planner)
+	agents := []AgentCapability{
+		{
+			Name:        "generalist",
+			Description: "General purpose worker",
+		},
+		{
+			Name:           "browser-operator",
+			Description:    "Operates browser sessions",
+			ToolCategories: []string{"browser"},
+		},
+	}
+
+	plan, err := decomposer.Decompose(context.Background(), "task_4", "do the step", agents)
+	if err != nil {
+		t.Fatalf("Decompose: %v", err)
+	}
+	if got := plan.SubTasks[0].AssignedAgent; got != "browser-operator" {
+		t.Fatalf("expected required browser capability to select browser-operator, got %q", got)
+	}
+	if !strings.Contains(plan.SubTasks[0].AssignmentReason, "missed inferred tool or skill requirements") {
+		t.Fatalf("expected required capability fallback reason, got %q", plan.SubTasks[0].AssignmentReason)
+	}
+	if got := plan.SubTasks[0].RequiredCapabilities; len(got) != 1 || got[0] != "tool_category:browser" {
+		t.Fatalf("expected planner required capability to be preserved, got %#v", got)
+	}
+}
+
 type capturePlanner struct {
 	response string
 	messages []interface{}

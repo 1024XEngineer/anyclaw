@@ -93,8 +93,12 @@ func bestAgentAssignment(input string, agents []AgentCapability) agentAssignment
 	}
 }
 
-func chooseAgentAssignment(requested string, description string, plannerConfidence float64, candidates []AgentCapability) agentAssignment {
-	scores := rankAgentCandidates(description, candidates)
+func chooseAgentAssignment(requested string, description string, plannerConfidence float64, requiredCaps []string, candidates []AgentCapability) agentAssignment {
+	scoringInput := strings.TrimSpace(description)
+	if len(requiredCaps) > 0 {
+		scoringInput = strings.TrimSpace(scoringInput + " " + strings.Join(requiredCaps, " "))
+	}
+	scores := rankAgentCandidates(scoringInput, candidates)
 	if len(scores) == 0 {
 		return agentAssignment{}
 	}

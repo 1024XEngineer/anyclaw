@@ -152,6 +152,24 @@ func TestDelegationServiceExplicitSelectionRequiresAgentNames(t *testing.T) {
 	}
 }
 
+func TestDelegationServiceExplicitSelectionRejectsUnknownAgent(t *testing.T) {
+	service := newDelegationService(&MainRuntime{
+		Orchestrator: newTestOrchestratorWithNames(t, "specialist"),
+	})
+
+	result, err := service.Delegate(context.Background(), DelegationRequest{
+		Task:          "Inspect the repository",
+		AgentNames:    []string{"ghost"},
+		SelectionMode: "explicit",
+	})
+	if err == nil {
+		t.Fatalf("expected explicit mode with unknown agent to fail, got %#v", result)
+	}
+	if !strings.Contains(err.Error(), "unknown target agents") {
+		t.Fatalf("expected unknown target agent error, got %v", err)
+	}
+}
+
 func TestDelegationServiceCreatesTemporarySubagentWhenNoPersistentAgentsExist(t *testing.T) {
 	service := newDelegationService(&MainRuntime{
 		Orchestrator: newTestOrchestratorWithNames(t),

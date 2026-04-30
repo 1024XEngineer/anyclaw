@@ -299,7 +299,7 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 		qmdClient = &qmdAdapter{client: app.QMD}
 	}
 
-	tools.RegisterBuiltins(registry, tools.BuiltinOptions{
+	builtinOpts := tools.BuiltinOptions{
 		WorkingDir:            workingDir,
 		PermissionLevel:       app.Config.Agent.PermissionLevel,
 		ExecutionMode:         app.Config.Sandbox.ExecutionMode,
@@ -307,13 +307,15 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 		ProtectedPaths:        app.Config.Security.ProtectedPaths,
 		AllowedReadPaths:      app.Config.Security.AllowedReadPaths,
 		AllowedWritePaths:     app.Config.Security.AllowedWritePaths,
+		AllowedEgressDomains:  app.Config.Security.AllowedEgressDomains,
 		Policy:                policyEngine,
 		CommandTimeoutSeconds: app.Config.Security.CommandTimeoutSeconds,
 		AuditLogger:           auditLogger,
 		Sandbox:               sandboxManager,
 		MemoryBackend:         mem,
 		QMDClient:             qmdClient,
-	})
+	}
+	tools.RegisterBuiltins(registry, builtinOpts)
 	sk.RegisterTools(registry, skills.ExecutionOptions{AllowExec: app.Config.Plugins.AllowExec, ExecTimeoutSeconds: app.Config.Plugins.ExecTimeoutSeconds})
 	app.Tools = registry
 
@@ -380,6 +382,7 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 	t = time.Now()
 	if app.Config.Orchestrator.Enabled || len(app.Config.Orchestrator.AgentNames) > 0 || len(app.Config.Orchestrator.SubAgents) > 0 {
 		orchCfg := buildOrchestratorConfig(app.Config, workDir, workingDir)
+		orchCfg.ToolOptions = &builtinOpts
 		if len(orchCfg.AgentDefinitions) > 0 {
 			orch, err := orchestrator.NewOrchestrator(orchCfg, app.LLM, app.Skills, registry, app.Memory)
 			if err != nil {

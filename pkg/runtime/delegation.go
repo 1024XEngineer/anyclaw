@@ -68,6 +68,13 @@ func (s *DelegationService) runDelegation(ctx context.Context, req DelegationReq
 	if selectionMode == runtimedelegation.SelectionModeExplicit && len(selectedAgents) == 0 {
 		return nil, nil, fmt.Errorf("selection_mode explicit requires at least one agent name")
 	}
+	if selectionMode == runtimedelegation.SelectionModeExplicit {
+		if missing := missingPersistentAgents(s.mainRuntime.Orchestrator, selectedAgents); len(missing) > 0 {
+			return nil, selectedAgents, fmt.Errorf("unknown target agents: %s", strings.Join(missing, ", "))
+		}
+		result, err := s.mainRuntime.Orchestrator.RunPlan(ctx, brief, selectedAgents)
+		return result, selectedAgents, err
+	}
 	if len(selectedAgents) > 1 {
 		result, err := s.mainRuntime.Orchestrator.RunPlan(ctx, brief, selectedAgents)
 		return result, selectedAgents, err
@@ -98,6 +105,19 @@ func (s *DelegationService) runDelegation(ctx context.Context, req DelegationReq
 	default:
 		return nil, nil, fmt.Errorf("handoff route returned unsupported mode %q", handoffPlan.Mode)
 	}
+}
+
+func missingPersistentAgents(orch *orchestrator.Orchestrator, names []string) []string {
+	if orch == nil {
+		return append([]string(nil), names...)
+	}
+	missing := make([]string, 0)
+	for _, name := range names {
+		if _, ok := orch.GetAgent(name); !ok {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 func (s *DelegationService) resolveDelegationRoute(req DelegationRequest, selectedAgents []string) routehandoff.HandoffPlan {

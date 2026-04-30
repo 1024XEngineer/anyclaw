@@ -22,6 +22,7 @@ type OrchestratorConfig struct {
 	EnableDecomposition bool                     `json:"enable_decomposition"`
 	DefaultWorkingDir   string                   `json:"default_working_dir,omitempty"`
 	SkillExecution      *skills.ExecutionOptions `json:"skill_execution,omitempty"`
+	ToolOptions         *tools.BuiltinOptions    `json:"-"`
 }
 
 type OrchestratorStatus string
@@ -129,7 +130,7 @@ func (o *Orchestrator) initAgents(defs []AgentDefinition) error {
 	failures := make([]string, 0)
 	registered := 0
 	for _, def := range defs {
-		sa, err := NewSubAgentWithContext(def, o.llm, o.allSkills, o.baseTools, o.memory, nil, "", o.subAgentSkillExecutionOptions())
+		sa, err := NewSubAgentWithRuntimeOptions(def, o.llm, o.allSkills, o.baseTools, o.memory, nil, "", o.subAgentRuntimeOptions())
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", def.Name, err))
 			continue
@@ -165,6 +166,16 @@ func (o *Orchestrator) subAgentSkillExecutionOptions() skills.ExecutionOptions {
 		return *o.config.SkillExecution
 	}
 	return defaultSubAgentSkillExecutionOptions()
+}
+
+func (o *Orchestrator) subAgentRuntimeOptions() SubAgentRuntimeOptions {
+	skillOptions := o.subAgentSkillExecutionOptions()
+	opts := SubAgentRuntimeOptions{SkillExecution: &skillOptions}
+	if o != nil && o.config.ToolOptions != nil {
+		toolOptions := *o.config.ToolOptions
+		opts.BuiltinTools = &toolOptions
+	}
+	return opts
 }
 
 func (o *Orchestrator) Run(ctx context.Context, input string) (string, error) {

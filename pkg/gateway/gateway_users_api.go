@@ -56,8 +56,8 @@ func (s *Server) listUserViews() []map[string]any {
 }
 
 func (s *Server) handleUserUpsert(w http.ResponseWriter, r *http.Request) {
-	if !HasPermission(UserFromContext(r.Context()), "auth.users.read") {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.users.read"})
+	if !HasPermission(UserFromContext(r.Context()), "auth.users.write") {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.users.write"})
 		return
 	}
 	var user config.SecurityUser
@@ -101,8 +101,8 @@ func (s *Server) handleUserUpsert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
-	if !HasPermission(UserFromContext(r.Context()), "auth.users.read") {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.users.read"})
+	if !HasPermission(UserFromContext(r.Context()), "auth.users.write") {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "auth.users.write"})
 		return
 	}
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
@@ -134,39 +134,42 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 
 func allowedSecurityPermissions() map[string]bool {
 	return map[string]bool{
-		"*":               true,
-		"status.read":     true,
-		"chat.send":       true,
-		"tasks.read":      true,
-		"tasks.write":     true,
-		"approvals.read":  true,
-		"approvals.write": true,
-		"sessions.read":   true,
-		"sessions.write":  true,
-		"memory.read":     true,
-		"events.read":     true,
-		"tools.read":      true,
-		"tools.write":     true,
-		"plugins.read":    true,
-		"channels.read":   true,
-		"routing.read":    true,
-		"runtimes.read":   true,
-		"runtimes.write":  true,
-		"resources.read":  true,
-		"resources.write": true,
-		"config.read":     true,
-		"config.write":    true,
-		"audit.read":      true,
-		"jobs.read":       true,
-		"jobs.write":      true,
-		"cron.read":       true,
-		"cron.write":      true,
-		"market.read":     true,
-		"market.write":    true,
-		"mcp.read":        true,
-		"mcp.write":       true,
-		"nodes.read":      true,
-		"nodes.write":     true,
-		"auth.users.read": true,
+		"*":                true,
+		"status.read":      true,
+		"chat.send":        true,
+		"tasks.read":       true,
+		"tasks.write":      true,
+		"approvals.read":   true,
+		"approvals.write":  true,
+		"sessions.read":    true,
+		"sessions.write":   true,
+		"memory.read":      true,
+		"events.read":      true,
+		"tools.read":       true,
+		"tools.write":      true,
+		"plugins.read":     true,
+		"channels.read":    true,
+		"routing.read":     true,
+		"runtimes.read":    true,
+		"runtimes.write":   true,
+		"resources.read":   true,
+		"resources.write":  true,
+		"config.read":      true,
+		"config.write":     true,
+		"audit.read":       true,
+		"jobs.read":        true,
+		"jobs.write":       true,
+		"cron.read":        true,
+		"cron.write":       true,
+		"market.read":      true,
+		"market.write":     true,
+		"mcp.read":         true,
+		"mcp.write":        true,
+		"nodes.read":       true,
+		"nodes.write":      true,
+		"auth.users.read":  true,
+		"auth.users.write": true,
+		"auth.roles.read":  true,
+		"auth.roles.write": true,
 	}
 }

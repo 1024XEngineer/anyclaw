@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,11 @@ func TestIsToolAllowedForPermissionReadOnlyDesktopTools(t *testing.T) {
 			t.Fatalf("expected %s to be hidden from read-only agents", toolName)
 		}
 	}
+	for _, toolName := range []string{"write", "edit", "apply_patch", "exec", "process", "write_file", "run_command"} {
+		if isToolAllowedForPermission(toolName, "read-only") {
+			t.Fatalf("expected mutation alias %s to be hidden from read-only agents", toolName)
+		}
+	}
 }
 
 func TestSubAgentSkillExecutionHonorsConfiguredExecPolicy(t *testing.T) {
@@ -79,6 +85,90 @@ func TestSubAgentSkillExecutionHonorsConfiguredExecPolicy(t *testing.T) {
 	_, err = sa.tools.Call(context.Background(), "skill_runner", map[string]any{"action": "run"})
 	if err == nil || !strings.Contains(err.Error(), "skill execution disabled") {
 		t.Fatalf("expected private executable skill to honor AllowExec=false, got %v", err)
+	}
+}
+
+func TestSubAgentDoesNotInheritSkillsWithoutPrivateSkills(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "planner")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "skill.json"), []byte(`{
+  "name": "planner",
+  "description": "Plans work",
+  "version": "1.0.0",
+  "prompts": {"system": "plan"}
+}`), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+	manager := skills.NewSkillsManager(root)
+	if err := manager.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	sa, err := NewSubAgentWithContext(AgentDefinition{
+		Name:            "worker",
+		Description:     "No private skills configured",
+		PermissionLevel: "limited",
+	}, &stubSubAgentLLM{}, manager, tools.NewRegistry(), nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewSubAgentWithContext: %v", err)
+	}
+	if got := sa.Skills(); len(got) != 0 {
+		t.Fatalf("expected no inherited skills without private_skills, got %#v", got)
+	}
+	if _, ok := sa.tools.Get("skill_planner"); ok {
+		t.Fatal("expected planner skill tool to be absent")
+	}
+}
+
+func TestSubAgentRebindsBuiltinToolsToAgentWorkingDir(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "main")
+	subDir := filepath.Join(root, "sub")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("mkdir main: %v", err)
+	}
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatalf("mkdir sub: %v", err)
+	}
+
+	baseTools := tools.NewRegistry()
+	mainOpts := tools.BuiltinOptions{
+		WorkingDir:      mainDir,
+		PermissionLevel: "limited",
+		Policy: tools.NewPolicyEngine(tools.PolicyOptions{
+			WorkingDir:      mainDir,
+			PermissionLevel: "limited",
+		}),
+	}
+	tools.RegisterBuiltins(baseTools, mainOpts)
+
+	sa, err := NewSubAgentWithRuntimeOptions(AgentDefinition{
+		Name:            "worker",
+		Description:     "Uses rebound builtins",
+		PermissionLevel: "limited",
+		WorkingDir:      subDir,
+	}, &stubSubAgentLLM{}, skills.NewSkillsManager(""), baseTools, nil, nil, "", SubAgentRuntimeOptions{BuiltinTools: &mainOpts})
+	if err != nil {
+		t.Fatalf("NewSubAgentWithRuntimeOptions: %v", err)
+	}
+
+	ctx := tools.WithToolCaller(context.Background(), tools.ToolCaller{Role: tools.ToolCallerRoleSubAgent, AgentName: "worker"})
+	raw, err := sa.tools.Call(ctx, "session_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("session_status: %v", err)
+	}
+	var status map[string]any
+	if err := json.Unmarshal([]byte(raw), &status); err != nil {
+		t.Fatalf("unmarshal status: %v\nraw=%s", err, raw)
+	}
+	if status["working_dir"] != subDir {
+		t.Fatalf("expected sub-agent working_dir %q, got %#v", subDir, status["working_dir"])
+	}
+	if status["permission_level"] != "limited" {
+		t.Fatalf("expected permission_level limited, got %#v", status["permission_level"])
 	}
 }
 

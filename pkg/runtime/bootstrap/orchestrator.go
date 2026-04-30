@@ -87,6 +87,8 @@ func resolveSubAgentDefinition(saCfg config.SubAgentConfig, global config.LLMCon
 		Role:            saCfg.Role,
 		ParentRef:       saCfg.ParentRef,
 		Persona:         saCfg.Personality,
+		Domain:          saCfg.Domain,
+		Expertise:       append([]string(nil), saCfg.Expertise...),
 		PrivateSkills:   saCfg.PrivateSkills,
 		PermissionLevel: saCfg.PermissionLevel,
 		WorkingDir:      saCfg.WorkingDir,

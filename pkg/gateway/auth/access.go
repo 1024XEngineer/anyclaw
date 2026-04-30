@@ -6,7 +6,7 @@ func BuiltinRoleTemplates() []config.SecurityRole {
 	return []config.SecurityRole{
 		{Name: "admin", Description: "Full platform access", Permissions: []string{"*"}},
 		{Name: "operator", Description: "Operate sessions, runtimes, and workspace resources", Permissions: []string{"status.read", "chat.send", "tasks.read", "tasks.write", "approvals.read", "approvals.write", "sessions.read", "sessions.write", "memory.read", "runtimes.read", "runtimes.write", "events.read", "tools.read", "tools.write", "resources.read", "resources.write", "jobs.read", "jobs.write", "cron.read", "cron.write", "market.read", "market.write", "mcp.read", "mcp.write", "nodes.read", "nodes.write"}},
-		{Name: "viewer", Description: "Read-only governance and monitoring", Permissions: []string{"status.read", "tasks.read", "sessions.read", "events.read", "audit.read", "plugins.read", "channels.read", "routing.read", "runtimes.read", "resources.read", "jobs.read", "cron.read", "market.read", "mcp.read", "nodes.read"}},
+		{Name: "viewer", Description: "Read-only governance and monitoring", Permissions: []string{"status.read", "tasks.read", "sessions.read", "events.read", "audit.read", "plugins.read", "channels.read", "routing.read", "runtimes.read", "resources.read", "jobs.read", "cron.read", "market.read", "mcp.read", "nodes.read", "auth.users.read", "auth.roles.read"}},
 	}
 }
 
@@ -28,7 +28,7 @@ func resolveRolePermissions(cfg *config.SecurityConfig, roleName string) []strin
 	}
 	switch roleName {
 	case "viewer":
-		return []string{"status.read", "tasks.read", "sessions.read", "events.read", "audit.read", "plugins.read", "channels.read", "routing.read", "runtimes.read", "resources.read", "jobs.read", "cron.read", "market.read", "mcp.read", "nodes.read"}
+		return []string{"status.read", "tasks.read", "sessions.read", "events.read", "audit.read", "plugins.read", "channels.read", "routing.read", "runtimes.read", "resources.read", "jobs.read", "cron.read", "market.read", "mcp.read", "nodes.read", "auth.users.read", "auth.roles.read"}
 	default:
 		return nil
 	}

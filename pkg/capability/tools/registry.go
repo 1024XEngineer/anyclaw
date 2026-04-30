@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +55,7 @@ type BuiltinOptions struct {
 	ProtectedPaths          []string
 	AllowedReadPaths        []string
 	AllowedWritePaths       []string
+	AllowedEgressDomains    []string
 	Policy                  *PolicyEngine
 	CommandTimeoutSeconds   int
 	ConfirmDangerousCommand DangerousCommandConfirmer
@@ -105,6 +107,7 @@ const (
 const (
 	ToolCachePolicyDefault ToolCachePolicy = "default"
 	ToolCachePolicyNever   ToolCachePolicy = "never"
+	ToolCachePolicyCache   ToolCachePolicy = "cache"
 )
 
 // Tool 工具结构
@@ -148,16 +151,16 @@ func (r *Registry) RegisterTool(name string, desc string, schema map[string]any,
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.tools[name] = &Tool{
+	r.registerLocked(&Tool{
 		Name:        name,
 		Description: desc,
 		InputSchema: schema,
 		Handler:     handler,
-		Category:    ToolCategoryCustom,
+		Category:    inferToolCategory(name),
 		AccessLevel: ToolAccessPublic,
 		Visibility:  ToolVisibilityAll,
 		CachePolicy: ToolCachePolicyDefault,
-	}
+	})
 }
 
 // Register 注册工具
@@ -165,15 +168,70 @@ func (r *Registry) Register(t *Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.registerLocked(t)
+}
+
+func (r *Registry) registerLocked(t *Tool) {
+	if t == nil {
+		return
+	}
 	if t.Visibility == "" {
 		t.Visibility = ToolVisibilityAll
+	}
+	if t.Category == "" {
+		t.Category = inferToolCategory(t.Name)
 	}
 	if t.CachePolicy == "" {
 		t.CachePolicy = ToolCachePolicyDefault
 	}
+	if existing, ok := r.tools[t.Name]; ok && existing != nil && existing.Category != "" {
+		r.removeCategoryLocked(existing.Category, t.Name)
+	}
 	r.tools[t.Name] = t
-	if t.Category != "" {
+	if t.Category != "" && !toolNameInCategory(r.categories[t.Category], t.Name) {
 		r.categories[t.Category] = append(r.categories[t.Category], t.Name)
+	}
+}
+
+func (r *Registry) removeCategoryLocked(category ToolCategory, name string) {
+	names := r.categories[category]
+	for i, item := range names {
+		if item == name {
+			r.categories[category] = append(names[:i], names[i+1:]...)
+			return
+		}
+	}
+}
+
+func toolNameInCategory(names []string, name string) bool {
+	for _, item := range names {
+		if item == name {
+			return true
+		}
+	}
+	return false
+}
+
+func inferToolCategory(name string) ToolCategory {
+	name = strings.TrimSpace(name)
+	switch {
+	case name == "read" || name == "write" || name == "edit" || name == "apply_patch",
+		name == "read_file" || name == "write_file" || name == "list_directory" || name == "search_files":
+		return ToolCategoryFile
+	case name == "exec" || name == "process" || name == "run_command":
+		return ToolCategoryCommand
+	case name == "web_fetch" || name == "web_search" || name == "fetch_url":
+		return ToolCategoryWeb
+	case strings.HasPrefix(name, "browser_"):
+		return ToolCategoryBrowser
+	case strings.HasPrefix(name, "desktop_"):
+		return ToolCategoryDesktop
+	case strings.HasPrefix(name, "memory_"):
+		return ToolCategoryMemory
+	case strings.HasPrefix(name, "channel_"):
+		return ToolCategoryChannel
+	default:
+		return ToolCategoryCustom
 	}
 }
 
@@ -232,7 +290,7 @@ func (r *Registry) Call(ctx context.Context, name string, input map[string]any) 
 	}
 
 	// 检查缓存
-	cacheEnabled := t.CachePolicy != ToolCachePolicyNever
+	cacheEnabled := t.CachePolicy == ToolCachePolicyCache
 	cacheKey := ""
 	if cacheEnabled {
 		cacheKey = r.generateCacheKey(name, input)

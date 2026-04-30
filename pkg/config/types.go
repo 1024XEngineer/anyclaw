@@ -306,6 +306,8 @@ type SubAgentConfig struct {
 	Role            string   `json:"role,omitempty"`
 	ParentRef       string   `json:"parent_ref,omitempty"`
 	Personality     string   `json:"personality,omitempty"`
+	Domain          string   `json:"domain,omitempty"`
+	Expertise       []string `json:"expertise,omitempty"`
 	PrivateSkills   []string `json:"private_skills"`
 	PermissionLevel string   `json:"permission_level"`
 	WorkingDir      string   `json:"working_dir,omitempty"`
