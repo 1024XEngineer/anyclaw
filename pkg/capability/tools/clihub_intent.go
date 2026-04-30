@@ -40,10 +40,14 @@ func RegisterIntentRouterTool(r *Registry, root string, opts BuiltinOptions) {
 			},
 			"required": []string{"intent"},
 		},
-		Category:    ToolCategoryCustom,
-		AccessLevel: ToolAccessPublic,
+		Category:         ToolCategoryCustom,
+		AccessLevel:      ToolAccessPublic,
+		RequiresApproval: true,
 		Handler: func(ctx context.Context, input map[string]any) (string, error) {
 			return auditCall(opts, "intent_route", input, func(ctx context.Context, input map[string]any) (string, error) {
+				if err := RequestToolApproval(ctx, "intent_route", input); err != nil {
+					return "", err
+				}
 				intentStr, _ := input["intent"].(string)
 				if intentStr == "" {
 					return "", fmt.Errorf("intent is required")

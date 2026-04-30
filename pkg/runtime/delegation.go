@@ -143,12 +143,13 @@ func registerDelegationTool(mainRuntime *MainRuntime) {
 	mainRuntime.Delegation = service
 
 	mainRuntime.Tools.Register(&tools.Tool{
-		Name:        "delegate_task",
-		Description: "Delegate a clearly-scoped sub-task to the orchestrator so specialized sub-agents can complete it.",
-		Category:    tools.ToolCategoryCustom,
-		AccessLevel: tools.ToolAccessPublic,
-		Visibility:  tools.ToolVisibilityMainAgentOnly,
-		CachePolicy: tools.ToolCachePolicyNever,
+		Name:             "delegate_task",
+		Description:      "Delegate a clearly-scoped sub-task to the orchestrator so specialized sub-agents can complete it.",
+		Category:         tools.ToolCategoryCustom,
+		AccessLevel:      tools.ToolAccessPublic,
+		Visibility:       tools.ToolVisibilityMainAgentOnly,
+		CachePolicy:      tools.ToolCachePolicyNever,
+		RequiresApproval: true,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

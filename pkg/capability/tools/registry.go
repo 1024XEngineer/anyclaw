@@ -109,17 +109,18 @@ const (
 
 // Tool 工具结构
 type Tool struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-	Handler     ToolFunc
-	Category    ToolCategory
-	AccessLevel ToolAccessLevel
-	Visibility  ToolVisibility
-	CachePolicy ToolCachePolicy
-	Timeout     time.Duration
-	Retryable   bool
-	MaxRetries  int
+	Name             string
+	Description      string
+	InputSchema      map[string]any
+	Handler          ToolFunc
+	Category         ToolCategory
+	AccessLevel      ToolAccessLevel
+	Visibility       ToolVisibility
+	CachePolicy      ToolCachePolicy
+	RequiresApproval bool
+	Timeout          time.Duration
+	Retryable        bool
+	MaxRetries       int
 }
 
 // Registry 工具注册表
@@ -376,13 +377,14 @@ func (r *Registry) GetToolDefinitionsForRole(isSubAgent bool) []map[string]any {
 			continue
 		}
 		defs = append(defs, map[string]any{
-			"name":         tool.Name,
-			"description":  tool.Description,
-			"category":     string(tool.Category),
-			"access_level": string(tool.AccessLevel),
-			"visibility":   string(tool.Visibility),
-			"cache_policy": string(tool.CachePolicy),
-			"input_schema": tool.InputSchema,
+			"name":              tool.Name,
+			"description":       tool.Description,
+			"category":          string(tool.Category),
+			"access_level":      string(tool.AccessLevel),
+			"visibility":        string(tool.Visibility),
+			"cache_policy":      string(tool.CachePolicy),
+			"requires_approval": tool.RequiresApproval,
+			"input_schema":      tool.InputSchema,
 		})
 	}
 
@@ -402,11 +404,12 @@ func (r *Registry) GetToolDefinitionsJSON() (string, error) {
 
 // ToolInfo 工具信息
 type ToolInfo struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-	Visibility  ToolVisibility
-	CachePolicy ToolCachePolicy
+	Name             string
+	Description      string
+	InputSchema      map[string]any
+	Visibility       ToolVisibility
+	CachePolicy      ToolCachePolicy
+	RequiresApproval bool
 }
 
 // List 列出工具信息
@@ -425,14 +428,26 @@ func (r *Registry) ListForRole(isSubAgent bool) []ToolInfo {
 			continue
 		}
 		list = append(list, ToolInfo{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-			Visibility:  t.Visibility,
-			CachePolicy: t.CachePolicy,
+			Name:             t.Name,
+			Description:      t.Description,
+			InputSchema:      t.InputSchema,
+			Visibility:       t.Visibility,
+			CachePolicy:      t.CachePolicy,
+			RequiresApproval: t.RequiresApproval,
 		})
 	}
 	return list
+}
+
+func (r *Registry) RequiresApproval(name string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	t, ok := r.tools[name]
+	return ok && t != nil && t.RequiresApproval
 }
 
 func toolVisibleForRole(tool *Tool, isSubAgent bool) bool {

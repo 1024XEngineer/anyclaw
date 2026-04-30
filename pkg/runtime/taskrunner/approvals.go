@@ -139,7 +139,7 @@ func (m *Manager) toolApprovalHook(task *state.Task, session *state.Session, cfg
 		return nil
 	}
 	return func(ctx context.Context, tc agent.ToolCall) error {
-		return m.requireToolApproval(task, session, cfg, tc.Name, tc.Args)
+		return m.requireToolApproval(task, session, cfg, tc.Name, tc.Args, tc.RequiresApproval)
 	}
 }
 
@@ -152,8 +152,8 @@ func (m *Manager) protocolApprovalHook(task *state.Task, session *state.Session,
 	}
 }
 
-func (m *Manager) requireToolApproval(task *state.Task, session *state.Session, cfg *config.Config, toolName string, args map[string]any) error {
-	if !RequiresToolApprovalName(toolName) {
+func (m *Manager) requireToolApproval(task *state.Task, session *state.Session, cfg *config.Config, toolName string, args map[string]any, forceApproval ...bool) error {
+	if !requiresToolApprovalNameOrFlag(toolName, forceApproval...) {
 		return nil
 	}
 	stepIndex := firstNonZero(m.executionStageIndexes(task.ID).execute, 3)
@@ -241,17 +241,29 @@ func (m *Manager) requireToolApproval(task *state.Task, session *state.Session, 
 }
 
 func requiresToolApproval(tc agent.ToolCall) bool {
-	return RequiresToolApprovalName(tc.Name)
+	return tc.RequiresApproval || RequiresToolApprovalName(tc.Name)
 }
 
 func RequiresToolApprovalName(name string) bool {
 	name = strings.TrimSpace(strings.ToLower(name))
+	if strings.HasPrefix(name, "skill_") {
+		return true
+	}
 	switch name {
-	case "run_command", "write_file", "exec", "process", "write", "edit", "apply_patch", "fetch_url", "web_fetch", "image", "image_analyze", "browser_upload", "desktop_open", "desktop_type", "desktop_type_human", "desktop_hotkey", "desktop_clipboard_set", "desktop_clipboard_get", "desktop_paste", "desktop_click", "desktop_screenshot", "desktop_screenshot_window", "desktop_move", "desktop_double_click", "desktop_scroll", "desktop_drag", "desktop_wait", "desktop_list_windows", "desktop_wait_window", "desktop_focus_window", "desktop_inspect_ui", "desktop_invoke_ui", "desktop_set_value_ui", "desktop_resolve_target", "desktop_activate_target", "desktop_set_target_value", "desktop_match_image", "desktop_click_image", "desktop_wait_image", "desktop_ocr", "desktop_verify_text", "desktop_find_text", "desktop_click_text", "desktop_wait_text", "desktop_plan":
+	case "run_command", "write_file", "exec", "process", "write", "edit", "apply_patch", "fetch_url", "web_fetch", "image", "image_analyze", "clihub_exec", "intent_route", "delegate_task", "browser_upload", "desktop_open", "desktop_type", "desktop_type_human", "desktop_hotkey", "desktop_clipboard_set", "desktop_clipboard_get", "desktop_paste", "desktop_click", "desktop_screenshot", "desktop_screenshot_window", "desktop_move", "desktop_double_click", "desktop_scroll", "desktop_drag", "desktop_wait", "desktop_list_windows", "desktop_wait_window", "desktop_focus_window", "desktop_inspect_ui", "desktop_invoke_ui", "desktop_set_value_ui", "desktop_resolve_target", "desktop_activate_target", "desktop_set_target_value", "desktop_match_image", "desktop_click_image", "desktop_wait_image", "desktop_ocr", "desktop_verify_text", "desktop_find_text", "desktop_click_text", "desktop_wait_text", "desktop_plan":
 		return true
 	default:
 		return false
 	}
+}
+
+func requiresToolApprovalNameOrFlag(name string, forceApproval ...bool) bool {
+	for _, force := range forceApproval {
+		if force {
+			return true
+		}
+	}
+	return RequiresToolApprovalName(name)
 }
 
 func (m *Manager) findExecutionApproval(taskID string) *state.Approval {

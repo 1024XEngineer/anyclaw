@@ -146,6 +146,7 @@ func allowedSecurityPermissions() map[string]bool {
 		"memory.read":     true,
 		"events.read":     true,
 		"tools.read":      true,
+		"tools.write":     true,
 		"plugins.read":    true,
 		"channels.read":   true,
 		"routing.read":    true,

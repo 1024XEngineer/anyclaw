@@ -2,6 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	agentpkg "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
@@ -40,6 +43,42 @@ func TestIsToolAllowedForPermissionReadOnlyDesktopTools(t *testing.T) {
 		if isToolAllowedForPermission(toolName, "read-only") {
 			t.Fatalf("expected %s to be hidden from read-only agents", toolName)
 		}
+	}
+}
+
+func TestSubAgentSkillExecutionHonorsConfiguredExecPolicy(t *testing.T) {
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "runner")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "skill.json"), []byte(`{
+  "name": "runner",
+  "description": "Runs external work",
+  "version": "1.0.0",
+  "entrypoint": "run.sh"
+}`), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+	manager := skills.NewSkillsManager(root)
+	if err := manager.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	def := AgentDefinition{
+		Name:            "worker",
+		Description:     "Uses private skills",
+		PrivateSkills:   []string{"runner"},
+		PermissionLevel: "limited",
+	}
+	sa, err := NewSubAgentWithContext(def, &stubSubAgentLLM{}, manager, tools.NewRegistry(), nil, nil, "", skills.ExecutionOptions{AllowExec: false})
+	if err != nil {
+		t.Fatalf("NewSubAgentWithContext: %v", err)
+	}
+
+	_, err = sa.tools.Call(context.Background(), "skill_runner", map[string]any{"action": "run"})
+	if err == nil || !strings.Contains(err.Error(), "skill execution disabled") {
+		t.Fatalf("expected private executable skill to honor AllowExec=false, got %v", err)
 	}
 }
 

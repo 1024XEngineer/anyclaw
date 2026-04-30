@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	gatewayauth "github.com/1024XEngineer/anyclaw/pkg/gateway/auth"
 	gatewaysurface "github.com/1024XEngineer/anyclaw/pkg/gateway/surface"
 	"github.com/gorilla/websocket"
@@ -164,5 +165,56 @@ func TestOpenClawWSCoreMutationAndDeviceRequests(t *testing.T) {
 
 	if ok, err := conn.handleDeviceWSRequest(ctx, openClawWSFrame{}, "unknown.device"); err != nil || ok {
 		t.Fatalf("unexpected unknown device result ok=%v err=%v", ok, err)
+	}
+}
+
+func TestOpenClawWSToolsInvokeDispatch(t *testing.T) {
+	server := newSplitAPITestServer(t)
+	server.mainRuntime.Tools = tools.NewRegistry()
+	server.mainRuntime.Tools.RegisterTool("echo_text", "Echo text", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		text, _ := input["text"].(string)
+		return text, nil
+	})
+
+	conn, clientConn := newWSTestConn(t, server)
+	ctx := gatewayauth.WithUser(context.Background(), conn.user)
+	handled, err := conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID: "invoke-1",
+		Params: map[string]any{
+			"tool": "echo_text",
+			"args": map[string]any{"text": "hello"},
+		},
+	}, "tools.invoke")
+	if err != nil || !handled {
+		t.Fatalf("tools.invoke handled=%v err=%v", handled, err)
+	}
+	if frame := readWSFrame(t, clientConn); !frame.OK || frame.Data != "hello" {
+		t.Fatalf("tools.invoke response = %+v, want ok hello", frame)
+	}
+
+	server.mainRuntime.Tools.Register(&tools.Tool{
+		Name:             "dynamic_runner",
+		Description:      "Dynamic executable wrapper",
+		InputSchema:      map[string]any{},
+		RequiresApproval: true,
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			return "ran", nil
+		},
+	})
+	handled, err = conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID:     "invoke-approval",
+		Params: map[string]any{"tool": "dynamic_runner"},
+	}, "tools.invoke")
+	if !handled || err == nil || !strings.Contains(err.Error(), "requires approval") {
+		t.Fatalf("expected approval-required WS invoke to be rejected, handled=%v err=%v", handled, err)
+	}
+
+	conn.user = &gatewayauth.User{Name: "reader", Permissions: []string{"tools.read"}}
+	handled, err = conn.handleCatalogWSRequest(ctx, openClawWSFrame{
+		ID:     "invoke-forbidden",
+		Params: map[string]any{"tool": "echo_text"},
+	}, "tools.invoke")
+	if !handled || err == nil || !strings.Contains(err.Error(), "tools.write") {
+		t.Fatalf("expected tools.write permission failure, handled=%v err=%v", handled, err)
 	}
 }

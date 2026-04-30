@@ -600,9 +600,19 @@ func GetTimeTool(ctx context.Context, input map[string]any) (string, error) {
 }
 
 func WebSearchTool(ctx context.Context, input map[string]any) (string, error) {
+	return WebSearchToolWithPolicy(ctx, input, BuiltinOptions{})
+}
+
+func WebSearchToolWithPolicy(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
 	query, ok := input["query"].(string)
 	if !ok {
 		return "", fmt.Errorf("query is required")
+	}
+
+	if opts.Policy != nil {
+		if err := opts.Policy.CheckEgressURL(webtool.SearchEndpoint); err != nil {
+			return "", err
+		}
 	}
 
 	maxResults := 5

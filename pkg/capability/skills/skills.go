@@ -290,8 +290,19 @@ func (s *SkillsManager) RegisterTools(registry *tools.Registry, opts ExecutionOp
 	for _, skill := range s.skills {
 		skill := skill
 		toolDef := skill.ToTool()
-		registry.RegisterTool(toolDef.Name, toolDef.Description, toolDef.InputSchema, func(ctx context.Context, input map[string]any) (string, error) {
-			return s.Execute(ctx, skill.Name, input, opts)
+		registry.Register(&tools.Tool{
+			Name:             toolDef.Name,
+			Description:      toolDef.Description,
+			InputSchema:      toolDef.InputSchema,
+			Category:         tools.ToolCategoryCustom,
+			AccessLevel:      tools.ToolAccessPublic,
+			RequiresApproval: true,
+			Handler: func(ctx context.Context, input map[string]any) (string, error) {
+				if err := tools.RequestToolApproval(ctx, toolDef.Name, input); err != nil {
+					return "", err
+				}
+				return s.Execute(ctx, skill.Name, input, opts)
+			},
 		})
 	}
 }

@@ -38,8 +38,9 @@ func registerSkillTools(r *Registry, harnessName string, skill *clihub.Skill, ro
 					},
 				},
 			},
-			Category:    ToolCategoryCustom,
-			AccessLevel: ToolAccessPublic,
+			Category:         ToolCategoryCustom,
+			AccessLevel:      ToolAccessPublic,
+			RequiresApproval: true,
 			Handler: func(ctx context.Context, input map[string]any) (string, error) {
 				return auditCall(opts, toolName, input, func(ctx context.Context, input map[string]any) (string, error) {
 					args, err := stringSliceFromAny(input["args"])

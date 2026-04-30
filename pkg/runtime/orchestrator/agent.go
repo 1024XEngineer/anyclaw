@@ -79,7 +79,7 @@ func NewSubAgent(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skil
 	return NewSubAgentWithContext(def, llmClient, allSkills, baseTools, mem, nil, "")
 }
 
-func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem memory.MemoryBackend, isoManager *isolation.ContextIsolationManager, parentScopeID string) (*SubAgent, error) {
+func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allSkills *skills.SkillsManager, baseTools *tools.Registry, mem memory.MemoryBackend, isoManager *isolation.ContextIsolationManager, parentScopeID string, skillExecutionOptions ...skills.ExecutionOptions) (*SubAgent, error) {
 	if strings.TrimSpace(def.Name) == "" {
 		return nil, fmt.Errorf("agent name is required")
 	}
@@ -138,9 +138,9 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 		}
 	}
 
-	// Register skills as tools
+	// Register skills as tools.
 	if privateSkills != nil {
-		privateSkills.RegisterTools(privateTools, skills.ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: 30})
+		privateSkills.RegisterTools(privateTools, resolveSubAgentSkillExecutionOptions(skillExecutionOptions))
 	}
 
 	// Each agent gets its own memory instance for isolation
@@ -247,6 +247,17 @@ func NewSubAgentWithContext(def AgentDefinition, llmClient agent.LLMCaller, allS
 	}
 
 	return subAgent, nil
+}
+
+func defaultSubAgentSkillExecutionOptions() skills.ExecutionOptions {
+	return skills.ExecutionOptions{AllowExec: true, ExecTimeoutSeconds: 30}
+}
+
+func resolveSubAgentSkillExecutionOptions(options []skills.ExecutionOptions) skills.ExecutionOptions {
+	if len(options) == 0 {
+		return defaultSubAgentSkillExecutionOptions()
+	}
+	return options[0]
 }
 
 func maxTokensForAgent(def AgentDefinition) int {

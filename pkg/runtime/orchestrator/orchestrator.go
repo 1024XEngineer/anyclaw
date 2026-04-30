@@ -15,12 +15,13 @@ import (
 )
 
 type OrchestratorConfig struct {
-	MaxConcurrentAgents int               `json:"max_concurrent_agents"`
-	MaxRetries          int               `json:"max_retries"`
-	Timeout             time.Duration     `json:"timeout"`
-	AgentDefinitions    []AgentDefinition `json:"agent_definitions"`
-	EnableDecomposition bool              `json:"enable_decomposition"`
-	DefaultWorkingDir   string            `json:"default_working_dir,omitempty"`
+	MaxConcurrentAgents int                      `json:"max_concurrent_agents"`
+	MaxRetries          int                      `json:"max_retries"`
+	Timeout             time.Duration            `json:"timeout"`
+	AgentDefinitions    []AgentDefinition        `json:"agent_definitions"`
+	EnableDecomposition bool                     `json:"enable_decomposition"`
+	DefaultWorkingDir   string                   `json:"default_working_dir,omitempty"`
+	SkillExecution      *skills.ExecutionOptions `json:"skill_execution,omitempty"`
 }
 
 type OrchestratorStatus string
@@ -128,7 +129,7 @@ func (o *Orchestrator) initAgents(defs []AgentDefinition) error {
 	failures := make([]string, 0)
 	registered := 0
 	for _, def := range defs {
-		sa, err := NewSubAgent(def, o.llm, o.allSkills, o.baseTools, o.memory)
+		sa, err := NewSubAgentWithContext(def, o.llm, o.allSkills, o.baseTools, o.memory, nil, "", o.subAgentSkillExecutionOptions())
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", def.Name, err))
 			continue
@@ -157,6 +158,13 @@ func (o *Orchestrator) initAgents(defs []AgentDefinition) error {
 		return fmt.Errorf("failed to initialize all orchestrator agents: %s", strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+func (o *Orchestrator) subAgentSkillExecutionOptions() skills.ExecutionOptions {
+	if o != nil && o.config.SkillExecution != nil {
+		return *o.config.SkillExecution
+	}
+	return defaultSubAgentSkillExecutionOptions()
 }
 
 func (o *Orchestrator) Run(ctx context.Context, input string) (string, error) {
