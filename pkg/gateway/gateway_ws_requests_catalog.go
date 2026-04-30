@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	"github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
@@ -103,7 +104,16 @@ func (c *openClawWSConn) invokeToolFromWS(ctx context.Context, frame openClawWSF
 	if toolRequiresWSApproval(registry, toolName) {
 		return "", fmt.Errorf("tool %s requires approval; invoke it through a task or session", toolName)
 	}
-	callCtx := tools.WithToolCaller(ctx, tools.ToolCaller{
+	sessionScope := c.wsToolSessionScope()
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(toolName)), "browser_") {
+		args["session_id"] = sessionScope
+	}
+	callCtx := tools.WithBrowserSession(ctx, sessionScope)
+	callCtx = tools.WithSandboxScope(callCtx, tools.SandboxScope{
+		SessionID: sessionScope,
+		Channel:   "ws",
+	})
+	callCtx = tools.WithToolCaller(callCtx, tools.ToolCaller{
 		Role:        tools.ToolCallerRoleControlAPI,
 		AgentName:   mapString(c.userSummary(), "name"),
 		ExecutionID: frame.ID,
@@ -152,4 +162,17 @@ func decodeWSToolArgs(data []byte) (map[string]any, error) {
 
 func toolRequiresWSApproval(registry *tools.Registry, name string) bool {
 	return taskrunner.RequiresToolApprovalName(name) || (registry != nil && registry.RequiresApproval(name))
+}
+
+func (c *openClawWSConn) wsToolSessionScope() string {
+	if c == nil {
+		return uniqueID("ws_tool")
+	}
+	if scope := strings.TrimSpace(c.challenge); scope != "" {
+		return "ws-" + scope
+	}
+	if clientID := strings.TrimSpace(c.transport.ClientID); clientID != "" {
+		return "ws-" + clientID
+	}
+	return uniqueID("ws_tool")
 }
