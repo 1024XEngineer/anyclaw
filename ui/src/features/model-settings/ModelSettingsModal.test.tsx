@@ -27,6 +27,34 @@ describe("ModelSettingsModal", () => {
     vi.restoreAllMocks();
   });
 
+  it("uses user-facing API protocol fields when creating a custom model", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url === "/providers" && method === "GET") {
+        return jsonResponse([]);
+      }
+
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<ModelSettingsModal onClose={vi.fn()} />);
+
+    await screen.findByText("自定义大模型");
+
+    expect(screen.getByText("接口地址")).toBeInTheDocument();
+    expect(screen.getByText("API 协议类型")).toBeInTheDocument();
+    expect(screen.getByText("API Key")).toBeInTheDocument();
+    expect(screen.getByText("模型名称")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "API 协议类型" })).toHaveTextContent("OpenAI 兼容协议");
+    expect(screen.getByRole("combobox", { name: "API 协议类型" })).toHaveTextContent("Anthropic 兼容协议");
+    expect(screen.queryByText("运行时")).not.toBeInTheDocument();
+    expect(screen.queryByText("Base URL")).not.toBeInTheDocument();
+  });
+
   it("keeps provider selection separate from setting the default provider", async () => {
     const providers = [
       {
