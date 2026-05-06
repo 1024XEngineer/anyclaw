@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 
 	gatewayauth "github.com/1024XEngineer/anyclaw/pkg/gateway/auth"
 	gatewaymiddleware "github.com/1024XEngineer/anyclaw/pkg/gateway/middleware"
@@ -26,9 +28,9 @@ func (s Service) Wrap(path string, next http.HandlerFunc) http.HandlerFunc {
 		next = s.RateLimit.Wrap(next)
 	}
 	if s.Auth != nil {
-		return s.Auth.Wrap(path, next)
+		next = s.Auth.Wrap(path, next)
 	}
-	return next
+	return withLocalCORS(next)
 }
 
 // RequirePermission checks a single named permission before invoking the next handler.
@@ -107,4 +109,58 @@ func writeJSON(w http.ResponseWriter, statusCode int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func withLocalCORS(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if allowLocalCORS(w, r) && r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func allowLocalCORS(w http.ResponseWriter, r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if !isLocalControlOrigin(origin) {
+		return false
+	}
+
+	header := w.Header()
+	header.Set("Access-Control-Allow-Origin", origin)
+	header.Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS")
+	header.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept")
+	header.Set("Access-Control-Max-Age", "600")
+	if strings.EqualFold(r.Header.Get("Access-Control-Request-Private-Network"), "true") {
+		header.Set("Access-Control-Allow-Private-Network", "true")
+	}
+	header.Add("Vary", "Origin")
+	return true
+}
+
+func isLocalControlOrigin(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	if origin == "null" {
+		return true
+	}
+
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+
+	switch parsed.Scheme {
+	case "http", "https", "wails":
+	default:
+		return false
+	}
+
+	host := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
+	return host == "localhost" ||
+		host == "127.0.0.1" ||
+		host == "::1" ||
+		strings.HasSuffix(host, ".localhost")
 }

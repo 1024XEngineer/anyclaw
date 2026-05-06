@@ -11,11 +11,13 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { requestJSON } from "@/features/api/client";
+
 type ModelSettingsModalProps = {
   onClose: () => void;
 };
 
-type ProviderRuntime = "compatible" | "ollama" | "qwen";
+type ProviderRuntime = "anthropic" | "compatible" | "ollama";
 
 type ProviderHealth = {
   http_status?: number;
@@ -62,95 +64,63 @@ type NoticeState =
 
 const NEW_PROVIDER_ID = "__new_provider__";
 
-function safeJsonParse(value: string) {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-async function requestJSON<T>(input: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : null),
-      ...(init?.headers ?? {}),
-    },
-  });
-
-  const raw = await response.text();
-  const payload = raw ? safeJsonParse(raw) : null;
-
-  if (!response.ok) {
-    const message =
-      payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
-        ? payload.error
-        : `请求失败 (${response.status})`;
-    throw new Error(message);
-  }
-
-  return payload as T;
-}
-
 function normalizeRuntime(value?: string): ProviderRuntime {
-  const runtime = value?.trim().toLowerCase();
+  const runtime = value?.trim().toLowerCase() ?? "";
+  if (runtime === "anthropic" || runtime.includes("claude")) return "anthropic";
   if (runtime === "ollama") return "ollama";
-  if (runtime === "qwen") return "qwen";
   return "compatible";
 }
 
 function runtimeLabel(runtime: ProviderRuntime) {
   switch (runtime) {
+    case "anthropic":
+      return "Anthropic 兼容协议";
     case "ollama":
-      return "Ollama";
-    case "qwen":
-      return "通义千问";
+      return "Ollama 本地接口";
     default:
-      return "兼容接口";
+      return "OpenAI 兼容协议";
   }
 }
 
 function runtimeModelPlaceholder(runtime: ProviderRuntime) {
   switch (runtime) {
+    case "anthropic":
+      return "例如 claude-3-5-sonnet";
     case "ollama":
       return "例如 llama3.2";
-    case "qwen":
-      return "例如 qwen-max";
     default:
-      return "例如 gpt-5.4";
+      return "例如 gpt-4o-mini";
   }
 }
 
 function runtimeBaseUrlPlaceholder(runtime: ProviderRuntime) {
   switch (runtime) {
+    case "anthropic":
+      return "请输入 API 基础地址，例如 https://api.anthropic.com/v1";
     case "ollama":
-      return "例如 http://127.0.0.1:11434";
-    case "qwen":
-      return "例如 https://dashscope.aliyuncs.com/compatible-mode/v1";
+      return "请输入 API 基础地址，例如 http://127.0.0.1:11434/v1";
     default:
-      return "例如 https://api.openai.com/v1";
+      return "请输入 API 基础地址，例如 https://api.openai.com/v1";
   }
 }
 
 function runtimeDescription(runtime: ProviderRuntime) {
   switch (runtime) {
+    case "anthropic":
+      return "适用于 Claude / Anthropic Messages API 接口。";
     case "ollama":
       return "适合本地模型，通常不需要 API Key。";
-    case "qwen":
-      return "适合阿里云百炼兼容模式接入。";
     default:
-      return "适合 OpenAI、OpenRouter、火山方舟等兼容接口。";
+      return "适用于 OpenAI、通义千问百炼、OpenRouter、火山方舟等采用 chat/completions 的接口。";
   }
 }
 
 function runtimeToType(runtime: ProviderRuntime) {
   switch (runtime) {
+    case "anthropic":
+      return "anthropic";
     case "ollama":
       return "ollama";
-    case "qwen":
-      return "qwen";
     default:
       return "openai-compatible";
   }
@@ -205,8 +175,8 @@ function buildPayload(draft: ProviderDraft) {
 }
 
 function validateDraft(draft: ProviderDraft) {
-  if (draft.name.trim() === "") return "请填写配置名称";
-  if (draft.model.trim() === "") return "请填写模型名称";
+  if (draft.name.trim() === "") return "请填写模型名称";
+  if (draft.model.trim() === "") return "请填写调用模型";
   if (draft.runtime !== "ollama" && draft.apiKey.trim() === "" && !draft.hasStoredApiKey) {
     return "请填写 API Key";
   }
@@ -249,10 +219,12 @@ function resolveTestFeedback(result: ProviderHealth | null) {
 
   const httpStatus = result.http_status;
   const isHealthyHttp = httpStatus === undefined || (httpStatus >= 200 && httpStatus < 300);
+  const fallbackMessage = result.message?.trim() ?? "";
+  const friendlyMessage = resolveProviderHealthMessage(result);
 
   if (result.ok && isHealthyHttp) {
     return {
-      message: result.message || "连接测试已完成",
+      message: friendlyMessage || "连接成功，接口已响应。",
       tone: "success" as const,
     };
   }
@@ -260,16 +232,54 @@ function resolveTestFeedback(result: ProviderHealth | null) {
   if (result.ok && httpStatus !== undefined) {
     return {
       message:
-        result.message ||
-        `服务可达，但返回了 HTTP ${httpStatus}。请确认 Base URL 和接口路径是否正确。`,
+        friendlyMessage ||
+        `服务可达，但返回了 HTTP ${httpStatus}。请确认接口地址和 API 协议类型是否正确。`,
       tone: "warning" as const,
     };
   }
 
   return {
-    message: result.message || "连接测试失败",
+    message: friendlyMessage || fallbackMessage || "连接测试失败",
     tone: "error" as const,
   };
+}
+
+function resolveProviderHealthMessage(result: ProviderHealth) {
+  const raw = result.message?.trim() ?? "";
+  const status = result.status?.trim().toLowerCase() ?? "";
+  const httpStatus = result.http_status;
+
+  if (status === "reachable" && result.ok) {
+    return httpStatus ? `连接成功，接口已响应（HTTP ${httpStatus}）。` : "连接成功，接口已响应。";
+  }
+  if (status === "ready" && result.ok) {
+    return raw || "配置已就绪，可以使用。";
+  }
+  if (status === "auth_error") {
+    return httpStatus
+      ? `接口已连通，但 API Key 无效或没有权限（HTTP ${httpStatus}）。`
+      : "接口已连通，但 API Key 无效或没有权限。";
+  }
+  if (status === "endpoint_not_found") {
+    return "接口地址返回 404，请检查是否多填或少填了 API 路径。";
+  }
+  if (status === "invalid_base_url") {
+    return "接口地址格式不正确，请检查后再试。";
+  }
+  if (status === "missing_key") {
+    return "请填写 API Key 后再测试连接。";
+  }
+  if (status === "disabled") {
+    return "这个模型配置已停用，请启用后再测试。";
+  }
+  if (/^Endpoint responded with HTTP 2\d\d\.?$/i.test(raw)) {
+    return httpStatus ? `连接成功，接口已响应（HTTP ${httpStatus}）。` : "连接成功，接口已响应。";
+  }
+  if (/^Endpoint responded with HTTP \d+\.?$/i.test(raw) && httpStatus) {
+    return `接口已响应，但返回了 HTTP ${httpStatus}。`;
+  }
+
+  return raw;
 }
 
 function FieldLabel({ hint, label }: { hint?: string; label: string }) {
@@ -425,8 +435,8 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
       model: draft.model.trim() || "placeholder-model",
     });
 
-    if (validationMessage === "请填写模型名称") {
-      setNotice({ kind: "error", message: "测试前请先填写模型名称" });
+    if (validationMessage === "请填写调用模型") {
+      setNotice({ kind: "error", message: "测试前请先填写调用模型" });
       return;
     }
 
@@ -549,7 +559,7 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
               <div>
                 <div className="flex items-center gap-2">
                   <div className="text-[22px] font-semibold tracking-[-0.03em] text-[#111827]">
-                    {isCreating ? "新建模型配置" : draft.name || "模型配置"}
+                    {isCreating ? "自定义大模型" : draft.name || "模型配置"}
                   </div>
                   {!isCreating && selectedProvider?.is_default ? (
                     <span className="rounded-full bg-[#eef2ff] px-3 py-1 text-xs font-medium text-[#3b5bcc]">
@@ -608,40 +618,7 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6 lg:px-8 lg:py-7">
             <div className="grid gap-6 xl:grid-cols-2">
               <div>
-                <FieldLabel label="配置名称" />
-                <input
-                  className="h-12 w-full rounded-[16px] border border-[#dbe1ea] bg-white px-4 text-sm text-[#111827] outline-none transition-colors duration-150 placeholder:text-[#98a2b3] focus:border-[#98a2b3]"
-                  onChange={(event) => updateDraft("name", event.target.value)}
-                  placeholder="例如 我的 OpenAI 接口"
-                  value={draft.name}
-                />
-              </div>
-
-              <div>
-                <FieldLabel label="运行时" />
-                <select
-                  className="h-12 w-full rounded-[16px] border border-[#dbe1ea] bg-white px-4 text-sm text-[#111827] outline-none transition-colors duration-150 focus:border-[#98a2b3]"
-                  onChange={(event) => updateDraft("runtime", event.target.value as ProviderRuntime)}
-                  value={draft.runtime}
-                >
-                  <option value="compatible">兼容接口</option>
-                  <option value="qwen">通义千问</option>
-                  <option value="ollama">Ollama</option>
-                </select>
-              </div>
-
-              <div>
-                <FieldLabel label="模型名称" />
-                <input
-                  className="h-12 w-full rounded-[16px] border border-[#dbe1ea] bg-white px-4 text-sm text-[#111827] outline-none transition-colors duration-150 placeholder:text-[#98a2b3] focus:border-[#98a2b3]"
-                  onChange={(event) => updateDraft("model", event.target.value)}
-                  placeholder={runtimeModelPlaceholder(draft.runtime)}
-                  value={draft.model}
-                />
-              </div>
-
-              <div>
-                <FieldLabel hint="可留空" label="Base URL" />
+                <FieldLabel label="接口地址" />
                 <input
                   className="h-12 w-full rounded-[16px] border border-[#dbe1ea] bg-white px-4 text-sm text-[#111827] outline-none transition-colors duration-150 placeholder:text-[#98a2b3] focus:border-[#98a2b3]"
                   onChange={(event) => updateDraft("baseUrl", event.target.value)}
@@ -650,13 +627,27 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
                 />
               </div>
 
+              <div>
+                <FieldLabel label="API 协议类型" />
+                <select
+                  aria-label="API 协议类型"
+                  className="h-12 w-full rounded-[16px] border border-[#dbe1ea] bg-white px-4 text-sm text-[#111827] outline-none transition-colors duration-150 focus:border-[#98a2b3]"
+                  onChange={(event) => updateDraft("runtime", event.target.value as ProviderRuntime)}
+                  value={draft.runtime}
+                >
+                  <option value="compatible">OpenAI 兼容协议</option>
+                  <option value="anthropic">Anthropic 兼容协议</option>
+                  <option value="ollama">Ollama 本地接口</option>
+                </select>
+              </div>
+
               <div className="xl:col-span-2">
                 <FieldLabel hint={requiresApiKey ? "必填" : "本地模型通常不需要"} label="API Key" />
                 <div className="relative">
                   <input
                     className="h-12 w-full rounded-[16px] border border-[#dbe1ea] bg-white px-4 pr-12 text-sm text-[#111827] outline-none transition-colors duration-150 placeholder:text-[#98a2b3] focus:border-[#98a2b3]"
                     onChange={(event) => updateDraft("apiKey", event.target.value)}
-                    placeholder={requiresApiKey ? "输入你的 API Key" : "如有需要可填写"}
+                    placeholder={requiresApiKey ? "请输入 API Key" : "如有需要可填写"}
                     type={secretVisible ? "text" : "password"}
                     value={draft.apiKey}
                   />
@@ -673,6 +664,26 @@ export function ModelSettingsModal({ onClose }: ModelSettingsModalProps) {
                 {draft.hasStoredApiKey && draft.apiKeyPreview && draft.apiKey.trim() === "" ? (
                   <div className="mt-2 text-xs text-[#667085]">已保存密钥：{draft.apiKeyPreview}</div>
                 ) : null}
+              </div>
+
+              <div>
+                <FieldLabel label="模型名称" />
+                <input
+                  className="h-12 w-full rounded-[16px] border border-[#dbe1ea] bg-white px-4 text-sm text-[#111827] outline-none transition-colors duration-150 placeholder:text-[#98a2b3] focus:border-[#98a2b3]"
+                  onChange={(event) => updateDraft("name", event.target.value)}
+                  placeholder="请输入模型的显示名称"
+                  value={draft.name}
+                />
+              </div>
+
+              <div>
+                <FieldLabel hint="实际发送给 API 的模型名" label="调用模型" />
+                <input
+                  className="h-12 w-full rounded-[16px] border border-[#dbe1ea] bg-white px-4 text-sm text-[#111827] outline-none transition-colors duration-150 placeholder:text-[#98a2b3] focus:border-[#98a2b3]"
+                  onChange={(event) => updateDraft("model", event.target.value)}
+                  placeholder={runtimeModelPlaceholder(draft.runtime)}
+                  value={draft.model}
+                />
               </div>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { fetchJSONOrNull } from "@/features/api/client";
 import { workspaceSnapshot } from "@/generated/workspaceSnapshot.generated";
 import { normalizeSkillDescription } from "@/features/workspace/skillDescription";
 
@@ -298,26 +299,14 @@ function compactText(value: string, fallback: string) {
   return text === "" ? fallback : text;
 }
 
-async function fetchJSON<T>(input: string): Promise<T | null> {
-  try {
-    const response = await fetch(input, {
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) return null;
-    return (await response.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
 async function fetchLivePayload(): Promise<LivePayload> {
   const [status, providers, agents, skills, channels, runtimes] = await Promise.all([
-    fetchJSON<LiveStatus>("/status"),
-    fetchJSON<LiveProvider[]>("/providers"),
-    fetchJSON<LiveAgent[]>("/agents"),
-    fetchJSON<LiveSkill[]>("/skills"),
-    fetchJSON<LiveChannel[]>("/channels"),
-    fetchJSON<LiveRuntime[]>("/runtimes"),
+    fetchJSONOrNull<LiveStatus>("/status"),
+    fetchJSONOrNull<LiveProvider[]>("/providers"),
+    fetchJSONOrNull<LiveAgent[]>("/agents"),
+    fetchJSONOrNull<LiveSkill[]>("/skills"),
+    fetchJSONOrNull<LiveChannel[]>("/channels"),
+    fetchJSONOrNull<LiveRuntime[]>("/runtimes"),
   ]);
 
   return {

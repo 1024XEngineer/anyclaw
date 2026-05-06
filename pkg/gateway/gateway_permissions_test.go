@@ -100,6 +100,28 @@ func TestGatewayMutablePlatformRoutesRequireWritePermission(t *testing.T) {
 	}
 }
 
+func TestGatewayRoutesAllowLocalControlUICORSPreflight(t *testing.T) {
+	_, mux := newPermissionRouteServer(t, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodOptions, "/providers", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:4173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "content-type")
+	req.Header.Set("Access-Control-Request-Private-Network", "true")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS /providers = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://127.0.0.1:4173" {
+		t.Fatalf("unexpected CORS allow origin %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Private-Network"); got != "true" {
+		t.Fatalf("unexpected private network CORS header %q", got)
+	}
+}
+
 func TestGatewayAuthUserMutationsRequireUserWritePermission(t *testing.T) {
 	_, mux := newPermissionRouteServer(t, []config.SecurityUser{
 		{

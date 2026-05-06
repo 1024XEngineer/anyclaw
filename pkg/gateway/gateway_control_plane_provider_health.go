@@ -76,27 +76,27 @@ func activeProviderTest(ctx context.Context, provider config.ProviderProfile) pr
 		return providerHealth{
 			OK:         true,
 			Status:     "reachable",
-			Message:    fmt.Sprintf("Endpoint responded with HTTP %d.", resp.StatusCode),
+			Message:    fmt.Sprintf("连接成功，接口已响应（HTTP %d）。", resp.StatusCode),
 			HTTPStatus: resp.StatusCode,
 		}
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return providerHealth{
 			Status:     "auth_error",
-			Message:    fmt.Sprintf("Endpoint reached but authorization failed with HTTP %d.", resp.StatusCode),
+			Message:    fmt.Sprintf("接口已连通，但 API Key 无效或没有权限（HTTP %d）。", resp.StatusCode),
 			HTTPStatus: resp.StatusCode,
 		}
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return providerHealth{
 			Status:     "endpoint_not_found",
-			Message:    "Endpoint returned HTTP 404. Check whether Base URL already contains the correct API path.",
+			Message:    "接口地址返回 404，请检查是否多填或少填了 API 路径。",
 			HTTPStatus: resp.StatusCode,
 		}
 	}
 	return providerHealth{
 		Status:     "error",
-		Message:    fmt.Sprintf("Endpoint responded with HTTP %d.", resp.StatusCode),
+		Message:    fmt.Sprintf("接口已响应，但返回了 HTTP %d。", resp.StatusCode),
 		HTTPStatus: resp.StatusCode,
 	}
 }

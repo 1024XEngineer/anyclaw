@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	agentstore "github.com/1024XEngineer/anyclaw/pkg/capability/catalogs"
@@ -123,24 +124,24 @@ func TestGatewayStoreAndProviderHealth(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer successSrv.Close()
-		if got := activeProviderTest(context.Background(), config.ProviderProfile{Enabled: config.BoolPtr(true), Provider: "compatible", APIKey: "key", BaseURL: successSrv.URL}); got.Status != "reachable" {
-			t.Fatalf("reachable provider status = %q", got.Status)
+		if got := activeProviderTest(context.Background(), config.ProviderProfile{Enabled: config.BoolPtr(true), Provider: "compatible", APIKey: "key", BaseURL: successSrv.URL}); got.Status != "reachable" || !strings.Contains(got.Message, "连接成功") {
+			t.Fatalf("reachable provider health = %+v", got)
 		}
 
 		authSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
 		}))
 		defer authSrv.Close()
-		if got := activeProviderTest(context.Background(), config.ProviderProfile{Enabled: config.BoolPtr(true), Provider: "compatible", APIKey: "key", BaseURL: authSrv.URL}); got.Status != "auth_error" {
-			t.Fatalf("auth provider status = %q", got.Status)
+		if got := activeProviderTest(context.Background(), config.ProviderProfile{Enabled: config.BoolPtr(true), Provider: "compatible", APIKey: "key", BaseURL: authSrv.URL}); got.Status != "auth_error" || !strings.Contains(got.Message, "API Key") {
+			t.Fatalf("auth provider health = %+v", got)
 		}
 
 		notFoundSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		defer notFoundSrv.Close()
-		if got := activeProviderTest(context.Background(), config.ProviderProfile{Enabled: config.BoolPtr(true), Provider: "compatible", APIKey: "key", BaseURL: notFoundSrv.URL}); got.Status != "endpoint_not_found" {
-			t.Fatalf("404 provider status = %q", got.Status)
+		if got := activeProviderTest(context.Background(), config.ProviderProfile{Enabled: config.BoolPtr(true), Provider: "compatible", APIKey: "key", BaseURL: notFoundSrv.URL}); got.Status != "endpoint_not_found" || !strings.Contains(got.Message, "404") {
+			t.Fatalf("404 provider health = %+v", got)
 		}
 
 		if got := activeProviderTest(context.Background(), config.ProviderProfile{Enabled: config.BoolPtr(true), Provider: "compatible", APIKey: "key"}); got.Status != "ready" {
