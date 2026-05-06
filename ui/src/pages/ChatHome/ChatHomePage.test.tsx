@@ -1,4 +1,4 @@
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
@@ -62,6 +62,7 @@ describe("ChatHomePage", () => {
           name: "AnyClaw",
           sessions: 2,
           workspace: "/workspace",
+          workspaceId: "ws-test-snapshot",
         },
       },
     } as unknown as ReturnType<typeof useWorkspaceOverview>);
@@ -69,6 +70,14 @@ describe("ChatHomePage", () => {
     webChatState = {
       approvalActionId: null,
       approvalNoticeApprovals: [],
+      chatTaskState: {
+        canCancel: false,
+        canContinue: true,
+        canRetry: false,
+        detail: "上一轮任务已经结束，可以继续追问或开始新任务。",
+        label: "已完成",
+        phase: "completed",
+      },
       deleteSession: vi.fn(),
       draft: "",
       error: null,
@@ -193,5 +202,98 @@ describe("ChatHomePage", () => {
       behavior: "smooth",
       top: 1000,
     });
+  });
+
+  it("passes the snapshot workspace id to chat persistence", () => {
+    renderPage();
+
+    expect(useWebChatMock).toHaveBeenCalledWith("binbin", "/workspace", "ws-test-snapshot");
+  });
+
+  it("shows task entry suggestions when the conversation is empty", () => {
+    webChatState = {
+      ...webChatState,
+      chatTaskState: {
+        canCancel: false,
+        canContinue: true,
+        canRetry: false,
+        detail: "可以直接描述你想完成的任务。",
+        label: "待命",
+        phase: "idle",
+      },
+      messages: [],
+      sessionId: null,
+    };
+
+    renderPage();
+
+    expect(screen.getByText("想让 AnyClaw 帮你完成什么？")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /排查一个问题/i }));
+
+    expect(webChatState.setDraft).toHaveBeenCalledWith("帮我检查最近的报错，定位原因，并给出可以落地的修复方案。");
+  });
+
+  it("renders approvals as an execution preview", () => {
+    webChatState = {
+      ...webChatState,
+      approvalNoticeApprovals: [
+        {
+          action: "tool_call",
+          id: "approval-1",
+          payload: {
+            args: {
+              command: "pnpm test",
+            },
+          },
+          requested_at: "2026-04-11T12:00:10.000Z",
+          status: "pending",
+          tool_name: "run_command",
+        },
+      ],
+      chatTaskState: {
+        canCancel: false,
+        canContinue: true,
+        canRetry: false,
+        detail: "1 个操作需要你确认后才会继续。",
+        label: "等待确认",
+        phase: "awaiting_approval",
+      },
+      pendingApprovals: [
+        {
+          id: "approval-1",
+          payload: { args: { command: "pnpm test" } },
+          tool_name: "run_command",
+        },
+      ],
+    };
+
+    renderPage();
+
+    expect(screen.getByText("执行前预览")).toBeInTheDocument();
+    expect(screen.getByText("运行本地命令")).toBeInTheDocument();
+    expect(screen.getByText("高影响")).toBeInTheDocument();
+    expect(screen.getByText("命令: pnpm test")).toBeInTheDocument();
+  });
+
+  it("shows user-facing error guidance in the composer", () => {
+    webChatState = {
+      ...webChatState,
+      chatTaskState: {
+        canCancel: false,
+        canContinue: false,
+        canRetry: true,
+        detail: "这次请求没有完成，你可以调整后重试。",
+        label: "可重试",
+        phase: "retryable",
+        technicalDetail: "session not found",
+      },
+      error: "session not found",
+    };
+
+    renderPage();
+
+    expect(screen.getByText("发生了什么：这个会话已经不可用。")).toBeInTheDocument();
+    expect(screen.getByText("你可以怎么做：可以新建对话，或从左侧选择另一个历史会话后继续。")).toBeInTheDocument();
   });
 });

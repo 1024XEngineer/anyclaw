@@ -13,7 +13,7 @@ export function AgentDrawer({ onClose }: AgentDrawerProps) {
   const activeAgent = data.localAgents.find((agent) => agent.active) ?? data.localAgents[0];
   const highlights = [
     { label: "模型", value: runtimeProfile.model, icon: Sparkles },
-    { label: "权限", value: runtimeProfile.permission, icon: ShieldCheck },
+    { label: "权限", value: runtimeProfile.mainPermission, icon: ShieldCheck },
     { label: "工作空间", value: runtimeProfile.workspace, icon: FolderKanban },
   ];
 

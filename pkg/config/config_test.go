@@ -61,6 +61,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Sandbox.ExecutionMode != "sandbox" {
 		t.Fatalf("default sandbox.execution_mode = %q, want sandbox", cfg.Sandbox.ExecutionMode)
 	}
+	if cfg.Security.DesktopApprovalScope != "capability" {
+		t.Fatalf("default security.desktop_approval_scope = %q, want capability", cfg.Security.DesktopApprovalScope)
+	}
 	if cfg.Sandbox.DockerImage != DefaultSandboxDockerImage {
 		t.Fatalf("default sandbox docker image = %q, want %q", cfg.Sandbox.DockerImage, DefaultSandboxDockerImage)
 	}
@@ -616,6 +619,62 @@ func TestSandboxExecutionModeValidation(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sandbox.execution_mode") {
 		t.Fatalf("error should mention sandbox.execution_mode: %v", err)
+	}
+}
+
+func TestDesktopApprovalScopeValidation(t *testing.T) {
+	for _, scope := range []string{"capability", "tool_call"} {
+		cfg := DefaultConfig()
+		cfg.Security.DesktopApprovalScope = scope
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("security.desktop_approval_scope %q should be valid: %v", scope, err)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Security.DesktopApprovalScope = "session"
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid security.desktop_approval_scope")
+	}
+	if !strings.Contains(err.Error(), "security.desktop_approval_scope") {
+		t.Fatalf("error should mention security.desktop_approval_scope: %v", err)
+	}
+}
+
+func TestComputerConfigValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Computer.Backend = "codex_local"
+	cfg.Computer.CoordinateSpace = "normalized_0_1000"
+	cfg.Computer.MaxActionsPerTurn = 1
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid computer config: %v", err)
+	}
+
+	cfg.Computer.Backend = "unknown"
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "computer.backend") {
+		t.Fatalf("expected computer.backend validation error, got %v", err)
+	}
+
+	cfg.Computer.Backend = "legacy_windows"
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "computer.backend") {
+		t.Fatalf("expected legacy_windows backend validation error, got %v", err)
+	}
+
+	cfg = DefaultConfig()
+	cfg.Computer.CoordinateSpace = "viewport"
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "computer.coordinate_space") {
+		t.Fatalf("expected computer.coordinate_space validation error, got %v", err)
+	}
+
+	cfg = DefaultConfig()
+	cfg.Computer.MaxActionsPerTurn = -1
+	err = cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "computer.max_actions_per_turn") {
+		t.Fatalf("expected computer.max_actions_per_turn validation error, got %v", err)
 	}
 }
 

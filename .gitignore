@@ -46,6 +46,7 @@ anyclaw.json.bak-*
 .anyclaw/
 workflows/memory/
 workflows/*/memory/
+workflows/*/desktop_screenshot.png
 pkg/runtime/workflows/*/memory/
 workflows/.anyclaw-bootstrap-state.json
 workflows/BOOTSTRAP.md

@@ -1243,14 +1243,128 @@ func RegisterWebTools(r *Registry, opts BuiltinOptions) {
 }
 
 func RegisterDesktopTools(r *Registry, opts BuiltinOptions) {
+	r.Register(&Tool{
+		Name:        "computer_observe",
+		Description: "Observe the desktop computer-use environment. Returns a PNG screenshot path, screen metrics, active window details, and optional base64 screenshot data using normalized 0-1000 coordinates.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":                      map[string]string{"type": "string", "description": "Optional destination PNG path inside the working directory"},
+				"include_screenshot_base64": map[string]string{"type": "boolean", "description": "Whether to include the screenshot as base64 inline data"},
+				"include_windows":           map[string]string{"type": "boolean", "description": "Whether to include the current window list"},
+			},
+		},
+		Category:         ToolCategoryDesktop,
+		AccessLevel:      ToolAccessPublic,
+		CachePolicy:      ToolCachePolicyNever,
+		RequiresApproval: true,
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			return auditCall(opts, "computer_observe", input, func(ctx context.Context, input map[string]any) (string, error) {
+				if err := RequestToolApproval(ctx, "computer_observe", input); err != nil {
+					return "", err
+				}
+				return ComputerObserveTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "computer_action",
+		Description: "Execute one or more Codex-style computer actions, then return the observed desktop state. Coordinates default to normalized 0-1000 screen coordinates.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"actions": map[string]any{
+					"type":        "array",
+					"description": "Codex-style action batch. Each item uses type: open_url, search, click, double_click, move, type, keypress, scroll, drag, or wait.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":                map[string]string{"type": "string", "description": "Action type: open_url, search, click, double_click, move, type, keypress, scroll, drag, wait"},
+							"action":              map[string]string{"type": "string", "description": "Alias for type"},
+							"x":                   map[string]string{"type": "number", "description": "Normalized 0-1000 X coordinate unless coordinate_space is absolute"},
+							"y":                   map[string]string{"type": "number", "description": "Normalized 0-1000 Y coordinate unless coordinate_space is absolute"},
+							"destination_x":       map[string]string{"type": "number", "description": "Drag destination X coordinate"},
+							"destination_y":       map[string]string{"type": "number", "description": "Drag destination Y coordinate"},
+							"coordinate_space":    map[string]string{"type": "string", "description": "Optional coordinate space: normalized or absolute"},
+							"text":                map[string]string{"type": "string", "description": "Text for type"},
+							"submit":              map[string]string{"type": "boolean", "description": "Whether type presses Enter after text"},
+							"keys":                map[string]any{"type": "array", "description": "Keys for keypress", "items": map[string]string{"type": "string"}},
+							"direction":           map[string]string{"type": "string", "description": "Scroll direction: up, down, left, or right"},
+							"clicks":              map[string]string{"type": "number", "description": "Mouse wheel clicks for scroll actions"},
+							"delta":               map[string]string{"type": "number", "description": "Raw mouse wheel delta for scroll actions"},
+							"url":                 map[string]string{"type": "string", "description": "URL for open_url"},
+							"target":              map[string]string{"type": "string", "description": "Alias for URL or desktop target"},
+							"query":               map[string]string{"type": "string", "description": "Search query for search action"},
+							"wait_ms":             map[string]string{"type": "number", "description": "Wait duration for wait action"},
+							"button":              map[string]string{"type": "string", "description": "Optional mouse button: left, right, middle"},
+							"human_like":          map[string]string{"type": "boolean", "description": "Whether clicks use small movement delays"},
+							"duration_ms":         map[string]string{"type": "number", "description": "Optional click or drag duration"},
+							"steps":               map[string]string{"type": "number", "description": "Optional movement or drag steps"},
+							"jitter_px":           map[string]string{"type": "number", "description": "Optional click jitter in pixels"},
+							"settle_ms":           map[string]string{"type": "number", "description": "Optional pause before click"},
+							"interval_ms":         map[string]string{"type": "number", "description": "Optional double click interval"},
+							"clear_before_typing": map[string]string{"type": "boolean", "description": "Legacy typing behavior: select existing content before typing"},
+						},
+					},
+				},
+				"action":                    map[string]string{"type": "string", "description": "Legacy action: open_web_browser, navigate, search, click_at, double_click_at, hover_at, type_text_at, scroll_document, scroll_at, key_combination, drag_and_drop, go_back, go_forward, wait, wait_5_seconds"},
+				"x":                         map[string]string{"type": "number", "description": "Normalized 0-1000 X coordinate unless coordinate_space is absolute"},
+				"y":                         map[string]string{"type": "number", "description": "Normalized 0-1000 Y coordinate unless coordinate_space is absolute"},
+				"destination_x":             map[string]string{"type": "number", "description": "Drag destination X coordinate"},
+				"destination_y":             map[string]string{"type": "number", "description": "Drag destination Y coordinate"},
+				"coordinate_space":          map[string]string{"type": "string", "description": "Optional coordinate space: normalized or absolute"},
+				"text":                      map[string]string{"type": "string", "description": "Text for type_text_at"},
+				"press_enter":               map[string]string{"type": "boolean", "description": "Whether type_text_at presses Enter after text"},
+				"clear_before_typing":       map[string]string{"type": "boolean", "description": "Whether type_text_at selects existing content before typing; default true"},
+				"keys":                      map[string]any{"type": "array", "description": "Keys for key_combination", "items": map[string]string{"type": "string"}},
+				"direction":                 map[string]string{"type": "string", "description": "Scroll direction: up, down, left, or right"},
+				"clicks":                    map[string]string{"type": "number", "description": "Mouse wheel clicks for scroll actions"},
+				"delta":                     map[string]string{"type": "number", "description": "Raw mouse wheel delta for scroll actions"},
+				"url":                       map[string]string{"type": "string", "description": "URL for navigate or open_web_browser"},
+				"target":                    map[string]string{"type": "string", "description": "Alias for URL or desktop target"},
+				"query":                     map[string]string{"type": "string", "description": "Search query for search action"},
+				"wait_ms":                   map[string]string{"type": "number", "description": "Wait duration for wait action"},
+				"button":                    map[string]string{"type": "string", "description": "Optional mouse button: left, right, middle"},
+				"human_like":                map[string]string{"type": "boolean", "description": "Whether clicks use small movement delays"},
+				"duration_ms":               map[string]string{"type": "number", "description": "Optional click or drag duration"},
+				"steps":                     map[string]string{"type": "number", "description": "Optional movement or drag steps"},
+				"jitter_px":                 map[string]string{"type": "number", "description": "Optional click jitter in pixels"},
+				"settle_ms":                 map[string]string{"type": "number", "description": "Optional pause before click"},
+				"interval_ms":               map[string]string{"type": "number", "description": "Optional double click interval"},
+				"path":                      map[string]string{"type": "string", "description": "Optional destination PNG path for the post-action observation"},
+				"observe_after_action":      map[string]string{"type": "boolean", "description": "Whether to return a fresh screenshot observation after actions"},
+				"include_screenshot_base64": map[string]string{"type": "boolean", "description": "Whether to include the post-action screenshot as base64 inline data"},
+				"include_windows":           map[string]string{"type": "boolean", "description": "Whether to include the current window list"},
+			},
+		},
+		Category:         ToolCategoryDesktop,
+		AccessLevel:      ToolAccessPublic,
+		CachePolicy:      ToolCachePolicyNever,
+		RequiresApproval: true,
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			auditInput := input
+			if opts.Computer.RedactTextInAudit || opts.Computer.RedactTextInAudit == false && strings.TrimSpace(opts.Computer.Backend) == "" {
+				auditInput = sanitizeComputerAuditInput(input)
+			}
+			return auditCallWithInput(opts, "computer_action", input, auditInput, func(ctx context.Context, input map[string]any) (string, error) {
+				if err := RequestToolApproval(ctx, "computer_action", input); err != nil {
+					return "", err
+				}
+				return ComputerActionTool(ctx, input, opts)
+			})(ctx, input)
+		},
+	})
+
 	r.RegisterTool(
 		"desktop_open",
 		"Open a visible application, URL, or file on the desktop host",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"target": map[string]string{"type": "string", "description": "Application path/name, URL, or file path. Use this to open a real browser window."},
-				"kind":   map[string]string{"type": "string", "description": "Optional kind: app, url, or file"},
+				"target":  map[string]string{"type": "string", "description": "Application path/name, URL, or file path. Use this to open a real browser window."},
+				"kind":    map[string]string{"type": "string", "description": "Optional kind: app, url, or file"},
+				"browser": map[string]string{"type": "string", "description": "Optional browser for URL targets, such as edge"},
 			},
 			"required": []string{"target"},
 		},
@@ -2040,10 +2154,14 @@ func RegisterDesktopTools(r *Registry, opts BuiltinOptions) {
 }
 
 func auditCall(opts BuiltinOptions, toolName string, input map[string]any, next ToolFunc) ToolFunc {
+	return auditCallWithInput(opts, toolName, input, input, next)
+}
+
+func auditCallWithInput(opts BuiltinOptions, toolName string, executionInput map[string]any, auditInput map[string]any, next ToolFunc) ToolFunc {
 	return func(ctx context.Context, _ map[string]any) (string, error) {
-		output, err := next(ctx, input)
+		output, err := next(ctx, executionInput)
 		if opts.AuditLogger != nil {
-			opts.AuditLogger.LogTool(toolName, input, output, err)
+			opts.AuditLogger.LogTool(toolName, auditInput, output, err)
 		}
 		return output, err
 	}

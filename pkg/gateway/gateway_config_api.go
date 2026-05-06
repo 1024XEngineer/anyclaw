@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,11 +18,20 @@ func (s *Server) handleConfigAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.appendAudit(UserFromContext(r.Context()), "config.read", "config", nil)
-		writeJSON(w, http.StatusOK, s.mainRuntime.Config)
+		writeJSON(w, http.StatusOK, s.configAPIView())
 	case http.MethodPost:
+		if !HasPermission(UserFromContext(r.Context()), "config.write") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden", "required_permission": "config.write"})
+			return
+		}
 		var cfg map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+			return
+		}
+		permissionChanged, err := s.applyAgentConfigPatch(cfg)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		s.applyLLMConfigPatch(cfg)
@@ -37,10 +47,59 @@ func (s *Server) handleConfigAPI(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		if permissionChanged && s.mainRuntime != nil {
+			if err := s.mainRuntime.RefreshToolRegistry(); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		if permissionChanged && s.runtimePool != nil {
+			s.runtimePool.InvalidateAll()
+		}
 		s.appendAudit(UserFromContext(r.Context()), "config.write", "config", nil)
-		writeJSON(w, http.StatusOK, s.mainRuntime.Config)
+		writeJSON(w, http.StatusOK, s.configAPIView())
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+type configReadView struct {
+	Agent    configReadAgentView    `json:"agent"`
+	LLM      configReadLLMView      `json:"llm"`
+	Channels configReadChannelsView `json:"channels"`
+}
+
+type configReadAgentView struct {
+	PermissionLevel string `json:"permission_level"`
+}
+
+type configReadLLMView struct {
+	Provider           string `json:"provider"`
+	Model              string `json:"model"`
+	DefaultProviderRef string `json:"default_provider_ref,omitempty"`
+}
+
+type configReadChannelsView struct {
+	Routing config.RoutingConfig `json:"routing"`
+}
+
+func (s *Server) configAPIView() configReadView {
+	if s == nil || s.mainRuntime == nil || s.mainRuntime.Config == nil {
+		return configReadView{}
+	}
+	cfg := s.mainRuntime.Config
+	return configReadView{
+		Agent: configReadAgentView{
+			PermissionLevel: cfg.Agent.PermissionLevel,
+		},
+		LLM: configReadLLMView{
+			Provider:           cfg.LLM.Provider,
+			Model:              cfg.LLM.Model,
+			DefaultProviderRef: cfg.LLM.DefaultProviderRef,
+		},
+		Channels: configReadChannelsView{
+			Routing: cloneRoutingConfig(cfg.Channels.Routing),
+		},
 	}
 }
 
@@ -54,6 +113,44 @@ func (s *Server) applyLLMConfigPatch(cfg map[string]any) {
 	}
 	if model, ok := llmCfg["model"].(string); ok {
 		s.mainRuntime.Config.LLM.Model = model
+	}
+}
+
+func (s *Server) applyAgentConfigPatch(cfg map[string]any) (bool, error) {
+	agentCfg, ok := cfg["agent"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	permissionLevel, ok := agentCfg["permission_level"].(string)
+	if !ok {
+		return false, nil
+	}
+	permissionLevel = strings.TrimSpace(permissionLevel)
+	if permissionLevel == "" {
+		return false, nil
+	}
+	if !isValidPermissionLevel(permissionLevel) {
+		return false, fmt.Errorf("agent.permission_level must be one of: full, limited, read-only (got %q)", permissionLevel)
+	}
+	profileChanged := false
+	if profile, ok := s.mainRuntime.Config.ResolveMainAgentProfile(); ok {
+		profileChanged = strings.TrimSpace(profile.PermissionLevel) != permissionLevel
+		profile.PermissionLevel = permissionLevel
+		if err := s.mainRuntime.Config.UpsertAgentProfile(profile); err != nil {
+			return false, err
+		}
+	}
+	configChanged := strings.TrimSpace(s.mainRuntime.Config.Agent.PermissionLevel) != permissionLevel
+	s.mainRuntime.Config.Agent.PermissionLevel = permissionLevel
+	return profileChanged || configChanged, nil
+}
+
+func isValidPermissionLevel(level string) bool {
+	switch strings.TrimSpace(level) {
+	case "full", "limited", "read-only":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -143,6 +240,19 @@ func parseChannelRoutingRules(rawRules []any) ([]config.ChannelRoutingRule, erro
 		rules = append(rules, rule)
 	}
 	return rules, nil
+}
+
+func cloneRoutingConfig(routing config.RoutingConfig) config.RoutingConfig {
+	rules := make([]config.ChannelRoutingRule, 0, len(routing.Rules))
+	for _, rule := range routing.Rules {
+		if rule.ReplyBack != nil {
+			replyBack := *rule.ReplyBack
+			rule.ReplyBack = &replyBack
+		}
+		rules = append(rules, rule)
+	}
+	routing.Rules = rules
+	return routing
 }
 
 type duplicateRoutingRuleError struct {

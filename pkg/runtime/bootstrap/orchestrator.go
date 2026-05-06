@@ -18,6 +18,7 @@ func BuildOrchestratorConfig(cfg *config.Config, workDir string, workingDir stri
 	}
 
 	defs := make([]orchestrator.AgentDefinition, 0)
+	mainPermission := normalizePermissionLevel(cfg.Agent.PermissionLevel)
 
 	for _, agentName := range orchCfg.AgentNames {
 		if strings.TrimSpace(agentName) == "" {
@@ -35,7 +36,7 @@ func BuildOrchestratorConfig(cfg *config.Config, workDir string, workingDir stri
 			Expertise:       profile.Expertise,
 			SystemPrompt:    profile.SystemPrompt,
 			PrivateSkills:   make([]string, len(profile.Skills)),
-			PermissionLevel: profile.PermissionLevel,
+			PermissionLevel: clampPermissionLevel(profile.PermissionLevel, mainPermission),
 			WorkingDir:      profile.WorkingDir,
 		}
 		for i, skill := range profile.Skills {
@@ -60,6 +61,7 @@ func BuildOrchestratorConfig(cfg *config.Config, workDir string, workingDir stri
 			continue
 		}
 		def := resolveSubAgentDefinition(saCfg, cfg.LLM)
+		def.PermissionLevel = clampPermissionLevel(def.PermissionLevel, mainPermission)
 		if def.WorkingDir == "" {
 			def.WorkingDir = workingDir
 		}
@@ -122,6 +124,37 @@ func resolveSubAgentDefinition(saCfg config.SubAgentConfig, global config.LLMCon
 		def.LLMTemperature = copyFloat64Ptr(&global.Temperature)
 	}
 	return def
+}
+
+func normalizePermissionLevel(level string) string {
+	switch strings.TrimSpace(level) {
+	case "full", "limited", "read-only":
+		return strings.TrimSpace(level)
+	default:
+		return "limited"
+	}
+}
+
+func permissionRank(level string) int {
+	switch normalizePermissionLevel(level) {
+	case "read-only":
+		return 0
+	case "limited":
+		return 1
+	case "full":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func clampPermissionLevel(requested string, ceiling string) string {
+	requested = normalizePermissionLevel(requested)
+	ceiling = normalizePermissionLevel(ceiling)
+	if permissionRank(requested) > permissionRank(ceiling) {
+		return ceiling
+	}
+	return requested
 }
 
 func copyIntPtr(value *int) *int {

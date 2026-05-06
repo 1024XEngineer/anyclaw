@@ -1,9 +1,22 @@
-import { Check, CircleUserRound, Clock3, Gauge, LoaderCircle, ShieldAlert, Sparkles, X } from "lucide-react";
+import {
+  Check,
+  CircleUserRound,
+  Clock3,
+  FileText,
+  Gauge,
+  LoaderCircle,
+  Play,
+  RotateCcw,
+  Search,
+  ShieldAlert,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useEffect, useRef } from "react";
 import { NavLink } from "react-router-dom";
 
 import { MarkdownMessage } from "@/features/chat/MarkdownMessage";
-import { type ChatApproval, useWebChat } from "@/features/chat/useWebChat";
+import { type ChatApproval, type ChatTaskState, useWebChat } from "@/features/chat/useWebChat";
 import { Composer } from "@/features/composer/Composer";
 import { useShellStore } from "@/features/shell/useShellStore";
 import { useWorkspaceOverview } from "@/features/workspace/useWorkspaceOverview";
@@ -14,6 +27,27 @@ const tabs = [
 ];
 
 const AUTO_SCROLL_THRESHOLD_PX = 96;
+
+const taskSuggestions = [
+  {
+    description: "把目标、范围和限制直接说清楚，让 agent 先整理执行路径。",
+    icon: FileText,
+    prompt: "帮我整理当前项目的结构，并指出最值得先优化的 3 个地方。",
+    title: "了解一个项目",
+  },
+  {
+    description: "适合让 agent 先检查，再给出可验证的修改结果。",
+    icon: Search,
+    prompt: "帮我检查最近的报错，定位原因，并给出可以落地的修复方案。",
+    title: "排查一个问题",
+  },
+  {
+    description: "适合把重复步骤交给 agent，但高影响操作仍会先让你确认。",
+    icon: Play,
+    prompt: "帮我完成一个小任务：先说明计划，再执行，并在完成后总结结果。",
+    title: "执行一个任务",
+  },
+];
 
 function formatMessageTime(value: string) {
   const date = new Date(value);
@@ -84,6 +118,113 @@ function SetupEmptyState({ message, onOpen }: { message: string; onOpen: () => v
         >
           去设置 API 与模型
         </button>
+      </div>
+    </div>
+  );
+}
+
+function HomeTaskEntry({
+  activeAgentLabel,
+  modelLabel,
+  onSelectPrompt,
+  sessionsCount,
+  skillsCount,
+  workspaceLabel,
+}: {
+  activeAgentLabel: string;
+  modelLabel: string;
+  onSelectPrompt: (prompt: string) => void;
+  sessionsCount: number;
+  skillsCount: number;
+  workspaceLabel: string;
+}) {
+  return (
+    <div className="flex flex-1 items-center justify-center py-10">
+      <div className="w-full max-w-[920px]">
+        <div className="border-b border-[#edf1f5] pb-6">
+          <div className="text-[13px] font-medium text-[#667085]">当前入口</div>
+          <h1 className="mt-2 text-[32px] font-semibold tracking-[-0.04em] text-[#111827]">
+            想让 AnyClaw 帮你完成什么？
+          </h1>
+          <p className="mt-3 max-w-[680px] text-[15px] leading-7 text-[#667085]">
+            直接描述目标即可。涉及写文件、运行命令或控制桌面的操作，会在执行前给你看预览并等待确认。
+          </p>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          {taskSuggestions.map(({ description, icon: Icon, prompt, title }) => (
+            <button
+              className="group min-h-[148px] rounded-[8px] border border-[#e7ebf0] bg-white p-4 text-left shadow-[0_8px_22px_rgba(15,23,42,0.035)] transition-colors duration-150 hover:border-[#cfd6de] hover:bg-[#fbfcfd]"
+              key={title}
+              onClick={() => onSelectPrompt(prompt)}
+              type="button"
+            >
+              <span className="flex h-10 w-10 items-center justify-center rounded-[8px] bg-[#f3f6fb] text-[#475467] transition-colors group-hover:bg-[#e8eef7]">
+                <Icon size={18} strokeWidth={2.1} />
+              </span>
+              <span className="mt-4 block text-[16px] font-semibold text-[#111827]">{title}</span>
+              <span className="mt-2 block text-sm leading-6 text-[#667085]">{description}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-5 grid gap-3 text-sm text-[#667085] md:grid-cols-4">
+          {[
+            { label: "Agent", value: activeAgentLabel },
+            { label: "模型", value: modelLabel },
+            { label: "工作区", value: workspaceLabel },
+            { label: "上下文", value: `${skillsCount} 个 Skill · ${sessionsCount} 个会话` },
+          ].map((item) => (
+            <div className="min-w-0 rounded-[8px] border border-[#eef1f5] bg-[#fbfcfd] px-3 py-3" key={item.label}>
+              <div className="text-xs text-[#98a2b3]">{item.label}</div>
+              <div className="mt-1 truncate font-medium text-[#344054]" title={item.value}>
+                {item.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatTaskStatusBar({ state }: { state: ChatTaskState }) {
+  if (state.phase === "idle") return null;
+
+  const toneClassName: Record<ChatTaskState["phase"], string> = {
+    awaiting_approval: "border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]",
+    completed: "border-[#d7eadf] bg-[#f5fbf7] text-[#166534]",
+    failed: "border-[#f6d7d4] bg-[#fff7f6] text-[#9f2d20]",
+    idle: "border-[#e7ebf0] bg-white text-[#475467]",
+    preparing: "border-[#dbeafe] bg-[#f8fbff] text-[#1d4ed8]",
+    retryable: "border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]",
+    running: "border-[#dbeafe] bg-[#f8fbff] text-[#1d4ed8]",
+  };
+
+  return (
+    <div className="shrink-0 px-5 pt-2 sm:px-6 lg:px-8">
+      <div
+        className={[
+          "mx-auto flex w-full max-w-[980px] flex-col gap-2 rounded-[8px] border px-4 py-3 text-sm md:flex-row md:items-center md:justify-between",
+          toneClassName[state.phase],
+        ].join(" ")}
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 font-medium">
+            {state.phase === "preparing" || state.phase === "running" ? (
+              <LoaderCircle className="animate-spin" size={15} strokeWidth={2.1} />
+            ) : state.phase === "retryable" ? (
+              <RotateCcw size={15} strokeWidth={2.1} />
+            ) : null}
+            <span>{state.label}</span>
+          </div>
+          <div className="mt-1 text-[13px] opacity-85">{state.detail}</div>
+        </div>
+        <div className="flex shrink-0 gap-2 text-xs font-medium">
+          {state.canContinue ? <span>可继续</span> : null}
+          {state.canRetry ? <span>可重试</span> : null}
+          {state.canCancel ? <span>可取消</span> : null}
+        </div>
       </div>
     </div>
   );
@@ -164,12 +305,15 @@ function buildApprovalDetails(approval: ChatApproval) {
   return summary ? [`${approvalFieldLabels[key] ?? key}: ${summary}`] : [];
 }
 
-function summarizeApprovalDetails(approval: ChatApproval) {
+function getApprovalSource(approval: ChatApproval) {
   const payload = approval.payload && typeof approval.payload === "object" ? approval.payload : undefined;
-  const source =
-    payload?.args && typeof payload.args === "object"
-      ? (payload.args as Record<string, unknown>)
-      : payload;
+  return payload?.args && typeof payload.args === "object"
+    ? (payload.args as Record<string, unknown>)
+    : payload;
+}
+
+function summarizeApprovalDetails(approval: ChatApproval) {
+  const source = getApprovalSource(approval);
 
   if (!source) return [];
 
@@ -194,6 +338,35 @@ function summarizeApprovalDetails(approval: ChatApproval) {
   return summary ? [`${approvalFieldLabels[key] ?? key}：${summary}`] : [];
 }
 
+function approvalRiskLevel(approval: ChatApproval) {
+  const name = approval.tool_name.trim().toLowerCase();
+  if (
+    name === "run_command" ||
+    name === "apply_patch" ||
+    name === "write_file" ||
+    name === "clihub_exec" ||
+    name.startsWith("desktop_") ||
+    name.startsWith("computer_")
+  ) {
+    return "高影响";
+  }
+  if (name.startsWith("skill_") || name.includes("fetch") || name.includes("delegate")) {
+    return "需确认";
+  }
+  return "低风险";
+}
+
+function approvalIntent(approval: ChatApproval) {
+  const name = approval.tool_name.trim().toLowerCase();
+  if (name === "run_command") return "运行本地命令";
+  if (name === "write_file") return "写入文件";
+  if (name === "apply_patch" || name === "edit" || name === "write") return "修改文件内容";
+  if (name.startsWith("desktop_") || name.startsWith("computer_")) return "控制本机桌面";
+  if (name.includes("fetch")) return "访问外部地址";
+  if (name.startsWith("skill_")) return "调用已安装 Skill";
+  return approval.action === "execute_task" ? "执行计划中的任务" : "执行需要权限的操作";
+}
+
 function ApprovalNotice({
   approvalActionId,
   approvals,
@@ -215,8 +388,8 @@ function ApprovalNotice({
             <ShieldAlert size={17} strokeWidth={2.1} />
           </span>
           <div className="min-w-0">
-            <div className="text-[14px] font-medium text-[#1f2937]">需要确认权限后才能继续</div>
-            <div className="text-[12px] text-[#667085]">允许后会自动继续执行，拒绝后当前请求会停止。</div>
+            <div className="text-[14px] font-medium text-[#1f2937]">执行前预览</div>
+            <div className="text-[12px] text-[#667085]">先确认影响范围。允许后会继续执行，拒绝后当前请求会停止。</div>
           </div>
         </div>
 
@@ -229,7 +402,11 @@ function ApprovalNotice({
               <div className="flex flex-col gap-3 py-3 first:pt-0 last:pb-0 md:flex-row md:items-start md:justify-between" key={approval.id}>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2 text-[13px]">
-                    <span className="font-medium text-[#1f2937]">{approval.tool_name}</span>
+                    <span className="font-medium text-[#1f2937]">{approvalIntent(approval)}</span>
+                    <span className="rounded-full bg-[#fff7ed] px-2 py-0.5 text-[11px] font-medium text-[#b45309]">
+                      {approvalRiskLevel(approval)}
+                    </span>
+                    <span className="text-[#98a2b3]">{approval.tool_name}</span>
                     {approval.requested_at ? <span className="text-[#98a2b3]">{formatApprovalTime(approval.requested_at)}</span> : null}
                   </div>
 
@@ -242,6 +419,7 @@ function ApprovalNotice({
                       ))}
                     </div>
                   ) : null}
+                  <div className="mt-1 text-[12px] text-[#98a2b3]">拒绝不会执行这个操作；允许后 AnyClaw 会自动继续当前任务。</div>
                 </div>
 
                 <div className="flex items-center gap-2 md:shrink-0">
@@ -289,6 +467,7 @@ export function ChatHomePage() {
   const {
     approvalActionId,
     approvalNoticeApprovals,
+    chatTaskState,
     draft,
     error,
     isSending,
@@ -299,7 +478,7 @@ export function ChatHomePage() {
     sessionId,
     sendMessage,
     setDraft,
-  } = useWebChat(activeAgentName, data.runtimeProfile.workspace);
+  } = useWebChat(activeAgentName, data.runtimeProfile.workspace, data.runtimeProfile.workspaceId);
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const autoScrollOnNextRenderRef = useRef(false);
@@ -417,6 +596,8 @@ export function ChatHomePage() {
       </header>
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
+        <ChatTaskStatusBar state={chatTaskState} />
+
         <div className="min-h-0 flex-1 overflow-hidden px-5 pt-2 sm:px-6 lg:px-8 lg:pt-3">
           <div
             className="chat-scroll-area mx-auto flex h-full w-full max-w-[980px] flex-col overflow-y-auto pr-1 sm:pr-2"
@@ -456,7 +637,14 @@ export function ChatHomePage() {
             ) : requiresModelSetup ? (
               <SetupEmptyState message={modelSetupMessage} onOpen={openModelSettings} />
             ) : (
-              <div className="flex-1" />
+              <HomeTaskEntry
+                activeAgentLabel={activeAgentLabel}
+                modelLabel={modelLabel}
+                onSelectPrompt={setDraft}
+                sessionsCount={data.runtimeProfile.sessions}
+                skillsCount={data.localSkills.length}
+                workspaceLabel={data.runtimeProfile.workspace}
+              />
             )}
           </div>
         </div>
@@ -466,6 +654,7 @@ export function ChatHomePage() {
         <Composer
           activeAgentLabel={activeAgentLabel}
           canSend={!requiresModelSetup && Boolean(draft.trim()) && pendingApprovals.length === 0 && approvalActionId === null}
+          chatTaskState={chatTaskState}
           draft={draft}
           error={error}
           isSending={isSending}

@@ -9,6 +9,7 @@ import (
 
 	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
 	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	"github.com/1024XEngineer/anyclaw/pkg/config"
 	"github.com/1024XEngineer/anyclaw/pkg/state"
 )
@@ -315,10 +316,49 @@ func TestRequireToolApprovalHandlesDangerousAndSafeTools(t *testing.T) {
 			t.Fatalf("expected safe tool to bypass approval, got %v", err)
 		}
 	})
+
+	t.Run("approved desktop tool grants host-reviewed context", func(t *testing.T) {
+		manager, store, sessions := newTaskManagerTest(t, nil)
+		task, err := manager.Create(CreateOptions{Input: "click the desktop"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		session, err := sessions.Create("Task session", "main-agent", "org-1", "project-1", "workspace-1")
+		if err != nil {
+			t.Fatalf("Create session: %v", err)
+		}
+
+		args := map[string]any{"x": 10, "y": 20}
+		if err := store.AppendApproval(&state.Approval{
+			ID:          "approval-desktop",
+			TaskID:      task.ID,
+			SessionID:   session.ID,
+			StepIndex:   3,
+			ToolName:    "desktop_click",
+			Action:      "tool_call",
+			Signature:   approvalSignature("desktop_click", "tool_call", args),
+			Status:      "approved",
+			RequestedAt: manager.nowFunc(),
+		}); err != nil {
+			t.Fatalf("AppendApproval: %v", err)
+		}
+
+		hook := manager.protocolApprovalHook(task, session, dangerousConfig())
+		if hook == nil {
+			t.Fatal("expected protocol approval hook")
+		}
+		ctx := tools.WithApprovalGrantScope(context.Background())
+		if err := hook(ctx, tools.ToolApprovalCall{Name: "desktop_click", Args: args}); err != nil {
+			t.Fatalf("expected approved desktop tool to proceed, got %v", err)
+		}
+		if !tools.HasHostReviewedCapability(ctx, tools.HostReviewedCapabilityDesktop) {
+			t.Fatal("expected approved desktop tool to grant host-reviewed desktop capability")
+		}
+	})
 }
 
 func TestRequiresToolApprovalNameIncludesOpenClawCompatibleAliases(t *testing.T) {
-	dangerousAliases := []string{"exec", "process", "write", "edit", "apply_patch", "fetch_url", "web_fetch", "image", "image_analyze", "skill_runner", "clihub_exec", "intent_route", "delegate_task"}
+	dangerousAliases := []string{"exec", "process", "write", "edit", "apply_patch", "fetch_url", "web_fetch", "image", "image_analyze", "skill_runner", "clihub_exec", "intent_route", "delegate_task", "computer_observe", "computer_action"}
 	for _, name := range dangerousAliases {
 		if !RequiresToolApprovalName(name) {
 			t.Fatalf("expected OpenClaw-compatible tool %q to require approval", name)

@@ -116,7 +116,7 @@ type ocrTextMatchResult struct {
 }
 
 func DesktopMatchImageTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_match_image", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_match_image", opts, true); err != nil {
 		return "", err
 	}
 	result, err := runDesktopImageMatch(ctx, input, opts)
@@ -127,7 +127,7 @@ func DesktopMatchImageTool(ctx context.Context, input map[string]any, opts Built
 }
 
 func DesktopClickImageTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_click_image", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_click_image", opts, false); err != nil {
 		return "", err
 	}
 	result, err := runDesktopImageMatch(ctx, input, opts)
@@ -167,7 +167,7 @@ func DesktopClickImageTool(ctx context.Context, input map[string]any, opts Built
 }
 
 func DesktopWaitImageTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_wait_image", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_wait_image", opts, true); err != nil {
 		return "", err
 	}
 	timeoutMS, ok := numberInput(input["timeout_ms"])
@@ -214,7 +214,7 @@ func DesktopWaitImageTool(ctx context.Context, input map[string]any, opts Builti
 }
 
 func DesktopOCRTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_ocr", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_ocr", opts, true); err != nil {
 		return "", err
 	}
 	result, err := runDesktopOCR(ctx, input, opts)
@@ -229,7 +229,7 @@ func DesktopOCRTool(ctx context.Context, input map[string]any, opts BuiltinOptio
 }
 
 func DesktopVerifyTextTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_verify_text", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_verify_text", opts, true); err != nil {
 		return "", err
 	}
 	expected, _ := input["expected"].(string)
@@ -274,7 +274,7 @@ func DesktopVerifyTextTool(ctx context.Context, input map[string]any, opts Built
 }
 
 func DesktopFindTextTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_find_text", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_find_text", opts, true); err != nil {
 		return "", err
 	}
 	query := strings.TrimSpace(stringValue(input["text"]))
@@ -293,7 +293,7 @@ func DesktopFindTextTool(ctx context.Context, input map[string]any, opts Builtin
 }
 
 func DesktopClickTextTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_click_text", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_click_text", opts, false); err != nil {
 		return "", err
 	}
 	result, err := runDesktopTextMatch(ctx, input, opts)
@@ -337,7 +337,7 @@ func DesktopClickTextTool(ctx context.Context, input map[string]any, opts Builti
 }
 
 func DesktopWaitTextTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_wait_text", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_wait_text", opts, true); err != nil {
 		return "", err
 	}
 	query := strings.TrimSpace(stringValue(input["text"]))

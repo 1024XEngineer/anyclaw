@@ -139,7 +139,11 @@ func (m *Manager) toolApprovalHook(task *state.Task, session *state.Session, cfg
 		return nil
 	}
 	return func(ctx context.Context, tc agent.ToolCall) error {
-		return m.requireToolApproval(task, session, cfg, tc.Name, tc.Args, tc.RequiresApproval)
+		err := m.requireToolApproval(task, session, cfg, tc.Name, tc.Args, tc.RequiresApproval)
+		if err == nil && taskApprovalCapability(tc.Name) == tools.HostReviewedCapabilityDesktop {
+			tools.GrantHostReviewedCapability(ctx, tools.HostReviewedCapabilityDesktop)
+		}
+		return err
 	}
 }
 
@@ -148,7 +152,11 @@ func (m *Manager) protocolApprovalHook(task *state.Task, session *state.Session,
 		return nil
 	}
 	return func(ctx context.Context, call tools.ToolApprovalCall) error {
-		return m.requireToolApproval(task, session, cfg, call.Name, call.Args)
+		err := m.requireToolApproval(task, session, cfg, call.Name, call.Args)
+		if err == nil && taskApprovalCapability(call.Name) == tools.HostReviewedCapabilityDesktop {
+			tools.GrantHostReviewedCapability(ctx, tools.HostReviewedCapabilityDesktop)
+		}
+		return err
 	}
 }
 
@@ -205,6 +213,9 @@ func (m *Manager) requireToolApproval(task *state.Task, session *state.Session, 
 		"task_id":   task.ID,
 		"workspace": task.Workspace,
 	}
+	if description := toolApprovalDescription(toolName, args); description != "" {
+		payload["description"] = description
+	}
 	approval, err := m.approvals.Request(task.ID, session.ID, stepIndex, toolName, "tool_call", payload)
 	if err != nil {
 		return err
@@ -250,7 +261,7 @@ func RequiresToolApprovalName(name string) bool {
 		return true
 	}
 	switch name {
-	case "run_command", "write_file", "exec", "process", "write", "edit", "apply_patch", "fetch_url", "web_fetch", "image", "image_analyze", "clihub_exec", "intent_route", "delegate_task", "browser_upload", "desktop_open", "desktop_type", "desktop_type_human", "desktop_hotkey", "desktop_clipboard_set", "desktop_clipboard_get", "desktop_paste", "desktop_click", "desktop_screenshot", "desktop_screenshot_window", "desktop_move", "desktop_double_click", "desktop_scroll", "desktop_drag", "desktop_wait", "desktop_list_windows", "desktop_wait_window", "desktop_focus_window", "desktop_inspect_ui", "desktop_invoke_ui", "desktop_set_value_ui", "desktop_resolve_target", "desktop_activate_target", "desktop_set_target_value", "desktop_match_image", "desktop_click_image", "desktop_wait_image", "desktop_ocr", "desktop_verify_text", "desktop_find_text", "desktop_click_text", "desktop_wait_text", "desktop_plan":
+	case "run_command", "write_file", "exec", "process", "write", "edit", "apply_patch", "fetch_url", "web_fetch", "image", "image_analyze", "clihub_exec", "intent_route", "delegate_task", "browser_upload", "computer_observe", "computer_action", "desktop_open", "desktop_type", "desktop_type_human", "desktop_hotkey", "desktop_clipboard_set", "desktop_clipboard_get", "desktop_paste", "desktop_click", "desktop_screenshot", "desktop_screenshot_window", "desktop_move", "desktop_double_click", "desktop_scroll", "desktop_drag", "desktop_wait", "desktop_list_windows", "desktop_wait_window", "desktop_focus_window", "desktop_inspect_ui", "desktop_invoke_ui", "desktop_set_value_ui", "desktop_resolve_target", "desktop_activate_target", "desktop_set_target_value", "desktop_match_image", "desktop_click_image", "desktop_wait_image", "desktop_ocr", "desktop_verify_text", "desktop_find_text", "desktop_click_text", "desktop_wait_text", "desktop_plan":
 		return true
 	default:
 		return false
@@ -264,6 +275,81 @@ func requiresToolApprovalNameOrFlag(name string, forceApproval ...bool) bool {
 		}
 	}
 	return RequiresToolApprovalName(name)
+}
+
+func taskApprovalCapability(toolName string) string {
+	name := strings.TrimSpace(strings.ToLower(toolName))
+	if name == "desktop_plan" || strings.HasPrefix(name, "desktop_") || strings.HasPrefix(name, "computer_") {
+		return tools.HostReviewedCapabilityDesktop
+	}
+	return ""
+}
+
+func toolApprovalDescription(toolName string, args map[string]any) string {
+	name := strings.TrimSpace(strings.ToLower(toolName))
+	if name == "computer_observe" {
+		return "Observe the local desktop with screenshot and window metadata"
+	}
+	if name == "computer_action" {
+		if summary := computerActionApprovalSummary(args); summary != "" {
+			return "Control the local desktop: " + summary
+		}
+	}
+	if strings.HasPrefix(name, "computer_") || strings.HasPrefix(name, "desktop_") || name == "desktop_plan" {
+		return "Control the local desktop"
+	}
+	return ""
+}
+
+func computerActionApprovalSummary(args map[string]any) string {
+	names := computerActionApprovalNames(args)
+	if len(names) == 0 {
+		return ""
+	}
+	if len(names) == 1 {
+		return names[0]
+	}
+	return fmt.Sprintf("%d actions (%s)", len(names), strings.Join(names, ", "))
+}
+
+func computerActionApprovalNames(args map[string]any) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	if actions, ok := args["actions"].([]any); ok {
+		names := make([]string, 0, len(actions))
+		for _, item := range actions {
+			actionMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			name := firstNonEmptyApprovalString(actionMap["type"], actionMap["action"])
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		return names
+	}
+	if action := firstNonEmptyApprovalString(args["action"]); action != "" {
+		return []string{action}
+	}
+	if action := firstNonEmptyApprovalString(args["type"]); action != "" {
+		return []string{action}
+	}
+	return nil
+}
+
+func firstNonEmptyApprovalString(values ...any) string {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func (m *Manager) findExecutionApproval(taskID string) *state.Approval {

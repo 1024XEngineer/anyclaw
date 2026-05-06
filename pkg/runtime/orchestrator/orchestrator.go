@@ -178,6 +178,94 @@ func (o *Orchestrator) subAgentRuntimeOptions() SubAgentRuntimeOptions {
 	return opts
 }
 
+func (o *Orchestrator) SetToolOptions(opts tools.BuiltinOptions, baseTools ...*tools.Registry) {
+	if o == nil {
+		return
+	}
+	copied := opts
+	mainPermission := normalizePermissionLevel(copied.PermissionLevel)
+	defsByName := make(map[string]AgentDefinition)
+	var skillOptions skills.ExecutionOptions
+	var allSkills *skills.SkillsManager
+	var refreshedBaseTools *tools.Registry
+	var runtimeOpts SubAgentRuntimeOptions
+
+	o.mu.Lock()
+	o.config.ToolOptions = &copied
+	if len(baseTools) > 0 && baseTools[0] != nil {
+		o.baseTools = baseTools[0]
+	}
+	for i := range o.config.AgentDefinitions {
+		o.config.AgentDefinitions[i].PermissionLevel = clampPermissionLevel(o.config.AgentDefinitions[i].PermissionLevel, mainPermission)
+		defsByName[o.config.AgentDefinitions[i].Name] = o.config.AgentDefinitions[i]
+	}
+	skillOptions = o.subAgentSkillExecutionOptions()
+	allSkills = o.allSkills
+	refreshedBaseTools = o.baseTools
+	runtimeOpts = SubAgentRuntimeOptions{
+		SkillExecution: &skillOptions,
+		BuiltinTools:   &copied,
+	}
+	o.mu.Unlock()
+
+	if o.agentPool == nil {
+		return
+	}
+	for _, sa := range o.agentPool.List() {
+		if sa == nil {
+			continue
+		}
+		def, ok := defsByName[sa.Name()]
+		if !ok {
+			def = sa.Definition()
+			def.PermissionLevel = clampPermissionLevel(def.PermissionLevel, mainPermission)
+		}
+		sa.RefreshRuntime(def, allSkills, refreshedBaseTools, runtimeOpts)
+	}
+}
+
+func (o *Orchestrator) SetAgentDefinitions(defs []AgentDefinition) {
+	if o == nil {
+		return
+	}
+	copied := make([]AgentDefinition, len(defs))
+	copy(copied, defs)
+	o.mu.Lock()
+	o.config.AgentDefinitions = copied
+	o.mu.Unlock()
+}
+
+func normalizePermissionLevel(level string) string {
+	switch strings.TrimSpace(level) {
+	case "full", "limited", "read-only":
+		return strings.TrimSpace(level)
+	default:
+		return "limited"
+	}
+}
+
+func permissionRank(level string) int {
+	switch normalizePermissionLevel(level) {
+	case "read-only":
+		return 0
+	case "limited":
+		return 1
+	case "full":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func clampPermissionLevel(requested string, ceiling string) string {
+	requested = normalizePermissionLevel(requested)
+	ceiling = normalizePermissionLevel(ceiling)
+	if permissionRank(requested) > permissionRank(ceiling) {
+		return ceiling
+	}
+	return requested
+}
+
 func (o *Orchestrator) Run(ctx context.Context, input string) (string, error) {
 	return o.RunWithAgents(ctx, input, nil)
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,12 +28,14 @@ function existingDir(dirPath) {
 
 function loadWorkspaceConfig() {
   const explicitConfig = safeString(process.env.ANYCLAW_UI_SNAPSHOT_CONFIG);
+  const localConfig = path.join(repoRoot, "anyclaw.json");
+  const exampleConfig = path.join(repoRoot, "anyclaw.example.json");
+  const useLocalConfig = safeBooleanString(process.env.ANYCLAW_UI_SNAPSHOT_LOCAL);
   const candidates = explicitConfig
     ? [path.resolve(repoRoot, explicitConfig)]
-    : [
-        path.join(repoRoot, "anyclaw.json"),
-        path.join(repoRoot, "anyclaw.example.json"),
-      ];
+    : useLocalConfig
+      ? [localConfig, exampleConfig]
+      : [exampleConfig];
 
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue;
@@ -40,6 +43,11 @@ function loadWorkspaceConfig() {
       return {
         config: readJSON(candidate),
         configPath: candidate,
+        configSource: explicitConfig
+          ? "explicit"
+          : path.resolve(candidate) === path.resolve(localConfig)
+            ? "local"
+            : "example",
       };
     } catch (error) {
       process.stderr.write(`Skipping invalid snapshot config ${candidate}: ${error.message}\n`);
@@ -48,7 +56,8 @@ function loadWorkspaceConfig() {
 
   return {
     config: {},
-    configPath: path.join(repoRoot, "anyclaw.json"),
+    configPath: exampleConfig,
+    configSource: "empty",
   };
 }
 
@@ -75,6 +84,23 @@ function safeArray(value) {
 
 function safeBoolean(value, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function safeBooleanString(value) {
+  return ["1", "true", "yes", "on"].includes(safeString(value).toLowerCase());
+}
+
+function resolveSnapshotPath(configPath, value) {
+  const cleaned = safeString(value);
+  if (cleaned === "") return "";
+  if (path.isAbsolute(cleaned)) return path.normalize(cleaned);
+  return path.resolve(path.dirname(configPath), cleaned);
+}
+
+function deriveWorkspaceId(configPath, workingDir, configSource) {
+  const source = resolveSnapshotPath(configPath, workingDir) || path.dirname(configPath) || configSource;
+  const digest = crypto.createHash("sha256").update(path.normalize(source).toLowerCase()).digest("hex").slice(0, 16);
+  return `ws-${digest}`;
 }
 
 function stripWrappingQuotes(value) {
@@ -337,7 +363,8 @@ function buildConfiguredChannels(config) {
 }
 
 function buildSnapshot() {
-  const { config, configPath } = loadWorkspaceConfig();
+  const { config, configPath, configSource } = loadWorkspaceConfig();
+  const workingDir = safeString(config.agent?.working_dir);
   const skills = readSkillManifests(
     readConfiguredDir(config, configPath, "skills", path.join(repoRoot, "skills"), ["skillsDir", "dir", "path"], [
       "skillsDir",
@@ -347,13 +374,15 @@ function buildSnapshot() {
   const extensions = readExtensionManifests(path.join(repoRoot, "extensions"));
 
   return {
-    generatedAt: "static-workspace-snapshot",
+    generatedAt: "",
+    configSource,
+    workspaceId: deriveWorkspaceId(configPath, workingDir, configSource),
     agent: {
       name: safeString(config.agent?.name) || "AnyClaw",
       description: compactText(config.agent?.description),
       permissionLevel: safeString(config.agent?.permission_level) || "limited",
       workDir: safeString(config.agent?.work_dir),
-      workingDir: safeString(config.agent?.working_dir),
+      workingDir,
       language: safeString(config.agent?.lang) || "CN",
       activeProfile: safeString(config.agent?.active_profile),
     },

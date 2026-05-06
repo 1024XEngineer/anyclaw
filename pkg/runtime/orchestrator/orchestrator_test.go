@@ -91,6 +91,91 @@ func TestRunTemporaryPlanCreatesEphemeralAgentAndCleansItUp(t *testing.T) {
 	}
 }
 
+func TestSetToolOptionsRefreshesExistingSubAgentRegistry(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+	t.Cleanup(func() { mem.Close() })
+
+	workingDir := t.TempDir()
+	fullOpts := tools.BuiltinOptions{WorkingDir: workingDir, PermissionLevel: "full"}
+	fullRegistry := tools.NewRegistry()
+	tools.RegisterBuiltins(fullRegistry, fullOpts)
+
+	orch, err := NewOrchestrator(OrchestratorConfig{
+		MaxConcurrentAgents: 1,
+		EnableDecomposition: false,
+		ToolOptions:         &fullOpts,
+		AgentDefinitions: []AgentDefinition{
+			{
+				Name:            "worker",
+				Description:     "Executes delegated work",
+				PermissionLevel: "full",
+				WorkingDir:      workingDir,
+			},
+		},
+	}, &orchestratorTestLLM{}, skills.NewSkillsManager(""), fullRegistry, mem)
+	if err != nil {
+		t.Fatalf("NewOrchestrator: %v", err)
+	}
+
+	sa, ok := orch.GetAgent("worker")
+	if !ok {
+		t.Fatal("expected worker subagent")
+	}
+	t.Cleanup(func() {
+		if sa.memory != nil && sa.memory != mem {
+			_ = sa.memory.Close()
+		}
+	})
+	if !containsToolName(sa.Tools(), "write_file") {
+		t.Fatalf("expected full subagent to expose write_file, got %#v", sa.Tools())
+	}
+	if got := sa.PermissionLevel(); got != "full" {
+		t.Fatalf("expected initial permission full, got %q", got)
+	}
+
+	readOnlyOpts := tools.BuiltinOptions{WorkingDir: workingDir, PermissionLevel: "read-only"}
+	readOnlyRegistry := tools.NewRegistry()
+	tools.RegisterBuiltins(readOnlyRegistry, readOnlyOpts)
+	orch.SetToolOptions(readOnlyOpts, readOnlyRegistry)
+
+	if containsToolName(sa.Tools(), "write_file") {
+		t.Fatalf("expected refreshed read-only subagent to hide write_file, got %#v", sa.Tools())
+	}
+	if containsToolName(sa.Tools(), "run_command") {
+		t.Fatalf("expected refreshed read-only subagent to hide run_command, got %#v", sa.Tools())
+	}
+	if !containsToolName(sa.Tools(), "read_file") {
+		t.Fatalf("expected refreshed read-only subagent to keep read_file, got %#v", sa.Tools())
+	}
+	if got := sa.PermissionLevel(); got != "read-only" {
+		t.Fatalf("expected refreshed permission read-only, got %q", got)
+	}
+	if infos := sa.agent.ListTools(); containsToolInfo(infos, "write_file") {
+		t.Fatalf("expected underlying agent tools to refresh, got %#v", infos)
+	}
+}
+
+func containsToolName(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsToolInfo(items []tools.ToolInfo, want string) bool {
+	for _, item := range items {
+		if item.Name == want {
+			return true
+		}
+	}
+	return false
+}
+
 type orchestratorTestLLM struct{}
 
 func (o *orchestratorTestLLM) Chat(ctx context.Context, messages []llm.Message, toolDefs []llm.ToolDefinition) (*llm.Response, error) {

@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AgentDrawer } from "@/features/agent-drawer/AgentDrawer";
 import { SettingsModal } from "@/features/settings/SettingsModal";
 import { useShellStore } from "@/features/shell/useShellStore";
 import { useWorkspaceOverview, type WorkspaceOverview } from "@/features/workspace/useWorkspaceOverview";
@@ -20,6 +21,7 @@ function createOverview(): WorkspaceOverview {
     localAgents: [],
     localSkills: [],
     meta: {
+      configSource: "example",
       generatedAt: "2026-04-22T08:00:00.000Z",
       liveConnected: true,
       sourceLabel: "live",
@@ -28,15 +30,18 @@ function createOverview(): WorkspaceOverview {
     providers: [],
     runtimeProfile: {
       address: "http://127.0.0.1:18789",
+      configStatus: "ok",
       description: "workspace",
       events: 0,
       gatewayOnline: true,
       gatewaySource: "live",
       language: "zh-CN",
+      mainPermission: "limited",
+      mainPermissionSource: "config",
       model: "gpt-5.4",
       name: "workspace",
       orchestrator: "default",
-      permission: "workspace-write",
+      permission: "limited",
       provider: "openai",
       providerLabel: "OpenAI",
       providersCount: 1,
@@ -49,6 +54,7 @@ function createOverview(): WorkspaceOverview {
       tools: 0,
       workDir: "D:/anyclaw",
       workspace: "D:/anyclaw",
+      workspaceId: "ws-test",
     },
     runtimeSettings: [],
   };
@@ -110,66 +116,87 @@ describe("SettingsModal", () => {
     vi.restoreAllMocks();
   });
 
-  it("disables skill toggles while a skill update is in flight", async () => {
-    const deferred = createDeferred<Response>();
-    const fetchMock = vi.fn(() => deferred.promise);
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("reflects the live main permission instead of falling back to the snapshot default", () => {
     mockWorkspaceOverview({
       ...createOverview(),
-      localSkills: [
-        {
-          description: "first skill",
-          enabled: true,
-          installCommand: "",
-          loaded: true,
-          name: "skill-one",
-          registry: "local",
-          source: "local",
-          version: "1.0.0",
-        },
-        {
-          description: "second skill",
-          enabled: false,
-          installCommand: "",
-          loaded: false,
-          name: "skill-two",
-          registry: "local",
-          source: "local",
-          version: "1.0.0",
-        },
-      ],
-    });
-
-    act(() => {
-      useShellStore.setState({ settingsSection: "skills" });
+      runtimeProfile: {
+        ...createOverview().runtimeProfile,
+        mainPermission: "full",
+      },
     });
 
     renderWithClient(<SettingsModal onClose={vi.fn()} />);
 
-    const firstSwitch = screen.getByRole("button", { name: "skill-one 状态" });
-    const secondSwitch = screen.getByRole("button", { name: "skill-two 状态" });
+    const select = screen.getByRole("combobox", { name: "主 Agent 权限级别" });
+    expect(select).toHaveValue("full");
+  });
 
-    fireEvent.click(firstSwitch);
+  it("uses the same main permission in settings and the agent drawer", () => {
+    const overview = {
+      ...createOverview(),
+      runtimeProfile: {
+        ...createOverview().runtimeProfile,
+        mainPermission: "read-only",
+        permission: "limited",
+      },
+    };
+    mockWorkspaceOverview(overview);
+
+    const settingsView = renderWithClient(<SettingsModal onClose={vi.fn()} />);
+    const select = screen.getByRole("combobox", { name: "主 Agent 权限级别" });
+    expect(select).toHaveValue("read-only");
+    settingsView.unmount();
+
+    renderWithClient(<AgentDrawer onClose={vi.fn()} />);
+    expect(screen.getByText("read-only")).toBeInTheDocument();
+    expect(screen.queryByText("limited")).not.toBeInTheDocument();
+  });
+
+  it("updates the main agent permission from general settings", async () => {
+    const fetchMock = vi.fn(() => jsonResponse({ agent: { permission_level: "full" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockWorkspaceOverview(createOverview());
+
+    renderWithClient(<SettingsModal onClose={vi.fn()} />);
+
+    const select = screen.getByRole("combobox", { name: "主 Agent 权限级别" });
+    expect(select).toHaveValue("limited");
+    expect(screen.getByText("主 Agent 权限会作为运行时上限，SubAgent 的最终权限不会超过这里的设置。")).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: "full" } });
 
     await waitFor(() => {
-      expect(firstSwitch).toBeDisabled();
-      expect(secondSwitch).toBeDisabled();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/config",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ agent: { permission_level: "full" } }),
+        }),
+      );
+    });
+  });
+
+  it("disables the main agent permission selector while saving", async () => {
+    const deferred = createDeferred<Response>();
+    const fetchMock = vi.fn(() => deferred.promise);
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockWorkspaceOverview(createOverview());
+
+    renderWithClient(<SettingsModal onClose={vi.fn()} />);
+
+    const select = screen.getByRole("combobox", { name: "主 Agent 权限级别" });
+    fireEvent.change(select, { target: { value: "read-only" } });
+
+    await waitFor(() => {
+      expect(select).toBeDisabled();
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
-    deferred.resolve(
-      jsonResponse({
-        enabled: false,
-        loaded: false,
-        name: "skill-one",
-      }),
-    );
+    deferred.resolve(jsonResponse({ agent: { permission_level: "read-only" } }));
 
     await waitFor(() => {
-      expect(firstSwitch).not.toBeDisabled();
-      expect(secondSwitch).not.toBeDisabled();
+      expect(select).not.toBeDisabled();
     });
   });
 
@@ -228,5 +255,59 @@ describe("SettingsModal", () => {
 
     const agentLink = screen.getByRole("link", { name: /添加 Agent/i });
     expect(agentLink).toHaveAttribute("href", "/market");
+  });
+
+  it("disables all skill toggles while one skill toggle is saving", async () => {
+    const deferred = createDeferred<Response>();
+    const fetchMock = vi.fn(() => deferred.promise);
+    vi.stubGlobal("fetch", fetchMock);
+
+    mockWorkspaceOverview({
+      ...createOverview(),
+      localSkills: [
+        {
+          description: "First skill",
+          enabled: true,
+          installCommand: "",
+          loaded: true,
+          name: "alpha",
+          registry: "local",
+          source: "local",
+          version: "1.0.0",
+        },
+        {
+          description: "Second skill",
+          enabled: false,
+          installCommand: "",
+          loaded: false,
+          name: "beta",
+          registry: "local",
+          source: "local",
+          version: "1.0.0",
+        },
+      ],
+    });
+
+    act(() => {
+      useShellStore.setState({ settingsSection: "skills" });
+    });
+
+    renderWithClient(<SettingsModal onClose={vi.fn()} />);
+
+    const alphaToggle = screen.getByRole("button", { name: /alpha/i });
+    const betaToggle = screen.getByRole("button", { name: /beta/i });
+    fireEvent.click(alphaToggle);
+
+    await waitFor(() => {
+      expect(alphaToggle).toBeDisabled();
+      expect(betaToggle).toBeDisabled();
+    });
+
+    deferred.resolve(jsonResponse({ enabled: false, loaded: false, name: "alpha" }));
+
+    await waitFor(() => {
+      expect(alphaToggle).not.toBeDisabled();
+      expect(betaToggle).not.toBeDisabled();
+    });
   });
 });

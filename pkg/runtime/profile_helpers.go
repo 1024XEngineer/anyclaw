@@ -10,6 +10,10 @@ func resolveMainAgentPersonality(cfg *config.Config) config.PersonalitySpec {
 	return runtimebootstrap.ResolveMainAgentPersonality(cfg)
 }
 
+func resolveMainAgentSystemPrompt(cfg *config.Config) string {
+	return runtimebootstrap.ResolveMainAgentSystemPrompt(cfg)
+}
+
 func configuredAgentSkillNames(cfg *config.Config) []string {
 	return runtimebootstrap.ConfiguredAgentSkillNames(cfg)
 }

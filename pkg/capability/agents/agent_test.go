@@ -197,8 +197,11 @@ func TestBuildSystemPromptIncludesPersonalityAndAnyClawCore(t *testing.T) {
 	if !strings.Contains(systemPrompt, "execution-focused local app agent") {
 		t.Fatalf("expected personality to be injected into the system prompt, got %q", systemPrompt)
 	}
-	if !strings.Contains(systemPrompt, "## AnyClaw Core") {
-		t.Fatalf("expected AnyClaw core operating section, got %q", systemPrompt)
+	if !strings.Contains(systemPrompt, "## Operating Mode") {
+		t.Fatalf("expected operating mode section, got %q", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "## Identity") {
+		t.Fatalf("expected identity section, got %q", systemPrompt)
 	}
 	if !strings.Contains(systemPrompt, "app_qq_workflow_send_message") {
 		t.Fatalf("expected workflow tool guidance in system prompt, got %q", systemPrompt)
@@ -211,6 +214,39 @@ func TestBuildSystemPromptIncludesPersonalityAndAnyClawCore(t *testing.T) {
 	}
 	if !strings.Contains(systemPrompt, "verify the requested deliverable with observable evidence") {
 		t.Fatalf("expected verification guidance in system prompt, got %q", systemPrompt)
+	}
+}
+
+func TestBuildSystemPromptInjectsMainSystemPrompt(t *testing.T) {
+	mem := memory.NewFileMemory(t.TempDir())
+	if err := mem.Init(); err != nil {
+		t.Fatalf("memory init: %v", err)
+	}
+	reg := tools.NewRegistry()
+	reg.RegisterTool("run_command", "Run a shell command", map[string]any{}, nil)
+
+	ag := New(Config{
+		Name:         "assistant",
+		Description:  "General helper",
+		SystemPrompt: "You are Claude Code style: verify outcomes before claiming success.",
+		Personality:  "Be concise and action-oriented.",
+		Memory:       mem,
+		Skills:       skills.NewSkillsManager(""),
+		Tools:        reg,
+	})
+
+	systemPrompt, err := ag.buildSystemPrompt()
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if !strings.Contains(systemPrompt, "## Identity") {
+		t.Fatalf("expected identity section, got %q", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "Primary system prompt") || !strings.Contains(systemPrompt, "verify outcomes before claiming success") {
+		t.Fatalf("expected main system prompt to be injected, got %q", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "Personality supplement") || !strings.Contains(systemPrompt, "Be concise and action-oriented.") {
+		t.Fatalf("expected personality supplement to remain present, got %q", systemPrompt)
 	}
 }
 
@@ -228,8 +264,8 @@ func TestBuildSystemPromptHandlesNilDependencies(t *testing.T) {
 	if !strings.Contains(systemPrompt, "Stay calm and action-oriented.") {
 		t.Fatalf("expected personality text in prompt, got %q", systemPrompt)
 	}
-	if strings.Contains(systemPrompt, "## AnyClaw Core") {
-		t.Fatalf("did not expect AnyClaw core section without execution tools, got %q", systemPrompt)
+	if strings.Contains(systemPrompt, "## Operating Mode") {
+		t.Fatalf("did not expect operating mode section without execution tools, got %q", systemPrompt)
 	}
 }
 
@@ -309,6 +345,8 @@ func TestSelectToolInfosSkipsBulkToolsForCasualQuestion(t *testing.T) {
 
 func TestSelectToolInfosHandlesChineseDesktopRequest(t *testing.T) {
 	registry := tools.NewRegistry()
+	registry.RegisterTool("computer_observe", "Observe computer", map[string]any{}, nil)
+	registry.RegisterTool("computer_action", "Act on computer", map[string]any{}, nil)
 	registry.RegisterTool("desktop_open", "Open a desktop app", map[string]any{}, nil)
 	registry.RegisterTool("desktop_list_windows", "List desktop windows", map[string]any{}, nil)
 	registry.RegisterTool("skill_app-controller", "Desktop app control guidance", map[string]any{}, nil)
@@ -321,7 +359,7 @@ func TestSelectToolInfosHandlesChineseDesktopRequest(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	got := strings.Join(names, ",")
-	if !strings.Contains(got, "desktop_open") || !strings.Contains(got, "desktop_list_windows") || !strings.Contains(got, "skill_app-controller") {
+	if !strings.Contains(got, "computer_observe") || !strings.Contains(got, "computer_action") || !strings.Contains(got, "desktop_open") || !strings.Contains(got, "desktop_list_windows") || !strings.Contains(got, "skill_app-controller") {
 		t.Fatalf("expected desktop and skill tools for Chinese open-app request, got %q", got)
 	}
 }

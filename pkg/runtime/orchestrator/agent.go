@@ -101,6 +101,7 @@ func NewSubAgentWithRuntimeOptions(def AgentDefinition, llmClient agent.LLMCalle
 	if permLevel == "" {
 		permLevel = "limited"
 	}
+	def.PermissionLevel = permLevel
 
 	effectiveLLM := llmClient
 	if def.LLMProvider != "" {
@@ -131,38 +132,7 @@ func NewSubAgentWithRuntimeOptions(def AgentDefinition, llmClient agent.LLMCalle
 		effectiveLLM = customClient
 	}
 
-	// Build private skills manager
-	var privateSkills *skills.SkillsManager
-	if len(def.PrivateSkills) > 0 && allSkills != nil {
-		privateSkills = allSkills.FilterEnabled(def.PrivateSkills)
-	} else {
-		privateSkills = skills.NewSkillsManager("")
-	}
-
-	// Build private tool registry filtered by permission
-	privateTools := tools.NewRegistry()
-	if runtimeOpts.BuiltinTools != nil {
-		builtinTools := tools.NewRegistry()
-		toolOpts := subAgentBuiltinOptions(*runtimeOpts.BuiltinTools, def, permLevel)
-		tools.RegisterBuiltins(builtinTools, toolOpts)
-		copyAllowedTools(privateTools, builtinTools.ListToolsForRole(true), permLevel)
-	}
-	if baseTools != nil {
-		for _, tool := range baseTools.ListToolsForRole(true) {
-			if !isToolAllowedForPermission(tool.Name, permLevel) {
-				continue
-			}
-			if _, exists := privateTools.Get(tool.Name); exists {
-				continue
-			}
-			privateTools.Register(tool)
-		}
-	}
-
-	// Register skills as tools.
-	if privateSkills != nil {
-		privateSkills.RegisterTools(privateTools, resolveSubAgentSkillExecutionOptions(runtimeOpts.SkillExecution))
-	}
+	privateSkills, privateTools := buildSubAgentRuntime(def, allSkills, baseTools, runtimeOpts, permLevel)
 
 	// Each agent gets its own memory instance for isolation
 	var agentMem memory.MemoryBackend
@@ -289,6 +259,32 @@ func subAgentBuiltinOptions(base tools.BuiltinOptions, def AgentDefinition, perm
 	return opts
 }
 
+func buildSubAgentRuntime(def AgentDefinition, allSkills *skills.SkillsManager, baseTools *tools.Registry, runtimeOpts SubAgentRuntimeOptions, permLevel string) (*skills.SkillsManager, *tools.Registry) {
+	privateSkills := buildSubAgentPrivateSkills(def, allSkills)
+	privateTools := tools.NewRegistry()
+	if runtimeOpts.BuiltinTools != nil {
+		builtinTools := tools.NewRegistry()
+		toolOpts := subAgentBuiltinOptions(*runtimeOpts.BuiltinTools, def, permLevel)
+		tools.RegisterBuiltins(builtinTools, toolOpts)
+		copyAllowedTools(privateTools, builtinTools.ListToolsForRole(true), permLevel)
+	}
+	if baseTools != nil {
+		copyAllowedTools(privateTools, baseTools.ListToolsForRole(true), permLevel)
+	}
+
+	if privateSkills != nil {
+		privateSkills.RegisterTools(privateTools, resolveSubAgentSkillExecutionOptions(runtimeOpts.SkillExecution))
+	}
+	return privateSkills, privateTools
+}
+
+func buildSubAgentPrivateSkills(def AgentDefinition, allSkills *skills.SkillsManager) *skills.SkillsManager {
+	if len(def.PrivateSkills) > 0 && allSkills != nil {
+		return allSkills.FilterEnabled(def.PrivateSkills)
+	}
+	return skills.NewSkillsManager("")
+}
+
 func copyAllowedTools(target *tools.Registry, candidates []*tools.Tool, permLevel string) {
 	if target == nil {
 		return
@@ -301,6 +297,30 @@ func copyAllowedTools(target *tools.Registry, candidates []*tools.Tool, permLeve
 			continue
 		}
 		target.Register(tool)
+	}
+}
+
+func (sa *SubAgent) RefreshRuntime(def AgentDefinition, allSkills *skills.SkillsManager, baseTools *tools.Registry, runtimeOpts SubAgentRuntimeOptions) {
+	if sa == nil {
+		return
+	}
+	permLevel := strings.TrimSpace(def.PermissionLevel)
+	if permLevel == "" {
+		permLevel = "limited"
+	}
+	def.PermissionLevel = permLevel
+	privateSkills, privateTools := buildSubAgentRuntime(def, allSkills, baseTools, runtimeOpts, permLevel)
+
+	sa.mu.Lock()
+	sa.definition = def
+	sa.skills = privateSkills
+	sa.tools = privateTools
+	ag := sa.agent
+	sa.mu.Unlock()
+
+	if ag != nil {
+		ag.SetSkills(privateSkills)
+		ag.SetTools(privateTools)
 	}
 }
 

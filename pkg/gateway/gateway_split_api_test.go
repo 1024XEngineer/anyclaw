@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	"github.com/1024XEngineer/anyclaw/pkg/config"
 	"github.com/1024XEngineer/anyclaw/pkg/extensions/mcp"
 	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
@@ -28,6 +30,27 @@ func decodeBodyMap(t *testing.T, rec *httptest.ResponseRecorder) map[string]any 
 		t.Fatalf("decode response: %v; body=%s", err, rec.Body.String())
 	}
 	return payload
+}
+
+func assertConfigResponseSanitized(t *testing.T, body string) {
+	t.Helper()
+	for _, forbidden := range []string{
+		"llm-secret-token",
+		"provider-secret-token",
+		"provider-extra-secret",
+		"gateway-api-token",
+		"gateway-webhook-secret",
+		"speech-stt-secret",
+		"speech-tts-secret",
+		`"api_key"`,
+		`"api_token"`,
+		`"webhook_secret"`,
+		`"providers"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("config response leaked %s: %s", forbidden, body)
+		}
+	}
 }
 
 func newSplitAPITestServer(t *testing.T) *Server {
@@ -56,10 +79,38 @@ func TestSplitAPIs_ConfigUsersRolesAndTasks(t *testing.T) {
 	server := newSplitAPITestServer(t)
 
 	t.Run("config api", func(t *testing.T) {
+		server.mainRuntime.Config.LLM.APIKey = "llm-secret-token"
+		server.mainRuntime.Config.Providers = []config.ProviderProfile{{
+			ID:           "provider-1",
+			Name:         "Provider 1",
+			Type:         "openai",
+			Provider:     "openai",
+			APIKey:       "provider-secret-token",
+			Extra:        map[string]string{"x-secret": "provider-extra-secret"},
+			Enabled:      config.BoolPtr(true),
+			DefaultModel: "gpt-test",
+		}}
+		server.mainRuntime.Config.Security.APIToken = "gateway-api-token"
+		server.mainRuntime.Config.Security.WebhookSecret = "gateway-webhook-secret"
+		server.mainRuntime.Config.Speech.STT.APIKey = "speech-stt-secret"
+		server.mainRuntime.Config.Speech.TTS.APIKey = "speech-tts-secret"
+
 		rec := httptest.NewRecorder()
 		server.handleConfigAPI(rec, newAdminRequest(http.MethodGet, "/config", ""))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET /config = %d", rec.Code)
+		}
+		assertConfigResponseSanitized(t, rec.Body.String())
+		configPayload := decodeBodyMap(t, rec)
+		if _, ok := configPayload["providers"]; ok {
+			t.Fatalf("GET /config should not include provider profiles: %s", rec.Body.String())
+		}
+		llmPayload, ok := configPayload["llm"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected llm response object: %#v", configPayload["llm"])
+		}
+		if _, ok := llmPayload["api_key"]; ok {
+			t.Fatalf("GET /config should not include llm.api_key: %s", rec.Body.String())
 		}
 
 		rec = httptest.NewRecorder()
@@ -67,8 +118,24 @@ func TestSplitAPIs_ConfigUsersRolesAndTasks(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("POST /config = %d body=%s", rec.Code, rec.Body.String())
 		}
+		assertConfigResponseSanitized(t, rec.Body.String())
 		if server.mainRuntime.Config.LLM.Provider != "x" || server.mainRuntime.Config.LLM.Model != "y" {
 			t.Fatalf("llm patch not applied")
+		}
+
+		rec = httptest.NewRecorder()
+		server.handleConfigAPI(rec, newAdminRequest(http.MethodPost, "/config", `{"agent":{"permission_level":"read-only"}}`))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST /config permission patch = %d body=%s", rec.Code, rec.Body.String())
+		}
+		if server.mainRuntime.Config.Agent.PermissionLevel != "read-only" {
+			t.Fatalf("expected main permission read-only, got %q", server.mainRuntime.Config.Agent.PermissionLevel)
+		}
+
+		rec = httptest.NewRecorder()
+		server.handleConfigAPI(rec, newAdminRequest(http.MethodPost, "/config", `{"agent":{"permission_level":"invalid"}}`))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST /config invalid permission = %d body=%s", rec.Code, rec.Body.String())
 		}
 
 		_, err := parseChannelRoutingRules([]any{
@@ -159,6 +226,67 @@ func TestSplitAPIs_ConfigUsersRolesAndTasks(t *testing.T) {
 
 		server.executeTaskAsync("", "test")
 	})
+}
+
+func TestConfigAPIPermissionPatchUpdatesResolvedMainProfile(t *testing.T) {
+	server := newSplitAPITestServer(t)
+	server.mainRuntime.Config.Agent.Name = "Claude Main"
+	server.mainRuntime.Config.Agent.ActiveProfile = "Claude Main"
+	server.mainRuntime.Config.Agent.PermissionLevel = "limited"
+	server.mainRuntime.Config.Agent.Profiles = []config.AgentProfile{{
+		Name:            "Claude Main",
+		Enabled:         config.BoolPtr(true),
+		PermissionLevel: "full",
+	}}
+
+	rec := httptest.NewRecorder()
+	server.handleConfigAPI(rec, newAdminRequest(http.MethodPost, "/config", `{"agent":{"permission_level":"read-only"}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /config = %d body=%s", rec.Code, rec.Body.String())
+	}
+	profile, ok := server.mainRuntime.Config.FindAgentProfile("Claude Main")
+	if !ok {
+		t.Fatal("expected main profile to exist")
+	}
+	if profile.PermissionLevel != "read-only" {
+		t.Fatalf("expected profile permission read-only, got %q", profile.PermissionLevel)
+	}
+	if server.mainRuntime.Config.Agent.PermissionLevel != "read-only" {
+		t.Fatalf("expected main config permission read-only, got %q", server.mainRuntime.Config.Agent.PermissionLevel)
+	}
+}
+
+func TestConfigAPIPermissionPatchInvalidatesRuntimePool(t *testing.T) {
+	server := newSplitAPITestServer(t)
+	server.mainRuntime.Tools = tools.NewRegistry()
+	tools.RegisterBuiltins(server.mainRuntime.Tools, tools.BuiltinOptions{
+		WorkingDir:      server.mainRuntime.WorkingDir,
+		PermissionLevel: "full",
+	})
+	writeTarget := filepath.Join(server.mainRuntime.WorkingDir, "before.txt")
+	if _, err := server.mainRuntime.CallTool(context.Background(), "write_file", map[string]any{"path": writeTarget, "content": "before"}); err != nil {
+		t.Fatalf("expected initial full-permission write_file to work: %v", err)
+	}
+	if server.runtimePool == nil {
+		t.Fatal("expected runtime pool to be initialized")
+	}
+	server.runtimePool.Remember("helper", "org-1", "project-1", "default", newTestMainRuntime(t))
+	if got := server.runtimePool.Status().Pooled; got != 1 {
+		t.Fatalf("expected runtime pool to contain 1 runtime, got %d", got)
+	}
+
+	rec := httptest.NewRecorder()
+	server.handleConfigAPI(rec, newAdminRequest(http.MethodPost, "/config", `{"agent":{"permission_level":"read-only"}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /config = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := server.runtimePool.Status().Pooled; got != 0 {
+		t.Fatalf("expected runtime pool to be invalidated, got %d pooled runtimes", got)
+	}
+	_, err := server.mainRuntime.CallTool(context.Background(), "write_file", map[string]any{"path": filepath.Join(server.mainRuntime.WorkingDir, "after.txt"), "content": "after"})
+	if err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("expected refreshed mainRuntime tools to enforce read-only permission, got %v", err)
+	}
 }
 
 func TestSplitAPIs_MarketMCPProvidersAndBindings(t *testing.T) {

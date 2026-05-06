@@ -139,6 +139,17 @@
     "reuse_per_scope": true,
     "default_channel": ""
   },
+  "computer": {
+    "enabled": true,
+    "backend": "codex_local",
+    "coordinate_space": "normalized_0_1000",
+    "max_actions_per_turn": 8,
+    "observe_after_action": true,
+    "include_windows_default": true,
+    "redact_text_in_audit": true,
+    "allowed_apps": [],
+    "allowed_domains": []
+  },
   "security": {
     "api_token": "",
     "public_paths": [
@@ -165,6 +176,7 @@
       "git reset --hard"
     ],
     "command_timeout_seconds": 30,
+    "desktop_approval_scope": "capability",
     "risk_acknowledged": false,
     "pairing_enabled": false,
     "pairing_ttl_hours": 72,

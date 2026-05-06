@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,6 +164,108 @@ func TestStartDesktopPreflightsMissingControlUI(t *testing.T) {
 	}
 	if result.ConfigPath != configPath {
 		t.Fatalf("expected config path %q, got %q", configPath, result.ConfigPath)
+	}
+}
+
+func TestEnsureDesktopConfigSetsHostReviewedExecutionMode(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, defaultDesktopConfigName)
+
+	if err := ensureDesktopConfig(configPath, root); err != nil {
+		t.Fatalf("ensure desktop config: %v", err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Sandbox.ExecutionMode != "host-reviewed" {
+		t.Fatalf("expected desktop sandbox.execution_mode host-reviewed, got %q", cfg.Sandbox.ExecutionMode)
+	}
+}
+
+func TestEnsureDesktopConfigMigratesExistingSandboxMode(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, defaultDesktopConfigName)
+	cfg := config.DefaultConfig()
+	cfg.Sandbox.ExecutionMode = "sandbox"
+	if err := cfg.Save(configPath); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	if err := ensureDesktopConfig(configPath, root); err != nil {
+		t.Fatalf("ensure desktop config: %v", err)
+	}
+	updated, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("load migrated config: %v", err)
+	}
+	if updated.Sandbox.ExecutionMode != "host-reviewed" {
+		t.Fatalf("expected migrated sandbox.execution_mode host-reviewed, got %q", updated.Sandbox.ExecutionMode)
+	}
+}
+
+func TestEnsureDesktopConfigDoesNotPersistEnvOverrides(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, defaultDesktopConfigName)
+	cfg := config.DefaultConfig()
+	cfg.Sandbox.ExecutionMode = "sandbox"
+	if err := cfg.Save(configPath); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	t.Setenv("OPENAI_API_KEY", "env-secret")
+	t.Setenv("LLM_PROVIDER", "anthropic")
+	t.Setenv("LLM_MODEL", "claude-env-model")
+	t.Setenv("LLM_BASE_URL", "https://env.example.test/v1")
+
+	if err := ensureDesktopConfig(configPath, root); err != nil {
+		t.Fatalf("ensure desktop config: %v", err)
+	}
+	updated, err := config.LoadPersisted(configPath)
+	if err != nil {
+		t.Fatalf("load persisted config: %v", err)
+	}
+	if updated.LLM.APIKey == "env-secret" {
+		t.Fatal("did not expect OPENAI_API_KEY override to be persisted")
+	}
+	if updated.LLM.Provider == "anthropic" {
+		t.Fatal("did not expect LLM_PROVIDER override to be persisted")
+	}
+	if updated.LLM.Model == "claude-env-model" {
+		t.Fatal("did not expect LLM_MODEL override to be persisted")
+	}
+	if updated.LLM.BaseURL == "https://env.example.test/v1" {
+		t.Fatal("did not expect LLM_BASE_URL override to be persisted")
+	}
+}
+
+func TestEnsureDesktopConfigPersistsPrimaryProviderProfile(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, defaultDesktopConfigName)
+	cfg := config.DefaultConfig()
+	cfg.Agent.WorkDir = filepath.Join(root, ".anyclaw")
+	cfg.Agent.WorkingDir = filepath.Join(root, "workflows", "default")
+	cfg.Sandbox.ExecutionMode = "host-reviewed"
+	cfg.Providers = nil
+	cfg.LLM.DefaultProviderRef = ""
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	mustWriteFile(t, configPath, string(data))
+
+	if err := ensureDesktopConfig(configPath, root); err != nil {
+		t.Fatalf("ensure desktop config: %v", err)
+	}
+	updated, err := config.LoadPersisted(configPath)
+	if err != nil {
+		t.Fatalf("load persisted config: %v", err)
+	}
+	if updated.LLM.DefaultProviderRef != "primary-openai" {
+		t.Fatalf("expected primary provider ref to persist, got %q", updated.LLM.DefaultProviderRef)
+	}
+	if _, ok := updated.FindProviderProfile("primary-openai"); !ok {
+		t.Fatalf("expected primary-openai provider profile to persist, got %#v", updated.Providers)
 	}
 }
 

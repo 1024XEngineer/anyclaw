@@ -1,11 +1,13 @@
 import { ChevronDown, LoaderCircle, SendHorizontal, SlidersHorizontal, Sparkles } from "lucide-react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
+import type { ChatTaskState } from "@/features/chat/useWebChat";
 import { useShellStore } from "@/features/shell/useShellStore";
 
 type ComposerProps = {
   activeAgentLabel: string;
   canSend: boolean;
+  chatTaskState: ChatTaskState;
   draft: string;
   error: string | null;
   isSending: boolean;
@@ -18,9 +20,76 @@ type ComposerProps = {
   setupRequired: boolean;
 };
 
+function buildUserFacingError(error: string | null, chatTaskState: ChatTaskState) {
+  const technicalDetail = chatTaskState.technicalDetail ?? error;
+  if (!technicalDetail) return null;
+
+  const normalized = technicalDetail.toLowerCase();
+  if (normalized.includes("session not found")) {
+    return {
+      action: "可以新建对话，或从左侧选择另一个历史会话后继续。",
+      reason: "这个会话可能已经被删除，或本地记录和网关记录暂时不同步。",
+      title: "这个会话已经不可用。",
+      technicalDetail,
+    };
+  }
+
+  if (normalized.includes("workspace not found") || normalized.includes("workspace is required")) {
+    return {
+      action: "可以刷新页面后重试，或先确认当前工作区是否仍然存在。",
+      reason: "当前请求关联的工作区没有被网关识别。",
+      title: "没有找到当前工作区。",
+      technicalDetail,
+    };
+  }
+
+  if (normalized.includes("approval") && (normalized.includes("reject") || normalized.includes("denied"))) {
+    return {
+      action: "可以修改任务要求后重新发送，或选择更低风险的操作方式。",
+      reason: "你拒绝了本次需要权限的操作。",
+      title: "任务已停止。",
+      technicalDetail,
+    };
+  }
+
+  if (normalized.includes("forbidden") || normalized.includes("required_permission")) {
+    return {
+      action: "可以切换到有权限的配置，或降低任务需要的操作权限。",
+      reason: "当前账号或配置没有执行这个操作的权限。",
+      title: "权限不足。",
+      technicalDetail,
+    };
+  }
+
+  return {
+    action: chatTaskState.canRetry ? "可以调整任务描述后重试；如果重复出现，再展开技术细节排查。" : "请先处理这个问题，再继续当前任务。",
+    reason: "请求过程中出现异常，当前任务没有正常完成。",
+    title: "这次请求没有完成。",
+    technicalDetail,
+  };
+}
+
+function InlineErrorPanel({ chatTaskState, error }: { chatTaskState: ChatTaskState; error: string | null }) {
+  const userFacingError = buildUserFacingError(error, chatTaskState);
+  if (!userFacingError) return null;
+
+  return (
+    <div className="mx-5 mt-2 rounded-[18px] border border-[#fed7aa] bg-[#fff7ed] px-4 py-3 text-sm leading-6 text-[#9a3412]">
+      <div className="font-medium text-[#7c2d12]">发生了什么：{userFacingError.title}</div>
+      <div className="mt-1">可能原因：{userFacingError.reason}</div>
+      <div className="mt-1">你可以怎么做：{userFacingError.action}</div>
+      <details className="mt-2 text-xs text-[#9a3412]/80">
+        <summary className="cursor-pointer font-medium">技术细节</summary>
+        <div className="mt-1 break-words">{userFacingError.technicalDetail}</div>
+      </details>
+    </div>
+  );
+}
+
 export function Composer({
   activeAgentLabel,
   canSend,
+  chatTaskState,
   draft,
   error,
   isSending,
@@ -76,7 +145,7 @@ export function Composer({
           </div>
 
           {setupRequired ? <div className="px-5 pt-1 text-sm text-[#475467]">{setupMessage}</div> : null}
-          {!setupRequired && error ? <div className="px-5 pt-1 text-sm text-[#c2410c]">{error}</div> : null}
+          {!setupRequired ? <InlineErrorPanel chatTaskState={chatTaskState} error={error} /> : null}
 
           <div className="mt-1 flex flex-col gap-2.5 border-t border-[#f2f4f7] px-5 py-2.5 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-2">

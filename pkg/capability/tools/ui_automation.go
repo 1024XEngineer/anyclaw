@@ -186,7 +186,7 @@ function Match-AutomationElement($Element, [string]$ElementName, [string]$Automa
 `
 
 func DesktopListWindowsTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_list_windows", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_list_windows", opts, true); err != nil {
 		return "", err
 	}
 	windows, err := runDesktopWindowQuery(ctx, input)
@@ -201,7 +201,7 @@ func DesktopListWindowsTool(ctx context.Context, input map[string]any, opts Buil
 }
 
 func DesktopWaitWindowTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_wait_window", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_wait_window", opts, true); err != nil {
 		return "", err
 	}
 	timeoutMS, ok := numberInput(input["timeout_ms"])
@@ -249,7 +249,7 @@ func DesktopWaitWindowTool(ctx context.Context, input map[string]any, opts Built
 }
 
 func DesktopInspectUITool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_inspect_ui", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_inspect_ui", opts, true); err != nil {
 		return "", err
 	}
 	selector, err := resolveDesktopAutomationSelector(input, true)
@@ -320,7 +320,7 @@ $items | ConvertTo-Json -Depth 6 -Compress
 }
 
 func DesktopInvokeUITool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_invoke_ui", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_invoke_ui", opts, false); err != nil {
 		return "", err
 	}
 	selector, err := resolveDesktopAutomationSelector(input, true)
@@ -454,7 +454,7 @@ if (-not $performedAction) {
 }
 
 func DesktopSetValueUITool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_set_value_ui", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_set_value_ui", opts, false); err != nil {
 		return "", err
 	}
 	selector, err := resolveDesktopAutomationSelector(input, true)

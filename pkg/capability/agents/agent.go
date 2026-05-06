@@ -51,17 +51,18 @@ type Agent struct {
 }
 
 type Config struct {
-	Name        string
-	Description string
-	Personality string
-	IsSubAgent  bool
-	LLM         LLMCaller
-	Memory      memory.MemoryBackend
-	Skills      *skills.SkillsManager
-	Tools       *tools.Registry
-	WorkDir     string
-	WorkingDir  string
-	CLIHubRoot  string
+	Name         string
+	Description  string
+	Personality  string
+	SystemPrompt string
+	IsSubAgent   bool
+	LLM          LLMCaller
+	Memory       memory.MemoryBackend
+	Skills       *skills.SkillsManager
+	Tools        *tools.Registry
+	WorkDir      string
+	WorkingDir   string
+	CLIHubRoot   string
 
 	MaxContextTokens       int
 	ContextSafetyMargin    int
@@ -584,6 +585,10 @@ func (a *Agent) buildSystemPrompt() (string, error) {
 	return a.buildSystemPromptForToolInfos(toolList)
 }
 
+func (a *Agent) BuildSystemPrompt() (string, error) {
+	return a.buildSystemPrompt()
+}
+
 func (a *Agent) buildSystemPromptForToolInfos(toolList []tools.ToolInfo) (string, error) {
 	memoryContent := a.buildPromptMemory()
 
@@ -665,6 +670,8 @@ func (a *Agent) buildSystemPromptForToolInfos(toolList []tools.ToolInfo) (string
 	data := prompt.PromptData{
 		Name:           a.config.Name,
 		Description:    description,
+		SystemPrompt:   strings.TrimSpace(a.config.SystemPrompt),
+		Personality:    strings.TrimSpace(a.config.Personality),
 		WorkingDir:     a.workingDir,
 		Memory:         memoryContent,
 		SkillPrompts:   skillPrompts,
@@ -774,7 +781,7 @@ func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
 	}
 
 	coreExact := selectedCoreToolNames(query, userInput, cliHubIntent)
-	corePrefixes := []string{"browser_", "desktop_", "skill_"}
+	corePrefixes := []string{"browser_", "computer_", "desktop_", "skill_"}
 	appPrefixes := matchedToolPrefixes(query, allTools)
 
 	selected := make([]tools.ToolInfo, 0, len(allTools))
@@ -1016,7 +1023,7 @@ func toolPrefix(name string) string {
 
 func isCoreToolPrefix(prefix string) bool {
 	switch prefix {
-	case "browser", "desktop", "skill", "memory", "intent", "clihub", "claw", "read", "write", "list", "search", "run", "web", "fetch":
+	case "browser", "computer", "desktop", "skill", "memory", "intent", "clihub", "claw", "read", "write", "list", "search", "run", "web", "fetch":
 		return true
 	default:
 		return false
@@ -1270,6 +1277,10 @@ func (a *Agent) SetHistory(history []prompt.Message) {
 
 func (a *Agent) SetTools(registry *tools.Registry) {
 	a.tools = registry
+}
+
+func (a *Agent) SetSkills(manager *skills.SkillsManager) {
+	a.skills = manager
 }
 
 func (a *Agent) SetContextEngine(engine ctxpkg.ContextEngine) {

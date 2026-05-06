@@ -7,16 +7,21 @@ const TEST_WORKSPACE_PATH = "D:\\workspace\\anyclaw\\workflows";
 
 type HookProbeProps = {
   agentName?: string;
+  snapshotWorkspaceId?: string;
+  workspacePath?: string;
 };
 
-function HookProbe({ agentName = "binbin" }: HookProbeProps) {
-  const { deleteSession, error, messages, resetConversation, selectSession, selectedSessionKey, sessionId } = useWebChat(
+function HookProbe({ agentName = "binbin", snapshotWorkspaceId, workspacePath = TEST_WORKSPACE_PATH }: HookProbeProps) {
+  const { chatTaskState, deleteSession, error, messages, resetConversation, selectSession, selectedSessionKey, sessionId } = useWebChat(
     agentName,
-    TEST_WORKSPACE_PATH,
+    workspacePath,
+    snapshotWorkspaceId,
   );
 
   return (
     <div>
+      <div data-testid="task-phase">{chatTaskState.phase}</div>
+      <div data-testid="task-label">{chatTaskState.label}</div>
       <div data-testid="error-message">{error ?? ""}</div>
       <div data-testid="message-count">{messages.length}</div>
       <div data-testid="message-preview">{messages[0]?.content ?? ""}</div>
@@ -45,6 +50,7 @@ function HookProbe({ agentName = "binbin" }: HookProbeProps) {
 function ApprovalProbe() {
   const {
     approvalNoticeApprovals,
+    chatTaskState,
     draft,
     messages,
     pendingApprovals,
@@ -62,6 +68,7 @@ function ApprovalProbe() {
       </button>
       <div data-testid="approval-count">{approvalNoticeApprovals.length}</div>
       <div data-testid="approval-tool">{approvalNoticeApprovals[0]?.tool_name ?? ""}</div>
+      <div data-testid="task-phase">{chatTaskState.phase}</div>
       <div data-testid="session-approval-count">{pendingApprovals.length}</div>
       <div data-testid="message-count">{messages.length}</div>
       <div data-testid="message-preview">{messages[messages.length - 1]?.content ?? ""}</div>
@@ -291,6 +298,76 @@ describe("useWebChat persistence", () => {
       expect(screen.getByTestId("selected-session-key")).toHaveTextContent("agent-binbin");
       expect(screen.getByTestId("session-id")).toHaveTextContent("sess_binbin");
       expect(screen.getByTestId("message-preview")).toHaveTextContent("current agent");
+    });
+  });
+
+  it("keeps stored sessions scoped to the snapshot workspace id when offline", async () => {
+    window.localStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify({
+        selectedSessionKey: "workspace-a-session",
+        sessions: [
+          {
+            agentName: "binbin",
+            createdAt: "2026-04-11T12:00:00.000Z",
+            key: "workspace-a-session",
+            messages: [
+              {
+                content: "workspace a",
+                role: "user",
+                timestamp: "2026-04-11T12:00:00.000Z",
+              },
+            ],
+            remoteSessionId: "sess_workspace_a",
+            title: "workspace a",
+            updatedAt: "2026-04-11T12:00:00.000Z",
+            workspaceId: "ws-a",
+          },
+          {
+            agentName: "binbin",
+            createdAt: "2026-04-11T13:00:00.000Z",
+            key: "workspace-b-session",
+            messages: [
+              {
+                content: "workspace b",
+                role: "user",
+                timestamp: "2026-04-11T13:00:00.000Z",
+              },
+            ],
+            remoteSessionId: "sess_workspace_b",
+            title: "workspace b",
+            updatedAt: "2026-04-11T13:00:00.000Z",
+            workspaceId: "ws-b",
+          },
+        ],
+        version: 2,
+      }),
+    );
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestURL(input);
+
+      if (url === "/status" || url.startsWith("/sessions?workspace=") || url === "/approvals?status=pending") {
+        throw new Error("offline");
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HookProbe snapshotWorkspaceId="ws-b" workspacePath="workflows/default" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("selected-session-key")).toHaveTextContent("workspace-b-session");
+      expect(screen.getByTestId("session-id")).toHaveTextContent("sess_workspace_b");
+      expect(screen.getByTestId("message-preview")).toHaveTextContent("workspace b");
+    });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/sessions?workspace=ws-b",
+        expect.objectContaining({ headers: expect.any(Object) }),
+      );
     });
   });
 
@@ -553,6 +630,7 @@ describe("useWebChat persistence", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("error-message")).toHaveTextContent("method not allowed");
+      expect(screen.getByTestId("task-phase")).toHaveTextContent("retryable");
       expect(screen.getByTestId("selected-session-key")).toHaveTextContent("session-1");
     });
   });
@@ -663,6 +741,7 @@ describe("useWebChat persistence", () => {
     await waitFor(() => {
       expect(screen.getByTestId("approval-count")).toHaveTextContent("1");
       expect(screen.getByTestId("approval-tool")).toHaveTextContent("run_command");
+      expect(screen.getByTestId("task-phase")).toHaveTextContent("awaiting_approval");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "approve" }));

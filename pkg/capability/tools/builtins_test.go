@@ -483,7 +483,7 @@ func TestRunCommandToolWithPolicyNilSandboxAllowsEmptyCwd(t *testing.T) {
 }
 
 func TestEnsureDesktopAllowedRequiresHostReviewed(t *testing.T) {
-	err := ensureDesktopAllowed("desktop_click", BuiltinOptions{ExecutionMode: "sandbox", PermissionLevel: "limited"}, false)
+	err := ensureDesktopAllowed(context.Background(), "desktop_click", BuiltinOptions{ExecutionMode: "sandbox", PermissionLevel: "limited"}, false)
 	if err == nil {
 		t.Fatal("expected desktop tool to require host-reviewed mode")
 	}

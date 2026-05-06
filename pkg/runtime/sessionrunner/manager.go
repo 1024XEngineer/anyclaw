@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -281,7 +282,11 @@ func (m *Manager) ToolApprovalHook(session *state.Session, cfg *config.Config, m
 		return nil
 	}
 	return func(ctx context.Context, tc agent.ToolCall) error {
-		return m.RequireToolApproval(session, meta, tc.Name, tc.Args, tc.RequiresApproval)
+		approved, err := m.requireToolApproval(session, cfg, meta, tc.Name, tc.Args, tc.RequiresApproval)
+		if err == nil && approved && sessionApprovalCapability(tc.Name) == tools.HostReviewedCapabilityDesktop {
+			tools.GrantHostReviewedCapability(ctx, tools.HostReviewedCapabilityDesktop)
+		}
+		return err
 	}
 }
 
@@ -290,16 +295,25 @@ func (m *Manager) ProtocolApprovalHook(session *state.Session, cfg *config.Confi
 		return nil
 	}
 	return func(ctx context.Context, call tools.ToolApprovalCall) error {
-		return m.RequireToolApproval(session, meta, call.Name, call.Args)
+		approved, err := m.requireToolApproval(session, cfg, meta, call.Name, call.Args)
+		if err == nil && approved && sessionApprovalCapability(call.Name) == tools.HostReviewedCapabilityDesktop {
+			tools.GrantHostReviewedCapability(ctx, tools.HostReviewedCapabilityDesktop)
+		}
+		return err
 	}
 }
 
 func (m *Manager) RequireToolApproval(session *state.Session, meta ApprovalContext, toolName string, args map[string]any, forceApproval ...bool) error {
+	_, err := m.requireToolApproval(session, nil, meta, toolName, args, forceApproval...)
+	return err
+}
+
+func (m *Manager) requireToolApproval(session *state.Session, cfg *config.Config, meta ApprovalContext, toolName string, args map[string]any, forceApproval ...bool) (bool, error) {
 	if m == nil || session == nil {
-		return nil
+		return false, nil
 	}
 	if !requiresToolApprovalNameOrFlag(toolName, forceApproval...) {
-		return nil
+		return false, nil
 	}
 
 	workspaceID := state.SessionExecutionWorkspace(session)
@@ -312,25 +326,35 @@ func (m *Manager) RequireToolApproval(session *state.Session, meta ApprovalConte
 	payload := cloneAnyMap(signaturePayload)
 	payload["message"] = strings.TrimSpace(meta.Message)
 	payload["title"] = strings.TrimSpace(meta.Title)
+	payload["capability"] = sessionApprovalCapability(toolName)
+	payload["grant_scope"] = "session"
+	payload["grant_ttl_minutes"] = 15
+	if description := approvalDescription(toolName, args); description != "" {
+		payload["description"] = description
+	}
+	if domain := approvalTargetDomain(toolName, args); domain != "" {
+		payload["domain"] = domain
+	}
 	signature := approvalSignature(toolName, "tool_call", signaturePayload)
+	desktopApprovalScope := desktopApprovalScopeForRuntime(cfg)
 	for _, approval := range m.store.ListSessionApprovals(session.ID) {
-		if !matchesSessionToolApproval(approval, signature, session.ID, workspaceID, toolName, args) {
+		if !matchesSessionToolApproval(approval, signature, session.ID, workspaceID, toolName, args, m.nowFunc(), desktopApprovalScope) {
 			continue
 		}
 		switch approval.Status {
 		case "approved":
-			return nil
+			return true, nil
 		case "rejected":
-			return fmt.Errorf("tool call rejected: %s", toolName)
+			return false, fmt.Errorf("tool call rejected: %s", toolName)
 		case "pending":
 			m.updateSessionApprovalPresence(session.ID, toolName)
-			return ErrTaskWaitingApproval
+			return false, ErrTaskWaitingApproval
 		}
 	}
 
 	approval, err := m.approvals.RequestWithSignature("", session.ID, 0, toolName, "tool_call", payload, signaturePayload)
 	if err != nil {
-		return err
+		return false, err
 	}
 	m.updateSessionApprovalPresence(session.ID, toolName)
 	m.appendEvent("approval.requested", session.ID, map[string]any{
@@ -338,9 +362,11 @@ func (m *Manager) RequireToolApproval(session *state.Session, meta ApprovalConte
 		"tool_name":   toolName,
 		"action":      "tool_call",
 		"status":      approval.Status,
+		"capability":  payload["capability"],
+		"grant_scope": payload["grant_scope"],
 		"source":      firstNonEmpty(strings.TrimSpace(meta.Source), "session"),
 	})
-	return ErrTaskWaitingApproval
+	return false, ErrTaskWaitingApproval
 }
 
 func requiresToolApprovalNameOrFlag(name string, forceApproval ...bool) bool {
@@ -421,17 +447,22 @@ func (m *Manager) RecordToolActivities(session *state.Session, activities []agen
 }
 
 func (m *Manager) tryDirectDesktopOpen(ctx context.Context, session *state.Session, targetRuntime *appruntime.MainRuntime, meta ApprovalContext, resume bool) (*RunResult, bool, error) {
-	targetURL, ok := directDesktopOpenTarget(meta.Message)
+	targetURL, browser, ok := directDesktopOpenTarget(meta.Message)
 	if !ok || session == nil || targetRuntime == nil {
 		return nil, false, nil
 	}
+	ctx = tools.WithApprovalGrantScope(ctx)
 	agentName := state.SessionExecutionAgent(session)
 	workspaceID := state.SessionExecutionWorkspace(session)
 	input := map[string]any{
 		"target": targetURL,
 		"kind":   "url",
 	}
-	if err := m.RequireToolApproval(session, meta, "desktop_open", input); err != nil {
+	if browser != "" {
+		input["browser"] = browser
+	}
+	approved, err := m.requireToolApproval(session, targetRuntime.Config, meta, "desktop_open", input)
+	if err != nil {
 		if errors.Is(err, ErrTaskWaitingApproval) {
 			if pendingSession, persistErr := m.sessions.EnsurePendingUserMessage(session.ID, meta.Message); persistErr == nil {
 				return &RunResult{Session: pendingSession}, true, err
@@ -439,7 +470,11 @@ func (m *Manager) tryDirectDesktopOpen(ctx context.Context, session *state.Sessi
 		}
 		return &RunResult{Session: session}, true, err
 	}
+	if approved {
+		tools.GrantHostReviewedCapability(ctx, tools.HostReviewedCapabilityDesktop)
+	}
 
+	beforeWindows, _ := m.listDirectDesktopOpenWindows(ctx, targetRuntime)
 	result, err := targetRuntime.CallTool(ctx, "desktop_open", input)
 	if err != nil {
 		m.AppendToolActivity(session.ID, state.ToolActivityRecord{
@@ -451,8 +486,43 @@ func (m *Manager) tryDirectDesktopOpen(ctx context.Context, session *state.Sessi
 		})
 		return &RunResult{Session: session}, true, err
 	}
+	m.AppendToolActivity(session.ID, state.ToolActivityRecord{
+		ToolName:  "desktop_open",
+		Args:      cloneAnyMap(input),
+		Result:    result,
+		Agent:     agentName,
+		Workspace: workspaceID,
+	})
 
-	response := fmt.Sprintf("Opened %s in the desktop browser.", targetURL)
+	verified, verificationResult, verificationErr := m.verifyDirectDesktopOpen(ctx, targetRuntime, beforeWindows)
+	verificationArgs := map[string]any{"timeout_ms": 3000, "interval_ms": 250}
+	if verificationErr == nil {
+		verificationArgs["strategy"] = "desktop_wait_window_or_list_windows"
+	} else {
+		verificationArgs["strategy"] = "desktop_wait_window_or_list_windows"
+	}
+	if verificationErr != nil {
+		m.AppendToolActivity(session.ID, state.ToolActivityRecord{
+			ToolName:  "desktop_wait_window",
+			Args:      cloneAnyMap(verificationArgs),
+			Error:     verificationErr.Error(),
+			Agent:     agentName,
+			Workspace: workspaceID,
+		})
+	} else {
+		m.AppendToolActivity(session.ID, state.ToolActivityRecord{
+			ToolName:  "desktop_wait_window",
+			Args:      cloneAnyMap(verificationArgs),
+			Result:    verificationResult,
+			Agent:     agentName,
+			Workspace: workspaceID,
+		})
+	}
+
+	response := fmt.Sprintf("Attempted to open %s, but could not verify that a desktop browser window appeared.", targetURL)
+	if verified {
+		response = fmt.Sprintf("Opened %s in the desktop browser.", targetURL)
+	}
 	var updatedSession *state.Session
 	if resume {
 		updatedSession, err = m.sessions.AddAssistantMessage(session.ID, response)
@@ -465,19 +535,54 @@ func (m *Manager) tryDirectDesktopOpen(ctx context.Context, session *state.Sessi
 	if _, err := m.sessions.SetPresence(session.ID, "idle", false); err == nil {
 		m.appendEvent("session.presence", session.ID, map[string]any{"presence": "idle", "source": firstNonEmpty(strings.TrimSpace(meta.Source), "api")})
 	}
-	m.AppendToolActivity(session.ID, state.ToolActivityRecord{
-		ToolName:  "desktop_open",
-		Args:      cloneAnyMap(input),
-		Result:    result,
-		Agent:     agentName,
-		Workspace: workspaceID,
-	})
 	m.appendEvent("chat.completed", session.ID, map[string]any{
 		"message":         meta.Message,
 		"response_length": len(response),
 		"source":          firstNonEmpty(strings.TrimSpace(meta.Source), "api"),
 	})
 	return &RunResult{Response: response, Session: updatedSession}, true, nil
+}
+
+func (m *Manager) verifyDirectDesktopOpen(ctx context.Context, targetRuntime *appruntime.MainRuntime, before []desktopWindowSnapshot) (bool, string, error) {
+	deadline := time.Now().Add(3 * time.Second)
+	var lastResult string
+	var lastErr error
+	for {
+		after, err := m.listDirectDesktopOpenWindows(ctx, targetRuntime)
+		if err == nil {
+			if directDesktopOpenVerified(before, after) {
+				return true, directDesktopOpenWindowsSummary(after), nil
+			}
+			lastResult = directDesktopOpenWindowsSummary(after)
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return false, lastResult, lastErr
+			}
+			return false, lastResult, fmt.Errorf("desktop browser window did not appear within verification timeout")
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, lastResult, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (m *Manager) listDirectDesktopOpenWindows(ctx context.Context, targetRuntime *appruntime.MainRuntime) ([]desktopWindowSnapshot, error) {
+	result, err := targetRuntime.CallTool(ctx, "desktop_list_windows", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var windows []desktopWindowSnapshot
+	if err := json.Unmarshal([]byte(result), &windows); err != nil {
+		return nil, err
+	}
+	return windows, nil
 }
 
 func (m *Manager) beginChannelExecution(req ChannelRunRequest) (*state.Session, *appruntime.MainRuntime, error) {
@@ -621,18 +726,24 @@ func (m *Manager) failRun(sessionID string, message string, source string, resum
 	return persistedSession
 }
 
-func matchesSessionToolApproval(approval *state.Approval, signature string, sessionID string, workspace string, toolName string, args map[string]any) bool {
+func matchesSessionToolApproval(approval *state.Approval, signature string, sessionID string, workspace string, toolName string, args map[string]any, now time.Time, desktopApprovalScope string) bool {
 	if approval == nil {
 		return false
 	}
-	if approval.ToolName != toolName || approval.Action != "tool_call" || approval.SessionID != sessionID {
+	if approval.Action != "tool_call" || approval.SessionID != sessionID {
 		return false
 	}
 	if approval.Signature == signature {
-		return true
+		return sessionToolApprovalGrantAllowsMatch(approval, now)
 	}
 	payloadWorkspace, _ := approval.Payload["workspace"].(string)
 	if strings.TrimSpace(payloadWorkspace) != strings.TrimSpace(workspace) {
+		return false
+	}
+	if desktopApprovalScopeForValue(desktopApprovalScope) == "capability" && matchesSessionCapabilityApproval(approval, toolName, now) {
+		return true
+	}
+	if approval.ToolName != toolName {
 		return false
 	}
 	payloadArgs, ok := approval.Payload["args"]
@@ -647,7 +758,199 @@ func matchesSessionToolApproval(approval *state.Approval, signature string, sess
 	if err != nil {
 		return false
 	}
-	return string(actualArgs) == string(expectedArgs)
+	return string(actualArgs) == string(expectedArgs) && sessionToolApprovalGrantAllowsMatch(approval, now)
+}
+
+func desktopApprovalScopeForRuntime(cfg *config.Config) string {
+	if cfg == nil {
+		return "capability"
+	}
+	return desktopApprovalScopeForValue(cfg.Security.DesktopApprovalScope)
+}
+
+func desktopApprovalScopeForValue(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "tool_call":
+		return "tool_call"
+	default:
+		return "capability"
+	}
+}
+
+func matchesSessionCapabilityApproval(approval *state.Approval, toolName string, now time.Time) bool {
+	if approval == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(approval.Status), "approved") {
+		return false
+	}
+	capability := sessionApprovalCapability(toolName)
+	if capability == "" {
+		return false
+	}
+	payloadCapability, _ := approval.Payload["capability"].(string)
+	if strings.TrimSpace(strings.ToLower(payloadCapability)) != capability {
+		return false
+	}
+	payloadScope, _ := approval.Payload["grant_scope"].(string)
+	if payloadScope != "" && !strings.EqualFold(strings.TrimSpace(payloadScope), "session") {
+		return false
+	}
+	return sessionApprovalGrantStillValid(approval, now)
+}
+
+func sessionToolApprovalGrantAllowsMatch(approval *state.Approval, now time.Time) bool {
+	if approval == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(approval.Status), "approved") {
+		return true
+	}
+	if approvalTTLMinutes(approval.Payload["grant_ttl_minutes"]) <= 0 {
+		return true
+	}
+	return sessionApprovalGrantStillValid(approval, now)
+}
+
+func sessionApprovalGrantStillValid(approval *state.Approval, now time.Time) bool {
+	if approval == nil || approval.Payload == nil {
+		return false
+	}
+	ttlMinutes := approvalTTLMinutes(approval.Payload["grant_ttl_minutes"])
+	if ttlMinutes <= 0 {
+		return true
+	}
+	base := approval.RequestedAt
+	if strings.TrimSpace(approval.ResolvedAt) != "" {
+		if resolvedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(approval.ResolvedAt)); err == nil {
+			base = resolvedAt
+		}
+	}
+	if base.IsZero() || now.IsZero() {
+		return true
+	}
+	return now.Before(base.Add(time.Duration(ttlMinutes) * time.Minute))
+}
+
+func approvalTTLMinutes(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case float32:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		var out int
+		_, err := fmt.Sscanf(strings.TrimSpace(v), "%d", &out)
+		if err == nil {
+			return out
+		}
+	}
+	return 0
+}
+
+func sessionApprovalCapability(toolName string) string {
+	name := strings.TrimSpace(strings.ToLower(toolName))
+	if name == "desktop_plan" || strings.HasPrefix(name, "desktop_") || strings.HasPrefix(name, "computer_") {
+		return tools.HostReviewedCapabilityDesktop
+	}
+	return ""
+}
+
+func approvalDescription(toolName string, args map[string]any) string {
+	name := strings.TrimSpace(strings.ToLower(toolName))
+	if name == "desktop_open" {
+		target, _ := args["target"].(string)
+		kind, _ := args["kind"].(string)
+		target = strings.TrimSpace(target)
+		if target == "" {
+			return "Open a desktop target"
+		}
+		if strings.EqualFold(strings.TrimSpace(kind), "url") {
+			return fmt.Sprintf("Open a visible desktop browser and navigate to %s", target)
+		}
+		return fmt.Sprintf("Open desktop target %s", target)
+	}
+	if name == "computer_action" {
+		if summary := computerActionApprovalSummary(args); summary != "" {
+			return "Control the local desktop: " + summary
+		}
+	}
+	if name == "computer_observe" {
+		return "Observe the local desktop with screenshot and window metadata"
+	}
+	if strings.HasPrefix(name, "computer_") || strings.HasPrefix(name, "desktop_") || name == "desktop_plan" {
+		return "Control the local desktop for this session"
+	}
+	return ""
+}
+
+func computerActionApprovalSummary(args map[string]any) string {
+	names := computerActionApprovalNames(args)
+	if len(names) == 0 {
+		return ""
+	}
+	if len(names) == 1 {
+		return names[0]
+	}
+	return fmt.Sprintf("%d actions (%s)", len(names), strings.Join(names, ", "))
+}
+
+func computerActionApprovalNames(args map[string]any) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	if actions, ok := args["actions"].([]any); ok {
+		names := make([]string, 0, len(actions))
+		for _, item := range actions {
+			actionMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			name := firstNonEmptyApprovalString(actionMap["type"], actionMap["action"])
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		return names
+	}
+	if action := firstNonEmptyApprovalString(args["action"]); action != "" {
+		return []string{action}
+	}
+	if action := firstNonEmptyApprovalString(args["type"]); action != "" {
+		return []string{action}
+	}
+	return nil
+}
+
+func firstNonEmptyApprovalString(values ...any) string {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func approvalTargetDomain(toolName string, args map[string]any) string {
+	if strings.TrimSpace(strings.ToLower(toolName)) != "desktop_open" {
+		return ""
+	}
+	target, _ := args["target"].(string)
+	parsed, err := url.Parse(strings.TrimSpace(target))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.ToLower(parsed.Hostname()))
 }
 
 func (m *Manager) persistApprovalResumeState(session *state.Session, pauseErr *agent.ApprovalPauseError) {
@@ -681,7 +984,7 @@ func (m *Manager) findPendingToolApproval(session *state.Session, toolName strin
 		if approval == nil || approval.Status != "pending" {
 			continue
 		}
-		if matchesSessionToolApproval(approval, signature, session.ID, workspaceID, toolName, args) {
+		if matchesSessionToolApproval(approval, signature, session.ID, workspaceID, toolName, args, m.nowFunc(), "tool_call") {
 			return approval
 		}
 	}
@@ -719,6 +1022,93 @@ func decodeApprovalResumeState(raw any) *agent.ApprovalResumeState {
 func approvalSignature(toolName string, action string, payload map[string]any) string {
 	encoded, _ := json.Marshal(payload)
 	return fmt.Sprintf("%s|%s|%s", strings.TrimSpace(toolName), strings.TrimSpace(action), string(encoded))
+}
+
+type desktopWindowSnapshot struct {
+	Title       string `json:"title,omitempty"`
+	ProcessName string `json:"process_name,omitempty"`
+	Handle      int    `json:"handle,omitempty"`
+	IsFocused   bool   `json:"is_focused,omitempty"`
+}
+
+func directDesktopOpenWindowAppeared(before []desktopWindowSnapshot, after []desktopWindowSnapshot) bool {
+	beforeByHandle := make(map[int]desktopWindowSnapshot, len(before))
+	for _, item := range before {
+		if item.Handle > 0 {
+			beforeByHandle[item.Handle] = item
+		}
+	}
+	for _, item := range after {
+		if !isBrowserWindowSnapshot(item) {
+			continue
+		}
+		if item.Handle > 0 {
+			if _, ok := beforeByHandle[item.Handle]; !ok {
+				return true
+			}
+		}
+		if item.IsFocused {
+			beforeItem, ok := beforeByHandle[item.Handle]
+			if !ok || !beforeItem.IsFocused {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func directDesktopOpenVerified(before []desktopWindowSnapshot, after []desktopWindowSnapshot) bool {
+	if directDesktopOpenWindowAppeared(before, after) {
+		return true
+	}
+	beforeHadBrowser := false
+	for _, item := range before {
+		if isBrowserWindowSnapshot(item) {
+			beforeHadBrowser = true
+			break
+		}
+	}
+	if !beforeHadBrowser {
+		return false
+	}
+	for _, item := range after {
+		if isBrowserWindowSnapshot(item) {
+			return true
+		}
+	}
+	return false
+}
+
+func directDesktopOpenWindowsSummary(windows []desktopWindowSnapshot) string {
+	items := make([]string, 0, len(windows))
+	for _, item := range windows {
+		if !isBrowserWindowSnapshot(item) {
+			continue
+		}
+		descriptor := firstNonEmpty(strings.TrimSpace(item.Title), strings.TrimSpace(item.ProcessName), fmt.Sprintf("window-%d", item.Handle))
+		if item.IsFocused {
+			descriptor += " (focused)"
+		}
+		items = append(items, descriptor)
+		if len(items) >= 5 {
+			break
+		}
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	return strings.Join(items, ", ")
+}
+
+func isBrowserWindowSnapshot(item desktopWindowSnapshot) bool {
+	process := strings.ToLower(strings.TrimSpace(item.ProcessName))
+	title := strings.ToLower(strings.TrimSpace(item.Title))
+	for _, candidate := range []string{"chrome", "msedge", "firefox", "brave", "opera"} {
+		if process == candidate || strings.Contains(title, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneAnyMap(input map[string]any) map[string]any {
@@ -764,30 +1154,25 @@ func channelTransportMeta(meta map[string]string) map[string]string {
 	return transportMeta
 }
 
-func directDesktopOpenTarget(message string) (string, bool) {
+func directDesktopOpenTarget(message string) (string, string, bool) {
 	msg := strings.TrimSpace(message)
 	if msg == "" {
-		return "", false
+		return "", "", false
 	}
 	lower := strings.ToLower(msg)
 	hasOpenIntent := strings.Contains(lower, "open") || strings.Contains(lower, "visit") || strings.Contains(msg, "打开") || strings.Contains(msg, "访问")
 	if !hasOpenIntent {
-		return "", false
+		return "", "", false
+	}
+	browser := ""
+	if strings.Contains(lower, "edge") || strings.Contains(lower, "msedge") {
+		browser = "edge"
 	}
 	for _, field := range strings.Fields(msg) {
 		trimmed := strings.Trim(field, " \t\r\n,，。！？；:?)（）[]【】>\"'")
 		if strings.HasPrefix(strings.ToLower(trimmed), "http://") || strings.HasPrefix(strings.ToLower(trimmed), "https://") {
-			return trimmed, true
+			return trimmed, browser, true
 		}
 	}
-	aliases := map[string]string{
-		"抖音":     "https://www.douyin.com/",
-		"douyin": "https://www.douyin.com/",
-	}
-	for alias, target := range aliases {
-		if strings.Contains(lower, strings.ToLower(alias)) || strings.Contains(msg, alias) {
-			return target, true
-		}
-	}
-	return "", false
+	return "", "", false
 }

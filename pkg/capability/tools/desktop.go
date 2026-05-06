@@ -17,7 +17,8 @@ func DesktopOpenTool(ctx context.Context, input map[string]any, opts BuiltinOpti
 		return "", fmt.Errorf("target is required")
 	}
 	kind, _ := input["kind"].(string)
-	if err := ensureDesktopAllowed("desktop_open", opts, false); err != nil {
+	browser, _ := input["browser"].(string)
+	if err := ensureDesktopAllowed(ctx, "desktop_open", opts, false); err != nil {
 		return "", err
 	}
 	if kind == "file" || kind == "app" {
@@ -25,7 +26,7 @@ func DesktopOpenTool(ctx context.Context, input map[string]any, opts BuiltinOpti
 			return "", err
 		}
 	}
-	command := desktopOpenCommand(strings.TrimSpace(target), strings.TrimSpace(kind))
+	command := desktopOpenCommand(strings.TrimSpace(target), strings.TrimSpace(kind), strings.TrimSpace(browser))
 	return runDesktopPowerShell(ctx, command)
 }
 
@@ -34,7 +35,7 @@ func DesktopTypeTool(ctx context.Context, input map[string]any, opts BuiltinOpti
 	if !ok || text == "" {
 		return "", fmt.Errorf("text is required")
 	}
-	if err := ensureDesktopAllowed("desktop_type", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_type", opts, false); err != nil {
 		return "", err
 	}
 	command := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(%s); "typed"`, powerShellString(sendKeysEscape(text)))
@@ -46,7 +47,7 @@ func DesktopTypeHumanTool(ctx context.Context, input map[string]any, opts Builti
 	if !ok || text == "" {
 		return "", fmt.Errorf("text is required")
 	}
-	if err := ensureDesktopAllowed("desktop_type_human", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_type_human", opts, false); err != nil {
 		return "", err
 	}
 	delayMS, ok := numberInput(input["delay_ms"])
@@ -118,7 +119,7 @@ func DesktopHotkeyTool(ctx context.Context, input map[string]any, opts BuiltinOp
 	if len(keys) == 0 {
 		return "", fmt.Errorf("keys is required")
 	}
-	if err := ensureDesktopAllowed("desktop_hotkey", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_hotkey", opts, false); err != nil {
 		return "", err
 	}
 	parts := make([]string, 0, len(keys))
@@ -134,7 +135,7 @@ func DesktopClipboardSetTool(ctx context.Context, input map[string]any, opts Bui
 	if !ok {
 		return "", fmt.Errorf("text is required")
 	}
-	if err := ensureDesktopAllowed("desktop_clipboard_set", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_clipboard_set", opts, false); err != nil {
 		return "", err
 	}
 	command := fmt.Sprintf(`
@@ -145,7 +146,7 @@ Set-Clipboard -Value %s;
 }
 
 func DesktopClipboardGetTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_clipboard_get", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_clipboard_get", opts, true); err != nil {
 		return "", err
 	}
 	command := `
@@ -171,7 +172,7 @@ func DesktopPasteTool(ctx context.Context, input map[string]any, opts BuiltinOpt
 	if !ok || waitMS < 0 {
 		waitMS = 90
 	}
-	if err := ensureDesktopAllowed("desktop_paste", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_paste", opts, false); err != nil {
 		return "", err
 	}
 	setClipboard := ""
@@ -200,7 +201,7 @@ func DesktopClickTool(ctx context.Context, input map[string]any, opts BuiltinOpt
 	if !okX || !okY {
 		return "", fmt.Errorf("x and y are required")
 	}
-	if err := ensureDesktopAllowed("desktop_click", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_click", opts, false); err != nil {
 		return "", err
 	}
 	button := strings.ToLower(strings.TrimSpace(fmt.Sprint(input["button"])))
@@ -251,7 +252,7 @@ func DesktopMoveTool(ctx context.Context, input map[string]any, opts BuiltinOpti
 	if !okX || !okY {
 		return "", fmt.Errorf("x and y are required")
 	}
-	if err := ensureDesktopAllowed("desktop_move", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_move", opts, false); err != nil {
 		return "", err
 	}
 	command := fmt.Sprintf(`
@@ -274,7 +275,7 @@ func DesktopDoubleClickTool(ctx context.Context, input map[string]any, opts Buil
 	if !okX || !okY {
 		return "", fmt.Errorf("x and y are required")
 	}
-	if err := ensureDesktopAllowed("desktop_double_click", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_double_click", opts, false); err != nil {
 		return "", err
 	}
 	button := strings.ToLower(strings.TrimSpace(fmt.Sprint(input["button"])))
@@ -327,22 +328,37 @@ Start-Sleep -Milliseconds %d;
 }
 
 func DesktopScrollTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_scroll", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_scroll", opts, false); err != nil {
 		return "", err
 	}
+	direction := strings.ToLower(strings.TrimSpace(fmt.Sprint(input["direction"])))
+	wheelFlag := 0x0800
 	delta, ok := numberInput(input["delta"])
 	if !ok || delta == 0 {
-		direction := strings.ToLower(strings.TrimSpace(fmt.Sprint(input["direction"])))
 		clicks, okClicks := numberInput(input["clicks"])
 		if !okClicks || clicks <= 0 {
 			clicks = 3
 		}
 		delta = clicks * 120
-		if direction == "down" {
+		switch direction {
+		case "", "up":
+		case "down":
+			delta = -delta
+		case "right":
+			wheelFlag = 0x01000
+		case "left":
+			wheelFlag = 0x01000
+			delta = -delta
+		default:
+			return "", fmt.Errorf("direction must be up, down, left, or right")
+		}
+	} else if direction == "left" || direction == "right" {
+		wheelFlag = 0x01000
+		if direction == "left" && delta > 0 {
 			delta = -delta
 		}
-		if direction != "" && direction != "up" && direction != "down" {
-			return "", fmt.Errorf("direction must be up or down")
+		if direction == "right" && delta < 0 {
+			delta = -delta
 		}
 	}
 	x, hasX := numberInput(input["x"])
@@ -364,9 +380,9 @@ public static class DesktopNative {
 }
 "@;
 %s
-[DesktopNative]::mouse_event(0x0800, 0, 0, %d, [UIntPtr]::Zero);
+[DesktopNative]::mouse_event(%d, 0, 0, %d, [UIntPtr]::Zero);
 "scrolled"
-`, moveCursor, delta)
+`, moveCursor, wheelFlag, delta)
 	return runDesktopPowerShell(ctx, command)
 }
 
@@ -378,7 +394,7 @@ func DesktopDragTool(ctx context.Context, input map[string]any, opts BuiltinOpti
 	if !okX1 || !okY1 || !okX2 || !okY2 {
 		return "", fmt.Errorf("x1, y1, x2, and y2 are required")
 	}
-	if err := ensureDesktopAllowed("desktop_drag", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_drag", opts, false); err != nil {
 		return "", err
 	}
 	button := strings.ToLower(strings.TrimSpace(fmt.Sprint(input["button"])))
@@ -429,7 +445,7 @@ func DesktopWaitTool(ctx context.Context, input map[string]any, opts BuiltinOpti
 	if !ok || waitMS < 0 {
 		return "", fmt.Errorf("wait_ms is required")
 	}
-	if err := ensureDesktopAllowed("desktop_wait", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_wait", opts, false); err != nil {
 		return "", err
 	}
 	command := fmt.Sprintf(`Start-Sleep -Milliseconds %d; "waited"`, waitMS)
@@ -442,7 +458,7 @@ func DesktopFocusWindowTool(ctx context.Context, input map[string]any, opts Buil
 	if strings.TrimSpace(title) == "" && strings.TrimSpace(processName) == "" {
 		return "", fmt.Errorf("title or process_name is required")
 	}
-	if err := ensureDesktopAllowed("desktop_focus_window", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_focus_window", opts, false); err != nil {
 		return "", err
 	}
 	match := strings.ToLower(strings.TrimSpace(fmt.Sprint(input["match"])))
@@ -495,7 +511,7 @@ func DesktopScreenshotTool(ctx context.Context, input map[string]any, opts Built
 	if !ok || strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	if err := ensureDesktopAllowed("desktop_screenshot", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_screenshot", opts, true); err != nil {
 		return "", err
 	}
 	resolved := resolvePath(path, opts.WorkingDir)
@@ -520,7 +536,7 @@ func DesktopScreenshotWindowTool(ctx context.Context, input map[string]any, opts
 	if !ok || strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	if err := ensureDesktopAllowed("desktop_screenshot_window", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_screenshot_window", opts, true); err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(fmt.Sprint(input["title"])) == "" &&
@@ -591,12 +607,12 @@ $bitmap.Dispose();
 	return runDesktopPowerShell(ctx, command)
 }
 
-func ensureDesktopAllowed(toolName string, opts BuiltinOptions, allowReadOnly bool) error {
+func ensureDesktopAllowed(ctx context.Context, toolName string, opts BuiltinOptions, allowReadOnly bool) error {
 	if runtime.GOOS != "windows" {
 		return fmt.Errorf("%s is currently supported on Windows host mode only", toolName)
 	}
 	mode := strings.TrimSpace(strings.ToLower(opts.ExecutionMode))
-	if mode != "host-reviewed" {
+	if mode != "host-reviewed" && !HasHostReviewedCapability(ctx, HostReviewedCapabilityDesktop) {
 		return fmt.Errorf("%s requires sandbox.execution_mode=host-reviewed", toolName)
 	}
 	if !allowReadOnly && strings.TrimSpace(strings.ToLower(opts.PermissionLevel)) == "read-only" {
@@ -630,9 +646,12 @@ func utf16LE(s string) []byte {
 	return buf
 }
 
-func desktopOpenCommand(target string, kind string) string {
+func desktopOpenCommand(target string, kind string, browser string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "url":
+		if strings.EqualFold(strings.TrimSpace(browser), "edge") || strings.EqualFold(strings.TrimSpace(browser), "msedge") {
+			return fmt.Sprintf(`Start-Process "msedge.exe" -ArgumentList %s; "opened url"`, powerShellString(target))
+		}
 		return fmt.Sprintf(`Start-Process %s; "opened url"`, powerShellString(target))
 	case "file":
 		return fmt.Sprintf(`Invoke-Item %s; "opened file"`, powerShellString(target))
