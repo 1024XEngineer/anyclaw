@@ -3,21 +3,23 @@
 // Do not edit manually.
 
 export const workspaceSnapshot = {
-  "generatedAt": "static-workspace-snapshot",
+  "generatedAt": "",
+  "configSource": "example",
+  "workspaceId": "ws-24d88fd00d7aa7ea",
   "agent": {
     "name": "AnyClaw",
     "description": "Your AI assistant with file-based memory",
     "permissionLevel": "limited",
     "workDir": ".anyclaw",
     "workingDir": "workflows/default",
-    "language": "CN",
+    "language": "zh-CN",
     "activeProfile": ""
   },
   "orchestrator": {
-    "enabled": true,
-    "maxConcurrentAgents": 4,
-    "retryCount": 2,
-    "timeoutSeconds": 300,
+    "enabled": false,
+    "maxConcurrentAgents": 0,
+    "retryCount": 0,
+    "timeoutSeconds": 0,
     "namedAgents": 0,
     "subAgents": 0
   },
@@ -35,7 +37,7 @@ export const workspaceSnapshot = {
       "provider": "openai",
       "defaultModel": "gpt-4o-mini",
       "enabled": true,
-      "isDefault": true,
+      "isDefault": false,
       "capabilitiesCount": 0
     }
   ],

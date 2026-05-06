@@ -312,8 +312,19 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 		CommandTimeoutSeconds: app.Config.Security.CommandTimeoutSeconds,
 		AuditLogger:           auditLogger,
 		Sandbox:               sandboxManager,
-		MemoryBackend:         mem,
-		QMDClient:             qmdClient,
+		Computer: tools.ComputerOptions{
+			Enabled:               app.Config.Computer.Enabled,
+			Backend:               app.Config.Computer.Backend,
+			CoordinateSpace:       app.Config.Computer.CoordinateSpace,
+			MaxActionsPerTurn:     app.Config.Computer.MaxActionsPerTurn,
+			ObserveAfterAction:    app.Config.Computer.ObserveAfterAction,
+			IncludeWindowsDefault: app.Config.Computer.IncludeWindowsDefault,
+			RedactTextInAudit:     app.Config.Computer.RedactTextInAudit,
+			AllowedApps:           app.Config.Computer.AllowedApps,
+			AllowedDomains:        app.Config.Computer.AllowedDomains,
+		},
+		MemoryBackend: mem,
+		QMDClient:     qmdClient,
 	}
 	tools.RegisterBuiltins(registry, builtinOpts)
 	sk.RegisterTools(registry, skills.ExecutionOptions{AllowExec: app.Config.Plugins.AllowExec, ExecTimeoutSeconds: app.Config.Plugins.ExecTimeoutSeconds})
@@ -368,6 +379,7 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 		Name:             app.Config.Agent.Name,
 		Description:      app.Config.Agent.Description,
 		Personality:      agent.BuildPersonalityPrompt(resolveMainAgentPersonality(app.Config)),
+		SystemPrompt:     resolveMainAgentSystemPrompt(app.Config),
 		LLM:              llmWrapper,
 		Memory:           mem,
 		Skills:           sk,

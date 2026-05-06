@@ -26,6 +26,13 @@ type SettingsModalProps = {
 
 type SkillFilter = "all" | "loaded" | "local" | "registry";
 type AgentFilter = "active" | "all" | "configured";
+type PermissionLevel = "read-only" | "limited" | "full";
+
+const permissionOptions: Array<{ label: string; value: PermissionLevel }> = [
+  { label: "只读", value: "read-only" },
+  { label: "受限", value: "limited" },
+  { label: "完全", value: "full" },
+];
 
 const sections: Array<{ id: SettingsSection; icon: typeof Sparkles; label: string }> = [
   { id: "general", icon: SlidersHorizontal, label: "通用设置" },
@@ -37,8 +44,9 @@ const sections: Array<{ id: SettingsSection; icon: typeof Sparkles; label: strin
 ];
 
 function formatDateTime(value: string) {
+  if (value.trim() === "") return "静态快照";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  if (Number.isNaN(date.getTime())) return "静态快照";
   return date.toLocaleString("zh-CN", {
     day: "2-digit",
     hour: "2-digit",
@@ -163,6 +171,9 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
   const [agentFilter, setAgentFilter] = useState<AgentFilter>("all");
   const [skillEnabled, setSkillEnabled] = useState<Record<string, boolean>>({});
   const [pendingSkillName, setPendingSkillName] = useState<string | null>(null);
+  const [selectedMainPermission, setSelectedMainPermission] = useState<PermissionLevel>(
+    data.runtimeProfile.mainPermission as PermissionLevel,
+  );
 
   const toggleSkillMutation = useMutation({
     mutationFn: ({ enabled, name }: { enabled: boolean; name: string }) =>
@@ -172,9 +183,21 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
       }),
   });
 
+  const updateMainPermissionMutation = useMutation({
+    mutationFn: (permissionLevel: PermissionLevel) =>
+      requestJSON<{ agent?: { permission_level?: string } }>("/config", {
+        body: JSON.stringify({ agent: { permission_level: permissionLevel } }),
+        method: "POST",
+      }),
+  });
+
   useEffect(() => {
     setSkillEnabled(Object.fromEntries(data.localSkills.map((skill) => [skill.name, skill.enabled])));
   }, [data.localSkills]);
+
+  useEffect(() => {
+    setSelectedMainPermission(data.runtimeProfile.mainPermission as PermissionLevel);
+  }, [data.runtimeProfile.mainPermission]);
 
   useEffect(() => {
     setSearch("");
@@ -258,6 +281,22 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
     }
   }
 
+  async function handleMainPermissionChange(nextPermission: PermissionLevel) {
+    if (nextPermission === selectedMainPermission || updateMainPermissionMutation.isPending) {
+      return;
+    }
+
+    const previousPermission = selectedMainPermission;
+    setSelectedMainPermission(nextPermission);
+
+    try {
+      await updateMainPermissionMutation.mutateAsync(nextPermission);
+      await queryClient.invalidateQueries({ queryKey: ["workspace-overview"] });
+    } catch {
+      setSelectedMainPermission(previousPermission);
+    }
+  }
+
   function resolveAgentEnabled(status: string, active: boolean) {
     return active || status !== "已停用";
   }
@@ -302,6 +341,37 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
             </div>
           </section>
         </div>
+
+        <section className="rounded-[28px] border border-[#eceff3] bg-white p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <div className="text-sm font-medium text-[#667085]">主 Agent 权限</div>
+              <div className="mt-2 text-[22px] font-semibold tracking-[-0.03em] text-[#111827]">
+                权限级别
+              </div>
+              <div className="mt-2 text-sm leading-6 text-[#667085]">
+                主 Agent 权限会作为运行时上限，SubAgent 的最终权限不会超过这里的设置。
+              </div>
+            </div>
+
+            <label className="flex min-w-[220px] flex-col gap-2 text-sm text-[#475467]">
+              <span className="font-medium text-[#667085]">权限级别</span>
+              <select
+                aria-label="主 Agent 权限级别"
+                className="h-12 rounded-2xl border border-[#d7dbe3] bg-white px-4 text-[15px] text-[#111827] outline-none transition-colors focus:border-[#111827] disabled:cursor-not-allowed disabled:bg-[#f8fafc] disabled:text-[#98a2b3]"
+                disabled={updateMainPermissionMutation.isPending}
+                onChange={(event) => void handleMainPermissionChange(event.target.value as PermissionLevel)}
+                value={selectedMainPermission}
+              >
+                {permissionOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label} · {option.value}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </section>
       </div>
     );
   }

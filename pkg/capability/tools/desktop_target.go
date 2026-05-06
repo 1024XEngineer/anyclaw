@@ -36,7 +36,7 @@ type desktopVisionSource struct {
 }
 
 func DesktopResolveTargetTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_resolve_target", opts, true); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_resolve_target", opts, true); err != nil {
 		return "", err
 	}
 	result, err := resolveDesktopTarget(ctx, input, opts)
@@ -54,7 +54,7 @@ func DesktopResolveTargetTool(ctx context.Context, input map[string]any, opts Bu
 }
 
 func DesktopActivateTargetTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_activate_target", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_activate_target", opts, false); err != nil {
 		return "", err
 	}
 	result, err := resolveDesktopTarget(ctx, input, opts)
@@ -213,7 +213,7 @@ func DesktopActivateTargetTool(ctx context.Context, input map[string]any, opts B
 }
 
 func DesktopSetTargetValueTool(ctx context.Context, input map[string]any, opts BuiltinOptions) (string, error) {
-	if err := ensureDesktopAllowed("desktop_set_target_value", opts, false); err != nil {
+	if err := ensureDesktopAllowed(ctx, "desktop_set_target_value", opts, false); err != nil {
 		return "", err
 	}
 	value := stringValue(input["value"])

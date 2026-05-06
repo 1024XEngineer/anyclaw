@@ -75,6 +75,10 @@ func (c *Config) Validate() error {
 	if c.Security.CommandTimeoutSeconds < 0 {
 		errs = append(errs, fmt.Sprintf("security.command_timeout_seconds must be >= 0 (got %d)", c.Security.CommandTimeoutSeconds))
 	}
+	validDesktopApprovalScopes := map[string]bool{"capability": true, "tool_call": true}
+	if c.Security.DesktopApprovalScope != "" && !validDesktopApprovalScopes[c.Security.DesktopApprovalScope] {
+		errs = append(errs, fmt.Sprintf("security.desktop_approval_scope must be one of: capability, tool_call (got %q)", c.Security.DesktopApprovalScope))
+	}
 
 	if c.Plugins.ExecTimeoutSeconds < 0 {
 		errs = append(errs, fmt.Sprintf("plugins.exec_timeout_seconds must be >= 0 (got %d)", c.Plugins.ExecTimeoutSeconds))
@@ -87,6 +91,18 @@ func (c *Config) Validate() error {
 	validExecutionModes := map[string]bool{"sandbox": true, "host-reviewed": true}
 	if c.Sandbox.ExecutionMode != "" && !validExecutionModes[c.Sandbox.ExecutionMode] {
 		errs = append(errs, fmt.Sprintf("sandbox.execution_mode must be one of: sandbox, host-reviewed (got %q)", c.Sandbox.ExecutionMode))
+	}
+
+	validComputerBackends := map[string]bool{"codex_local": true}
+	if c.Computer.Backend != "" && !validComputerBackends[c.Computer.Backend] {
+		errs = append(errs, fmt.Sprintf("computer.backend must be codex_local (got %q)", c.Computer.Backend))
+	}
+	validComputerCoordinateSpaces := map[string]bool{"normalized_0_1000": true, "normalized": true, "absolute": true, "screen": true, "pixels": true}
+	if c.Computer.CoordinateSpace != "" && !validComputerCoordinateSpaces[c.Computer.CoordinateSpace] {
+		errs = append(errs, fmt.Sprintf("computer.coordinate_space must be one of: normalized_0_1000, normalized, absolute, screen, pixels (got %q)", c.Computer.CoordinateSpace))
+	}
+	if c.Computer.MaxActionsPerTurn < 0 {
+		errs = append(errs, fmt.Sprintf("computer.max_actions_per_turn must be >= 0 (got %d)", c.Computer.MaxActionsPerTurn))
 	}
 	for i, sa := range c.Orchestrator.SubAgents {
 		if sa.PermissionLevel != "" && !validPermLevels[sa.PermissionLevel] {

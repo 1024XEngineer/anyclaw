@@ -98,6 +98,7 @@ func prepareExecutionContext(ctx context.Context, req ExecutionRequest) context.
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = tools.WithApprovalGrantScope(ctx)
 	if strings.TrimSpace(req.SessionID) != "" {
 		ctx = tools.WithBrowserSession(ctx, req.SessionID)
 		ctx = tools.WithSandboxScope(ctx, tools.SandboxScope{

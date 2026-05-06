@@ -154,3 +154,23 @@ export async function fetchJSONOrNull<T>(input: RequestInfo | URL): Promise<T | 
     return null;
   }
 }
+
+export type FetchJSONResult<T> = {
+  data: T | null;
+  ok: boolean;
+  status: number | null;
+};
+
+export async function fetchJSONResult<T>(input: RequestInfo | URL): Promise<FetchJSONResult<T>> {
+  try {
+    const response = await apiFetch(input, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      return { data: null, ok: false, status: response.status };
+    }
+    return { data: (await response.json()) as T, ok: true, status: response.status };
+  } catch {
+    return { data: null, ok: false, status: null };
+  }
+}

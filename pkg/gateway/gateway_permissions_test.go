@@ -72,6 +72,31 @@ func TestGatewayJobMutationRoutesRequireWritePermission(t *testing.T) {
 	}
 }
 
+func TestGatewayConfigMutationRequiresWritePermission(t *testing.T) {
+	server, mux := newPermissionRouteServer(t, []config.SecurityUser{{
+		Name:                "config-reader",
+		Token:               "config-read-token",
+		PermissionOverrides: []string{"config.read"},
+	}})
+	server.mainRuntime.Config.LLM.Provider = "original-provider"
+	server.mainRuntime.Config.LLM.Model = "original-model"
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodGet, "/config", "config-read-token", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /config with config.read = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, newBearerRequest(http.MethodPost, "/config", "config-read-token", `{"llm":{"provider":"x","model":"y"}}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST /config without config.write = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	if server.mainRuntime.Config.LLM.Provider != "original-provider" || server.mainRuntime.Config.LLM.Model != "original-model" {
+		t.Fatalf("config mutation was applied without config.write")
+	}
+}
+
 func TestGatewayMutablePlatformRoutesRequireWritePermission(t *testing.T) {
 	_, mux := newPermissionRouteServer(t, []config.SecurityUser{{
 		Name:  "platform-reader",

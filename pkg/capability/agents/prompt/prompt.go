@@ -33,16 +33,20 @@ func (b *SystemPromptBuilder) Build(data PromptData) (string, error) {
 	var parts []string
 
 	parts = append(parts, b.buildHeader())
-	parts = append(parts, b.buildIdentity())
-	parts = append(parts, b.buildCapabilities(data))
+	if identity := b.buildIdentity(data); identity != "" {
+		parts = append(parts, identity)
+	}
+	if capabilities := b.buildCapabilities(data); capabilities != "" {
+		parts = append(parts, capabilities)
+	}
+	if operatingMode := b.buildOperatingMode(data); operatingMode != "" {
+		parts = append(parts, operatingMode)
+	}
 	if cliHub := b.buildCLIHub(data); cliHub != "" {
 		parts = append(parts, cliHub)
 	}
 	if clawBridge := b.buildClawBridge(data); clawBridge != "" {
 		parts = append(parts, clawBridge)
-	}
-	if operatingMode := b.buildOperatingMode(data); operatingMode != "" {
-		parts = append(parts, operatingMode)
 	}
 	if workspace := b.buildWorkspace(data); workspace != "" {
 		parts = append(parts, workspace)
@@ -53,8 +57,12 @@ func (b *SystemPromptBuilder) Build(data PromptData) (string, error) {
 	if memoryRecall := b.buildMemoryRecall(data); memoryRecall != "" {
 		parts = append(parts, memoryRecall)
 	}
-	parts = append(parts, b.buildMemory(data))
-	parts = append(parts, b.buildSkills(data))
+	if memory := b.buildMemory(data); memory != "" {
+		parts = append(parts, memory)
+	}
+	if skills := b.buildSkills(data); skills != "" {
+		parts = append(parts, skills)
+	}
 	parts = append(parts, b.buildGuidelines())
 	parts = append(parts, b.buildInstructions())
 
@@ -62,31 +70,38 @@ func (b *SystemPromptBuilder) Build(data PromptData) (string, error) {
 }
 
 func (b *SystemPromptBuilder) buildHeader() string {
-	return `You are AnyClaw, a local-first execution agent focused on safely completing real tasks instead of only answering about them.`
+	return `You are AnyClaw, an interactive agent for software and local execution tasks. Help the user by understanding the request, using the available tools when needed, and only claiming success when the outcome has been checked against observable evidence.`
 }
 
-func (b *SystemPromptBuilder) buildIdentity() string {
+func (b *SystemPromptBuilder) buildIdentity(data PromptData) string {
 	var parts []string
-
+	parts = append(parts, "## Identity")
 	if b.name != "" {
-		parts = append(parts, fmt.Sprintf("Your name is %s.", b.name))
+		parts = append(parts, fmt.Sprintf("- Name: %s", b.name))
 	}
 	if b.description != "" {
-		parts = append(parts, b.description)
+		parts = append(parts, fmt.Sprintf("- Description: %s", b.description))
 	}
-	parts = append(parts, "You have a configurable personality profile. Follow the tone, style, constraints, and operating traits provided in your identity description.")
-	parts = append(parts, "Operate like a careful human teammate on the local machine: move the task forward, observe what changed, and adapt until the deliverable is actually complete or clearly blocked.")
-
-	return strings.Join(parts, " ")
+	if strings.TrimSpace(data.SystemPrompt) != "" {
+		parts = append(parts, "- Primary system prompt:")
+		parts = append(parts, strings.TrimSpace(data.SystemPrompt))
+	}
+	if strings.TrimSpace(data.Personality) != "" {
+		parts = append(parts, "- Personality supplement:")
+		parts = append(parts, strings.TrimSpace(data.Personality))
+	}
+	parts = append(parts, "- Operate like a careful teammate on the local machine: move the task forward, inspect what changed, adapt to new evidence, and stop only when the requested outcome is complete or clearly blocked.")
+	return strings.Join(parts, "\n")
 }
 
 func (b *SystemPromptBuilder) buildCapabilities(data PromptData) string {
 	parts := []string{
-		"You can use structured tools when the task requires inspecting files, running commands, browsing the web, or interacting with local apps.",
+		"## Capabilities",
+		"You can inspect files, run commands, browse the web, and interact with local apps through structured tools.",
 	}
 
 	if len(data.Tools) == 0 {
-		parts = append(parts, "(No tools selected for this turn)")
+		parts = append(parts, "- No tools are selected for this turn.")
 		return strings.Join(parts, "\n")
 	}
 
@@ -98,9 +113,9 @@ func (b *SystemPromptBuilder) buildCapabilities(data PromptData) string {
 		return strings.Join(parts, "\n")
 	}
 
-	parts = append(parts, fmt.Sprintf("There are %d tools selected for this turn.", len(data.Tools)))
+	parts = append(parts, fmt.Sprintf("- %d tools are selected for this turn.", len(data.Tools)))
 	if families := summarizeToolFamilies(data.Tools, 8); len(families) > 0 {
-		parts = append(parts, "Relevant tool families: "+strings.Join(families, ", ")+".")
+		parts = append(parts, "- Relevant tool families: "+strings.Join(families, ", ")+".")
 	}
 	parts = append(parts, "Representative tools:")
 	for _, tool := range data.Tools[:minInt(len(data.Tools), 12)] {
@@ -184,6 +199,7 @@ type executionToolCatalog struct {
 	AppActionTools     []ToolInfo
 	BrowserTools       []ToolInfo
 	BrowserObservation []ToolInfo
+	ComputerUseTools   []ToolInfo
 	DesktopTarget      []ToolInfo
 	DesktopObservation []ToolInfo
 	DesktopLowLevel    []ToolInfo
@@ -198,9 +214,8 @@ func (b *SystemPromptBuilder) buildOperatingMode(data PromptData) string {
 	}
 
 	lines := []string{
-		"## AnyClaw Core",
-		"You are a human-like local execution agent. Your primary job is to complete the user's task safely on this machine, not merely explain how it could be done.",
-		"If a person could safely do the task locally without harming the computer or exposing protected/private data, prefer completing it.",
+		"## Operating Mode",
+		"You are a completion-oriented execution agent. Your job is to get the task done safely on this machine, not merely describe how it could be done.",
 		"Execution contract:",
 		"- Treat tool outputs as evidence about the current world state.",
 		"- Do not guess the state of files, commands, webpages, windows, or apps when you can inspect them.",
@@ -227,26 +242,32 @@ func (b *SystemPromptBuilder) buildOperatingMode(data PromptData) string {
 
 	if len(catalog.BrowserTools) > 0 {
 		lines = append(lines, fmt.Sprintf("2. For web apps, prefer browser tools over desktop clicking when the same task can be completed in the browser: %s.", formatToolNameList(catalog.BrowserTools, 6)))
-		lines = append(lines, "- Important: browser tools are for browser automation sessions. When the user explicitly wants a visible browser window or asks to open a URL on the desktop, prefer desktop_open instead of browser_navigate.")
+		lines = append(lines, "- When the user explicitly wants a visible browser window or asks to open a URL on the desktop, prefer desktop_open instead of browser_navigate.")
 		hasSpecificOrder = true
 	}
 
 	if len(catalog.DesktopTarget) > 0 {
 		lines = append(lines, fmt.Sprintf("3. For local apps, prefer target-based desktop tools instead of raw coordinates: %s.", formatToolNameList(catalog.DesktopTarget, 6)))
-		lines = append(lines, "Inside target-based desktop work, prefer stable selectors first: UI automation, then visible text/OCR, then image matching, then window-only fallback.")
+		lines = append(lines, "- Inside target-based desktop work, prefer stable selectors first: UI automation, then visible text/OCR, then image matching, then window-only fallback.")
+		hasSpecificOrder = true
+	}
+
+	if len(catalog.ComputerUseTools) > 0 {
+		lines = append(lines, fmt.Sprintf("4. For visible desktop work that needs screen-level control, use computer_observe and small computer_action batches before falling back to raw desktop tools: %s.", formatToolNameList(catalog.ComputerUseTools, 4)))
+		lines = append(lines, "- Use normalized 0-1000 coordinates for computer actions unless absolute coordinates are explicitly required, and inspect the returned observation after each meaningful action batch.")
 		hasSpecificOrder = true
 	}
 
 	if len(catalog.DesktopLowLevel) > 0 {
-		lines = append(lines, fmt.Sprintf("4. Use low-level desktop tools only as a fallback when target-based tools cannot complete the step reliably: %s.", formatToolNameList(catalog.DesktopLowLevel, 8)))
+		lines = append(lines, fmt.Sprintf("5. Use low-level desktop tools only as a fallback when target-based or computer-use tools cannot complete the step reliably: %s.", formatToolNameList(catalog.DesktopLowLevel, 8)))
 		hasSpecificOrder = true
 	}
 
 	if len(catalog.DesktopObservation) > 0 {
-		lines = append(lines, fmt.Sprintf("5. After important actions, verify the result with observation tools instead of assuming success: %s.", formatToolNameList(catalog.DesktopObservation, 8)))
+		lines = append(lines, fmt.Sprintf("6. After important actions, verify the result with observation tools instead of assuming success: %s.", formatToolNameList(catalog.DesktopObservation, 8)))
 		hasSpecificOrder = true
 	} else {
-		lines = append(lines, "5. After important actions, check whether the requested outcome actually appeared before moving on.")
+		lines = append(lines, "6. After important actions, check whether the requested outcome actually appeared before moving on.")
 		hasSpecificOrder = true
 	}
 
@@ -270,8 +291,7 @@ func (b *SystemPromptBuilder) buildWorkspace(data PromptData) string {
 	if strings.TrimSpace(data.WorkingDir) == "" {
 		return ""
 	}
-	return fmt.Sprintf(`## Workspace
-Working directory: %s`, data.WorkingDir)
+	return fmt.Sprintf("## Workspace\nWorking directory: %s", data.WorkingDir)
 }
 
 func (b *SystemPromptBuilder) buildWorkspaceFiles(data PromptData) string {
@@ -307,9 +327,7 @@ func (b *SystemPromptBuilder) buildMemory(data PromptData) string {
 	if data.Memory == "" {
 		return ""
 	}
-
-	return fmt.Sprintf(`## Memory
-%s`, data.Memory)
+	return fmt.Sprintf("## Memory\n%s", data.Memory)
 }
 
 func (b *SystemPromptBuilder) buildSkills(data PromptData) string {
@@ -319,31 +337,27 @@ func (b *SystemPromptBuilder) buildSkills(data PromptData) string {
 
 	var parts []string
 	parts = append(parts, "## Active Skills")
-
 	for _, prompt := range data.SkillPrompts {
 		parts = append(parts, prompt)
 	}
-
 	return strings.Join(parts, "\n\n")
 }
 
 func (b *SystemPromptBuilder) buildGuidelines() string {
 	return `## Guidelines
-- Be helpful, harmless, honest, and completion-oriented
-- Think step by step using observable evidence
-- When using tools, explain what you're doing
-- If a tool fails, explain the error and suggest alternatives
-- When tools are available and the user wants a task completed, take action instead of stopping at advice
-- Base progress claims on inspected state, not assumptions
-- If the task is partly done but not yet verified, keep working or clearly mark the remaining uncertainty
-- Store important information in memory for future reference`
+- Be helpful, honest, and completion-oriented
+- Prefer observable evidence over guesses
+- When the user wants a task completed and the tools allow it, take action instead of stopping at advice
+- Keep progress claims tied to inspected state
+- If a result is partially done but not yet verified, keep working or clearly state the remaining uncertainty
+- Store important durable information in memory when appropriate`
 }
 
 func (b *SystemPromptBuilder) buildInstructions() string {
 	return `## Instructions
 - Always respond in the same language as the user
-- If tools are available, prefer native structured tool calls; only fall back to textual tool_call JSON if the model cannot emit native tool calls
-- After completing a task, summarize what was done, what was verified, and any remaining blocked or unverified part
+- Prefer native structured tool calls when tools are available
+- Keep updates concise and focused on what changed, what was verified, and what remains blocked or unverified
 - Do not say a task is complete unless the requested outcome has been checked against observable evidence or you explicitly state what could not be verified`
 }
 
@@ -391,6 +405,8 @@ func minInt(a, b int) int {
 type PromptData struct {
 	Name           string
 	Description    string
+	SystemPrompt   string
+	Personality    string
 	WorkingDir     string
 	Memory         string
 	Skills         []string
@@ -467,6 +483,8 @@ func classifyExecutionTools(tools []ToolInfo) executionToolCatalog {
 			catalog.BrowserTools = append(catalog.BrowserTools, tool)
 		case strings.HasPrefix(name, "browser_"):
 			catalog.BrowserTools = append(catalog.BrowserTools, tool)
+		case strings.HasPrefix(name, "computer_"):
+			catalog.ComputerUseTools = append(catalog.ComputerUseTools, tool)
 		case name == "desktop_resolve_target" || name == "desktop_activate_target" || name == "desktop_set_target_value":
 			catalog.DesktopTarget = append(catalog.DesktopTarget, tool)
 		case name == "desktop_wait_text" || name == "desktop_wait_image" || name == "desktop_verify_text" || name == "desktop_ocr" || name == "desktop_find_text" || name == "desktop_match_image" || name == "desktop_list_windows" || name == "desktop_wait_window" || name == "desktop_inspect_ui":
@@ -479,7 +497,7 @@ func classifyExecutionTools(tools []ToolInfo) executionToolCatalog {
 }
 
 func (c executionToolCatalog) HasCoreExecutionTools() bool {
-	return len(c.FileStateTools) > 0 || len(c.CommandTools) > 0 || len(c.AppWorkflowTools) > 0 || len(c.AppActionTools) > 0 || len(c.BrowserTools) > 0 || len(c.DesktopTarget) > 0 || len(c.DesktopObservation) > 0 || len(c.DesktopLowLevel) > 0
+	return len(c.FileStateTools) > 0 || len(c.CommandTools) > 0 || len(c.AppWorkflowTools) > 0 || len(c.AppActionTools) > 0 || len(c.BrowserTools) > 0 || len(c.ComputerUseTools) > 0 || len(c.DesktopTarget) > 0 || len(c.DesktopObservation) > 0 || len(c.DesktopLowLevel) > 0
 }
 
 func formatToolNameList(tools []ToolInfo, limit int) string {

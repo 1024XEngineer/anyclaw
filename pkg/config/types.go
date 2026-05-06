@@ -11,6 +11,7 @@ type Config struct {
 	Channels     ChannelsConfig     `json:"channels"`
 	Plugins      PluginsConfig      `json:"plugins"`
 	Sandbox      SandboxConfig      `json:"sandbox"`
+	Computer     ComputerConfig     `json:"computer"`
 	Security     SecurityConfig     `json:"security"`
 	Orchestrator OrchestratorConfig `json:"orchestrator"`
 	Speech       SpeechConfig       `json:"speech"`
@@ -170,6 +171,18 @@ type SandboxConfig struct {
 	DefaultChannel string `json:"default_channel"`
 }
 
+type ComputerConfig struct {
+	Enabled               bool     `json:"enabled"`
+	Backend               string   `json:"backend"`
+	CoordinateSpace       string   `json:"coordinate_space"`
+	MaxActionsPerTurn     int      `json:"max_actions_per_turn"`
+	ObserveAfterAction    bool     `json:"observe_after_action"`
+	IncludeWindowsDefault bool     `json:"include_windows_default"`
+	RedactTextInAudit     bool     `json:"redact_text_in_audit"`
+	AllowedApps           []string `json:"allowed_apps,omitempty"`
+	AllowedDomains        []string `json:"allowed_domains,omitempty"`
+}
+
 type PluginsConfig struct {
 	Dir                string   `json:"dir"`
 	Enabled            []string `json:"enabled"`
@@ -283,6 +296,7 @@ type SecurityConfig struct {
 	AllowedWritePaths        []string       `json:"allowed_write_paths,omitempty"`
 	AllowedEgressDomains     []string       `json:"allowed_egress_domains,omitempty"`
 	CommandTimeoutSeconds    int            `json:"command_timeout_seconds"`
+	DesktopApprovalScope     string         `json:"desktop_approval_scope,omitempty"`
 	RiskAcknowledged         bool           `json:"risk_acknowledged"`
 	SecurityAudit            []string       `json:"security_audit,omitempty"`
 	PairingEnabled           bool           `json:"pairing_enabled"`

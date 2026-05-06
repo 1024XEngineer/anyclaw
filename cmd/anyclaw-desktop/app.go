@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -599,30 +600,59 @@ func resolveDesktopConfigPathWith(bundleRoot string, cwd string, userConfigDir s
 }
 
 func ensureDesktopConfig(configPath string, bundleRoot string) error {
+	cfg := config.DefaultConfig()
+	changed := false
 	if pathExists(configPath) {
-		return nil
+		loaded, err := config.LoadPersisted(configPath)
+		if err != nil {
+			return err
+		}
+		cfg = loaded
+	} else {
+		changed = true
 	}
 
-	cfg := config.DefaultConfig()
 	configDir := filepath.Dir(configPath)
 
-	cfg.Agent.WorkDir = filepath.Join(configDir, ".anyclaw")
-	cfg.Agent.WorkingDir = filepath.Join(configDir, "workflows", "default")
+	workDir := filepath.Join(configDir, ".anyclaw")
+	if cfg.Agent.WorkDir != workDir {
+		cfg.Agent.WorkDir = workDir
+		changed = true
+	}
+	workingDir := filepath.Join(configDir, "workflows", "default")
+	if cfg.Agent.WorkingDir != workingDir {
+		cfg.Agent.WorkingDir = workingDir
+		changed = true
+	}
+	if strings.TrimSpace(cfg.Sandbox.ExecutionMode) != "host-reviewed" {
+		cfg.Sandbox.ExecutionMode = "host-reviewed"
+		changed = true
+	}
 
 	if bundleRoot != "" {
-		if skillsDir := filepath.Join(bundleRoot, "skills"); pathExists(skillsDir) {
+		if skillsDir := filepath.Join(bundleRoot, "skills"); pathExists(skillsDir) && cfg.Skills.Dir != skillsDir {
 			cfg.Skills.Dir = skillsDir
+			changed = true
 		}
-		if pluginsDir := filepath.Join(bundleRoot, "plugins"); pathExists(pluginsDir) {
+		if pluginsDir := filepath.Join(bundleRoot, "plugins"); pathExists(pluginsDir) && cfg.Plugins.Dir != pluginsDir {
 			cfg.Plugins.Dir = pluginsDir
+			changed = true
 		}
-		if controlUIRoot := filepath.Join(bundleRoot, "dist", "control-ui"); pathExists(controlUIRoot) {
+		if controlUIRoot := filepath.Join(bundleRoot, "dist", "control-ui"); pathExists(controlUIRoot) && cfg.Gateway.ControlUI.Root != controlUIRoot {
 			cfg.Gateway.ControlUI.Root = controlUIRoot
+			changed = true
 		}
 	}
 
+	beforeLLM := cfg.LLM
+	beforeProviders := append([]config.ProviderProfile(nil), cfg.Providers...)
 	setup.EnsurePrimaryProviderProfile(cfg, cfg.LLM.Provider, cfg.LLM.Model, cfg.LLM.APIKey, cfg.LLM.BaseURL)
-
+	if !reflect.DeepEqual(beforeLLM, cfg.LLM) || !reflect.DeepEqual(beforeProviders, cfg.Providers) {
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
 	return cfg.Save(configPath)
 }
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
@@ -31,6 +32,23 @@ func TestConfiguredAgentSkillNamesFallsBackToMainAgentSkills(t *testing.T) {
 	got := configuredAgentSkillNames(cfg)
 	if len(got) != 1 || got[0] != "vision-agent" {
 		t.Fatalf("expected only main-agent skill vision-agent, got %#v", got)
+	}
+}
+
+func TestResolveMainAgentSystemPromptDoesNotFallbackToFirstEnabledProfile(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agent.Name = "Personal Assistant"
+	cfg.Agent.Profiles = []config.AgentProfile{
+		{
+			Name:         "Go Expert",
+			Enabled:      config.BoolPtr(true),
+			SystemPrompt: "You are a Go expert.",
+		},
+	}
+
+	got := resolveMainAgentSystemPrompt(cfg)
+	if got != "" {
+		t.Fatalf("expected empty system prompt when no profile matches main agent, got %q", got)
 	}
 }
 
@@ -95,6 +113,45 @@ func TestBootstrapLoadsMainAgentSkillsWhenNoProfileMatches(t *testing.T) {
 	}
 	if skills[0].Name != "vision-agent" {
 		t.Fatalf("expected vision-agent to be loaded, got %#v", skills)
+	}
+}
+
+func TestBootstrapAppliesMainAgentSystemPromptFromMatchingProfile(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agent.Name = "Claude Main"
+	cfg.Agent.ActiveProfile = "Claude Main"
+	cfg.Agent.WorkDir = filepath.Join(tempDir, ".anyclaw")
+	cfg.Agent.WorkingDir = filepath.Join(tempDir, "workspace")
+	cfg.LLM.APIKey = "test-key"
+	cfg.Skills.Dir = filepath.Join(tempDir, "skills")
+	cfg.Plugins.Dir = filepath.Join(tempDir, "plugins")
+	cfg.Security.AuditLog = filepath.Join(tempDir, ".anyclaw", "audit", "audit.jsonl")
+	cfg.Agent.Profiles = []config.AgentProfile{{
+		Name:         "Claude Main",
+		Enabled:      config.BoolPtr(true),
+		SystemPrompt: "Use Claude-like instructions and verify outcomes.",
+	}}
+
+	if err := os.MkdirAll(cfg.Plugins.Dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll plugins dir: %v", err)
+	}
+
+	app, err := Bootstrap(BootstrapOptions{
+		ConfigPath: filepath.Join(tempDir, "anyclaw.json"),
+		Config:     cfg,
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	t.Cleanup(func() { _ = app.Close() })
+
+	systemPrompt, err := app.Agent.BuildSystemPrompt()
+	if err != nil {
+		t.Fatalf("BuildSystemPromptForTests: %v", err)
+	}
+	if !strings.Contains(systemPrompt, "Use Claude-like instructions and verify outcomes.") {
+		t.Fatalf("expected main profile system prompt in built prompt, got %q", systemPrompt)
 	}
 }
 

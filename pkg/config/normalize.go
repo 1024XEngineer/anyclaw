@@ -136,6 +136,19 @@ func normalizeLoadedConfig(cfg *Config) {
 	cfg.Agent.Description = strings.TrimSpace(cfg.Agent.Description)
 	cfg.Agent.PermissionLevel = strings.TrimSpace(cfg.Agent.PermissionLevel)
 	cfg.Agent.ActiveProfile = strings.TrimSpace(cfg.Agent.ActiveProfile)
+	cfg.Computer.Backend = strings.TrimSpace(strings.ToLower(cfg.Computer.Backend))
+	cfg.Computer.CoordinateSpace = strings.TrimSpace(strings.ToLower(cfg.Computer.CoordinateSpace))
+	if cfg.Computer.Backend == "" {
+		cfg.Computer.Backend = "codex_local"
+	}
+	if cfg.Computer.CoordinateSpace == "" {
+		cfg.Computer.CoordinateSpace = "normalized_0_1000"
+	}
+	if cfg.Computer.MaxActionsPerTurn <= 0 {
+		cfg.Computer.MaxActionsPerTurn = 8
+	}
+	cfg.Computer.AllowedApps = normalizeStringList(cfg.Computer.AllowedApps)
+	cfg.Computer.AllowedDomains = normalizeStringListLower(cfg.Computer.AllowedDomains)
 
 	cfg.Agent.WorkDir = cleanConfigPath(cfg.Agent.WorkDir)
 	cfg.Agent.WorkingDir = cleanConfigPath(cfg.Agent.WorkingDir)
@@ -145,6 +158,10 @@ func normalizeLoadedConfig(cfg *Config) {
 	cfg.Sandbox.BaseDir = cleanConfigPath(cfg.Sandbox.BaseDir)
 	cfg.Daemon.PIDFile = cleanConfigPath(cfg.Daemon.PIDFile)
 	cfg.Daemon.LogFile = cleanConfigPath(cfg.Daemon.LogFile)
+	cfg.Security.DesktopApprovalScope = strings.TrimSpace(strings.ToLower(cfg.Security.DesktopApprovalScope))
+	if cfg.Security.DesktopApprovalScope == "" {
+		cfg.Security.DesktopApprovalScope = "capability"
+	}
 	cfg.Security.AuditLog = cleanConfigPath(cfg.Security.AuditLog)
 	cfg.Gateway.ControlUI.BasePath = normalizeControlUIBasePath(cfg.Gateway.ControlUI.BasePath)
 	cfg.Gateway.ControlUI.Root = cleanConfigPath(cfg.Gateway.ControlUI.Root)
@@ -274,6 +291,47 @@ func readStringAlias(raw map[string]any, keys ...string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func normalizeStringList(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		key := strings.ToLower(item)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func normalizeStringListLower(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		item = strings.TrimSpace(strings.ToLower(item))
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }
 
 func readIntAlias(raw map[string]any, keys ...string) (int, bool) {

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { fetchJSONOrNull } from "@/features/api/client";
+import { type FetchJSONResult, fetchJSONOrNull, fetchJSONResult } from "@/features/api/client";
 import { workspaceSnapshot } from "@/generated/workspaceSnapshot.generated";
 import { normalizeSkillDescription } from "@/features/workspace/skillDescription";
 
@@ -65,11 +65,14 @@ export type CloudRecord = {
 
 export type RuntimeProfile = {
   address: string;
+  configStatus: "forbidden" | "ok" | "unavailable";
   description: string;
   events: number;
   gatewayOnline: boolean;
   gatewaySource: string;
   language: string;
+  mainPermission: string;
+  mainPermissionSource: "agent" | "config" | "snapshot";
   model: string;
   name: string;
   orchestrator: string;
@@ -86,6 +89,7 @@ export type RuntimeProfile = {
   tools: number;
   workDir: string;
   workspace: string;
+  workspaceId: string;
 };
 
 export type WorkspaceOverview = {
@@ -96,6 +100,7 @@ export type WorkspaceOverview = {
   localAgents: AgentRecord[];
   localSkills: SkillRecord[];
   meta: {
+    configSource: string;
     generatedAt: string;
     liveConnected: boolean;
     sourceLabel: string;
@@ -169,9 +174,17 @@ type LiveRuntime = {
   workspace?: string;
 };
 
+type LiveConfig = {
+  agent?: {
+    permission_level?: string;
+  };
+};
+
 type LivePayload = {
   agents: LiveAgent[];
   channels: LiveChannel[];
+  config: LiveConfig | null;
+  configStatus: "forbidden" | "ok" | "unavailable";
   providers: LiveProvider[];
   runtimes: LiveRuntime[];
   skills: LiveSkill[];
@@ -220,11 +233,18 @@ type SnapshotConfiguredChannel = {
   key: string;
 };
 
+type WorkspaceSnapshotWithSource = typeof workspaceSnapshot & {
+  configSource?: string;
+  workspaceId?: string;
+};
+
 const snapshotProviders = workspaceSnapshot.providers as readonly SnapshotProvider[];
 const snapshotAgents = workspaceSnapshot.agents as readonly SnapshotAgent[];
 const snapshotSkills = workspaceSnapshot.skills as readonly SnapshotSkill[];
 const snapshotExtensions = workspaceSnapshot.extensions as readonly SnapshotExtension[];
 const snapshotConfiguredChannels = workspaceSnapshot.configuredChannels as readonly SnapshotConfiguredChannel[];
+const snapshotConfigSource = ((workspaceSnapshot as WorkspaceSnapshotWithSource).configSource ?? "example").trim();
+const snapshotWorkspaceId = ((workspaceSnapshot as WorkspaceSnapshotWithSource).workspaceId ?? "").trim();
 
 const channelMeta: Record<string, { name: string; note: string; summary: string }> = {
   wechat: {
@@ -299,19 +319,28 @@ function compactText(value: string, fallback: string) {
   return text === "" ? fallback : text;
 }
 
+function configStatusFromFetch(result: FetchJSONResult<LiveConfig>): LivePayload["configStatus"] {
+  if (result.ok) return "ok";
+  if (result.status === 401 || result.status === 403) return "forbidden";
+  return "unavailable";
+}
+
 async function fetchLivePayload(): Promise<LivePayload> {
-  const [status, providers, agents, skills, channels, runtimes] = await Promise.all([
+  const [status, providers, agents, skills, channels, runtimes, liveConfig] = await Promise.all([
     fetchJSONOrNull<LiveStatus>("/status"),
     fetchJSONOrNull<LiveProvider[]>("/providers"),
     fetchJSONOrNull<LiveAgent[]>("/agents"),
     fetchJSONOrNull<LiveSkill[]>("/skills"),
     fetchJSONOrNull<LiveChannel[]>("/channels"),
     fetchJSONOrNull<LiveRuntime[]>("/runtimes"),
+    fetchJSONResult<LiveConfig>("/config"),
   ]);
 
   return {
     agents: Array.isArray(agents) ? agents : [],
     channels: Array.isArray(channels) ? channels : [],
+    config: liveConfig.data,
+    configStatus: configStatusFromFetch(liveConfig),
     providers: Array.isArray(providers) ? providers : [],
     runtimes: Array.isArray(runtimes) ? runtimes : [],
     skills: Array.isArray(skills) ? skills : [],
@@ -517,20 +546,42 @@ function buildRuntimeProfile(
   const gatewayOnline = status !== null;
   const gatewayAddress =
     status?.address?.trim() || `${workspaceSnapshot.gateway.host}:${workspaceSnapshot.gateway.port}`;
+  const liveMainAgent = live.agents.find((agent) => agent.active) ?? live.agents[0];
+  const configPermission = live.config?.agent?.permission_level?.trim();
+  const agentPermission = liveMainAgent?.permission_level?.trim() || activeAgent?.permissionLevel?.trim();
+  const snapshotPermission = workspaceSnapshot.agent.permissionLevel || "limited";
+  const mainPermission = configPermission || agentPermission || snapshotPermission;
+  const mainPermissionSource: RuntimeProfile["mainPermissionSource"] = configPermission
+    ? "config"
+    : agentPermission
+      ? "agent"
+      : "snapshot";
+  const permissionSourceLabel = mainPermissionSource === "agent" ? "Agent 状态" : "仓库快照";
+  const offlineSource = snapshotConfigSource === "local" ? "本地配置快照" : "示例配置快照";
+  const gatewaySource = gatewayOnline
+    ? live.configStatus === "ok"
+      ? "网关在线 + 运行配置"
+      : live.configStatus === "forbidden"
+        ? `网关在线 + /config 无权限 + ${permissionSourceLabel}`
+        : `网关在线 + /config 不可用 + ${permissionSourceLabel}`
+    : offlineSource;
 
   return {
     address: gatewayAddress,
+    configStatus: live.configStatus,
     description: activeAgent?.summary ?? workspaceSnapshot.agent.description,
     events: status?.events ?? 0,
     gatewayOnline,
-    gatewaySource: gatewayOnline ? "网关在线 + 仓库快照" : "仓库快照",
+    gatewaySource,
     language: normalizeLanguage(workspaceSnapshot.agent.language),
+    mainPermission,
+    mainPermissionSource,
     model: status?.model?.trim() || activeAgent?.model || defaultProvider?.model || "未配置",
     name: activeAgent?.name ?? workspaceSnapshot.agent.name,
     orchestrator: workspaceSnapshot.orchestrator.enabled
       ? `已开启 · 并发 ${workspaceSnapshot.orchestrator.maxConcurrentAgents}`
       : "未开启",
-    permission: activeAgent?.permissionLevel ?? workspaceSnapshot.agent.permissionLevel,
+    permission: mainPermission,
     provider: status?.provider?.trim() || defaultProvider?.provider || "unknown",
     providerLabel: defaultProvider?.name || "默认 Provider",
     providersCount: providers.length,
@@ -543,10 +594,20 @@ function buildRuntimeProfile(
     tools: status?.tools ?? 0,
     workDir: status?.work_dir?.trim() || workspaceSnapshot.agent.workDir,
     workspace: status?.working_dir?.trim() || workspaceSnapshot.agent.workingDir,
+    workspaceId: snapshotWorkspaceId,
   };
 }
 
 function buildAppearanceSettings(runtimeProfile: RuntimeProfile): SettingRecord[] {
+  const sourceHint =
+    runtimeProfile.configStatus === "ok"
+      ? "已叠加当前网关状态和运行配置。"
+      : runtimeProfile.gatewayOnline
+        ? runtimeProfile.configStatus === "forbidden"
+          ? "当前会话无法读取 /config，权限显示来自 Agent 状态或仓库快照。"
+          : "当前未读到 /config，权限显示来自 Agent 状态或仓库快照。"
+        : "网关不在线时仍可基于仓库快照预览界面。";
+
   return [
     {
       label: "首页模式",
@@ -561,9 +622,7 @@ function buildAppearanceSettings(runtimeProfile: RuntimeProfile): SettingRecord[
     {
       label: "数据来源",
       value: runtimeProfile.gatewaySource,
-      hint: runtimeProfile.gatewayOnline
-        ? "已叠加当前网关状态。"
-        : "网关不在线时仍可基于仓库快照预览界面。",
+      hint: sourceHint,
     },
   ];
 }
@@ -585,7 +644,7 @@ function buildRuntimeSettings(
     {
       label: "当前 Agent",
       value: activeAgent?.name || runtimeProfile.name,
-      hint: `${runtimeProfile.permission} · 工作目录 ${runtimeProfile.workspace}`,
+      hint: `${runtimeProfile.mainPermission} · 工作目录 ${runtimeProfile.workspace}`,
     },
     {
       label: "网关状态",
@@ -634,6 +693,7 @@ function buildOverview(live: LivePayload): WorkspaceOverview {
     localAgents,
     localSkills,
     meta: {
+      configSource: snapshotConfigSource,
       generatedAt: workspaceSnapshot.generatedAt,
       liveConnected: runtimeProfile.gatewayOnline,
       sourceLabel: runtimeProfile.gatewaySource,
@@ -649,6 +709,8 @@ function initialOverview(): WorkspaceOverview {
   return buildOverview({
     agents: [],
     channels: [],
+    config: null,
+    configStatus: "unavailable",
     providers: [],
     runtimes: [],
     skills: [],

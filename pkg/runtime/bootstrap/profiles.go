@@ -17,6 +17,16 @@ func ResolveMainAgentPersonality(cfg *config.Config) config.PersonalitySpec {
 	return config.PersonalitySpec{}
 }
 
+func ResolveMainAgentSystemPrompt(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if profile, ok := cfg.ResolveMainAgentProfile(); ok {
+		return strings.TrimSpace(profile.SystemPrompt)
+	}
+	return ""
+}
+
 func ConfiguredAgentSkillNames(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil

@@ -61,6 +61,8 @@ type BuiltinOptions struct {
 	ConfirmDangerousCommand DangerousCommandConfirmer
 	AuditLogger             AuditLogger
 	Sandbox                 *SandboxManager
+	Computer                ComputerOptions
+	ComputerController      ComputerController
 	MemoryBackend           MemoryBackend
 	QMDClient               QMDClient
 	LLMClient               llm.Client
@@ -224,6 +226,8 @@ func inferToolCategory(name string) ToolCategory {
 		return ToolCategoryWeb
 	case strings.HasPrefix(name, "browser_"):
 		return ToolCategoryBrowser
+	case strings.HasPrefix(name, "computer_"):
+		return ToolCategoryDesktop
 	case strings.HasPrefix(name, "desktop_"):
 		return ToolCategoryDesktop
 	case strings.HasPrefix(name, "memory_"):

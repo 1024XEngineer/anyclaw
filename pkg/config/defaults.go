@@ -66,6 +66,15 @@ func DefaultConfig() *Config {
 			DockerNetwork: "none",
 			ReusePerScope: true,
 		},
+		Computer: ComputerConfig{
+			Enabled:               true,
+			Backend:               "codex_local",
+			CoordinateSpace:       "normalized_0_1000",
+			MaxActionsPerTurn:     8,
+			ObserveAfterAction:    true,
+			IncludeWindowsDefault: true,
+			RedactTextInAudit:     true,
+		},
 		Plugins: PluginsConfig{
 			Dir:                "plugins",
 			AllowExec:          false,
@@ -103,6 +112,7 @@ func DefaultConfig() *Config {
 			DangerousCommandPatterns: []string{"rm -rf", "del /f", "format ", "mkfs", "shutdown", "reboot", "poweroff", "chmod 777", "takeown", "icacls", "git reset --hard"},
 			ProtectedPaths:           defaultProtectedPaths(),
 			CommandTimeoutSeconds:    30,
+			DesktopApprovalScope:     "capability",
 		},
 		Orchestrator: OrchestratorConfig{
 			Enabled:             true,
