@@ -343,7 +343,7 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 	}
 	tools.RegisterBuiltins(registry, builtinOpts)
 	markettools.Register(registry, markettools.Options{
-		Store:            marketplace.NewStore(workingDir),
+		Store:            marketplace.NewStore(marketplaceStoreRoot(workDir, workingDir)),
 		Registry:         marketplaceRegistryClient(app.Config.Marketplace),
 		AutoInstallSkill: app.Config.Marketplace.AutoInstallSkill,
 		AuditLogger:      auditLogger,

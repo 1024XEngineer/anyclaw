@@ -42,7 +42,7 @@ func serve(args []string) error {
 	dbDriver := fs.String("db-driver", "sqlite", "database/sql driver name")
 	dbDSN := fs.String("db-dsn", "", "database DSN; defaults to <data-dir>/registry.db for sqlite")
 	adminToken := fs.String("admin-token", os.Getenv("ANYCLAW_REGISTRY_ADMIN_TOKEN"), "admin bearer token; defaults to ANYCLAW_REGISTRY_ADMIN_TOKEN")
-	requireAdminToken := fs.Bool("require-admin-token", envBool("ANYCLAW_REGISTRY_REQUIRE_ADMIN_TOKEN", false), "fail startup when admin token is empty")
+	requireAdminToken := fs.Bool("require-admin-token", envBool("ANYCLAW_REGISTRY_REQUIRE_ADMIN_TOKEN", true), "fail startup when admin token is empty")
 	seed := fs.Bool("seed", true, "seed fixture artifacts when the registry is empty")
 	if err := fs.Parse(args); err != nil {
 		return err

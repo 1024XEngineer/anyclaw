@@ -72,6 +72,7 @@ func (s *Server) handleMarketBindingByID(w http.ResponseWriter, r *http.Request)
 	}
 	switch r.Method {
 	case http.MethodDelete:
+		binding := s.findMarketBinding(id)
 		if err := s.marketplaceStore().DeleteBinding(id); err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "binding not found"})
 			return
@@ -87,10 +88,27 @@ func (s *Server) handleMarketBindingByID(w http.ResponseWriter, r *http.Request)
 			Message:   "Marketplace binding deleted",
 			BindingID: id,
 		})
+		s.refreshMarketBinding(binding)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) findMarketBinding(id string) *marketplace.Binding {
+	if s == nil || strings.TrimSpace(id) == "" {
+		return nil
+	}
+	result, err := s.marketplaceStore().ListBindings()
+	if err != nil {
+		return nil
+	}
+	for i := range result.Items {
+		if strings.EqualFold(strings.TrimSpace(result.Items[i].ID), strings.TrimSpace(id)) {
+			return &result.Items[i]
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleMarketEvents(w http.ResponseWriter, r *http.Request) {

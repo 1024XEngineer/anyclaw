@@ -76,6 +76,9 @@ func TestMarketBindingNormalizesMainAgentAndRefreshes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("delete binding status = %d body=%s", rec.Code, rec.Body.String())
 	}
+	if metrics := server.runtimePool.Metrics(); metrics.Refreshes != 2 {
+		t.Fatalf("expected delete to refresh runtime, got %+v", metrics)
+	}
 }
 
 func TestMarketBindingWorkspaceRefreshDoesNotInvalidateOtherWorkspace(t *testing.T) {

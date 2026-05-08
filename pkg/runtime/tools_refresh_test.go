@@ -149,6 +149,54 @@ func TestMarketInstallToolIntegratesSkillAndRefreshesRuntime(t *testing.T) {
 	}
 }
 
+func TestRefreshToolRegistryUsesRuntimeWorkDirMarketplaceStore(t *testing.T) {
+	tempDir := t.TempDir()
+	workDir := filepath.Join(tempDir, ".anyclaw")
+	workingDir := filepath.Join(tempDir, "workspace")
+	cfg := config.DefaultConfig()
+	cfg.Agent.WorkDir = workDir
+	cfg.Agent.WorkingDir = workingDir
+	cfg.Skills.Dir = filepath.Join(tempDir, "skills")
+	cfg.Plugins.Dir = filepath.Join(tempDir, "plugins")
+
+	store := marketplace.NewStore(workDir)
+	if err := store.SaveReceipt(&marketplace.InstallReceipt{
+		ID:            "cloud.skill.release-notes@1.0.0",
+		ArtifactID:    "cloud.skill.release-notes",
+		Kind:          marketplace.ArtifactKindSkill,
+		Name:          "Release Notes",
+		Version:       "1.0.0",
+		Source:        marketplace.SourceCloud,
+		InstalledPath: filepath.Join(workDir, "installed"),
+		InstalledBy:   "user",
+		InstalledAt:   "2026-05-07T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := &MainRuntime{
+		ConfigPath: filepath.Join(tempDir, "anyclaw.json"),
+		Config:     cfg,
+		Skills:     skills.NewSkillsManager(cfg.Skills.Dir),
+		WorkDir:    workDir,
+		WorkingDir: workingDir,
+	}
+	if err := rt.RefreshToolRegistry(); err != nil {
+		t.Fatalf("RefreshToolRegistry: %v", err)
+	}
+	out, err := rt.CallTool(tools.WithToolCaller(context.Background(), tools.ToolCaller{Role: tools.ToolCallerRoleMainAgent}), "market_search_artifacts", map[string]any{
+		"query":  "release notes",
+		"kind":   "skill",
+		"source": "local",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "cloud.skill.release-notes") {
+		t.Fatalf("expected refreshed marketplace tool to read WorkDir store, got %s", out)
+	}
+}
+
 type refreshToolLLM struct {
 	toolName string
 	calls    int

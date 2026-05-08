@@ -8,6 +8,10 @@ Run locally:
 go run ./cmd/anyclaw-registry serve --addr :8791 --data-dir .anyclaw-registry --seed=true
 ```
 
+The registry requires an admin token by default so admin routes cannot be
+accidentally exposed. For local read-only catalog smoke tests, either pass an
+admin token as shown below or explicitly add `--require-admin-token=false`.
+
 Development storage:
 
 ```text

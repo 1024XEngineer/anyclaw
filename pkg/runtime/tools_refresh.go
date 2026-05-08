@@ -104,7 +104,7 @@ func (a *MainRuntime) RefreshToolRegistry() error {
 	}
 	tools.RegisterBuiltins(registry, builtinOpts)
 	markettools.Register(registry, markettools.Options{
-		Store:            marketplace.NewStore(workingDir),
+		Store:            marketplace.NewStore(marketplaceStoreRoot(a.WorkDir, workingDir)),
 		Registry:         marketplaceRegistryClient(a.Config.Marketplace),
 		AutoInstallSkill: a.Config.Marketplace.AutoInstallSkill,
 		AuditLogger:      auditLogger,
