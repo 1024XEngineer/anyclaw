@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-amd64
+          - os: ubuntu-latest
+            target: linux-amd64
+          - os: ubuntu-latest
+            target: linux-arm64
+          - os: macos-latest
+            target: darwin-amd64
+          - os: macos-latest
+            target: darwin-arm64
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.x
+          cache: false
+
+      - name: Build release asset
+        shell: pwsh
+        run: |
+          ./scripts/build-release.ps1 -Target "${{ matrix.target }}" -Version "${{ github.ref_name }}" -OutputDir "dist/release"
+
+      - name: Upload asset artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: anyclaw-${{ matrix.target }}
+          path: |
+            dist/release/*
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AnyClaw $TAG" \
+            --notes "AnyClaw CLI and registry release assets. Verify downloads with the accompanying .sha256 files."

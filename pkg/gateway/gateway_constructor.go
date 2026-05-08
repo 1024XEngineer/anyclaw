@@ -10,6 +10,8 @@ import (
 	appsecurity "github.com/1024XEngineer/anyclaw/pkg/gateway/auth/security"
 	gatewaymiddleware "github.com/1024XEngineer/anyclaw/pkg/gateway/middleware"
 	nodepkg "github.com/1024XEngineer/anyclaw/pkg/gateway/resources/nodes"
+	"github.com/1024XEngineer/anyclaw/pkg/marketplace"
+	marketregistry "github.com/1024XEngineer/anyclaw/pkg/marketplace/registry"
 	"github.com/1024XEngineer/anyclaw/pkg/runtime"
 	sessionrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/sessionrunner"
 	taskrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/taskrunner"
@@ -36,8 +38,10 @@ func New(mainRuntime *runtime.MainRuntime) *Server {
 		jobMaxAttempts: mainRuntime.Config.Gateway.JobMaxAttempts,
 		webhooks:       newWebhookHandler(),
 		nodes:          newNodeManager(),
+		marketJobs:     marketplace.NewStore(mainRuntime.WorkDir),
 		devicePairing:  newDevicePairing(mainRuntime),
 	}
+	server.hotReload = runtime.NewHotReloadCoordinator(server.runtimePool, store)
 	server.approvals = state.NewApprovalManager(store)
 	server.sessionRunner = sessionrunner.NewManager(store, server.sessions, server.runtimePool, server.approvals, sessionEventRecorder{server: server})
 	server.tasks = taskrunner.NewManager(store, server.sessions, server.runtimePool, taskrunner.MainRuntimeInfo{
@@ -48,6 +52,9 @@ func New(mainRuntime *runtime.MainRuntime) *Server {
 
 	if sm, err := agentstore.NewStoreManager(mainRuntime.WorkDir, mainRuntime.ConfigPath); err == nil {
 		server.storeModule = sm
+	}
+	if mainRuntime.Config != nil && marketregistry.IsEnabled(mainRuntime.Config.Marketplace) {
+		server.marketRegistry = marketregistry.NewClientFromConfig(mainRuntime.Config.Marketplace)
 	}
 
 	server.openAICompat = newOpenAICompatHandler(server, mainRuntime)

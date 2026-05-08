@@ -17,6 +17,19 @@ type Config struct {
 	Orchestrator OrchestratorConfig `json:"orchestrator"`
 	Speech       SpeechConfig       `json:"speech"`
 	MCP          MCPConfig          `json:"mcp"`
+	Marketplace  MarketplaceConfig  `json:"marketplace"`
+}
+
+type MarketplaceConfig struct {
+	RegistryEndpoint       string `json:"registry_endpoint"`
+	RegistryToken          string `json:"registry_token,omitempty"`
+	ProtocolVersion        string `json:"protocol_version"`
+	DisableRemote          bool   `json:"disable_remote"`
+	CacheTTLSeconds        int    `json:"cache_ttl_seconds"`
+	RequestTimeoutSeconds  int    `json:"request_timeout_seconds"`
+	DownloadTimeoutSeconds int    `json:"download_timeout_seconds"`
+	RetryCount             int    `json:"retry_count"`
+	AutoInstallSkill       bool   `json:"auto_install_skill"`
 }
 
 type MCPConfig struct {

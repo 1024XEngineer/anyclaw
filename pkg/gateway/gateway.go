@@ -20,6 +20,8 @@ import (
 	nodepkg "github.com/1024XEngineer/anyclaw/pkg/gateway/resources/nodes"
 	inputlayer "github.com/1024XEngineer/anyclaw/pkg/input"
 	inputchannels "github.com/1024XEngineer/anyclaw/pkg/input/channels"
+	"github.com/1024XEngineer/anyclaw/pkg/marketplace"
+	marketregistry "github.com/1024XEngineer/anyclaw/pkg/marketplace/registry"
 	routeingress "github.com/1024XEngineer/anyclaw/pkg/route/ingress"
 	"github.com/1024XEngineer/anyclaw/pkg/runtime"
 	sessionrunner "github.com/1024XEngineer/anyclaw/pkg/runtime/sessionrunner"
@@ -45,6 +47,7 @@ type Server struct {
 	signal         *inputchannels.SignalAdapter
 	ingress        *routeingress.Service
 	runtimePool    *runtime.RuntimePool
+	hotReload      *runtime.HotReloadCoordinator
 	sessionRunner  *sessionrunner.Manager
 	tasks          *taskrunner.Manager
 	storeModule    agentstore.StoreManager
@@ -69,6 +72,8 @@ type Server struct {
 	mcpRegistry    *mcp.Registry
 	mcpServer      *mcp.Server
 	marketStore    *plugin.Store
+	marketJobs     *marketplace.Store
+	marketRegistry *marketregistry.Client
 	discoverySvc   *discovery.Service
 	mentionGate    *inputlayer.MentionGate
 	groupSecurity  *inputlayer.GroupSecurity

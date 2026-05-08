@@ -7,6 +7,7 @@ RUN corepack enable && corepack prepare pnpm@10.23.0 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY ui/package.json ./ui/package.json
+COPY site/package.json ./site/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY scripts ./scripts
@@ -24,6 +25,7 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /anyclaw ./cmd/anyclaw
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o /anyclaw-registry ./cmd/anyclaw-registry
 
 # Runtime image
 FROM alpine:3.20
@@ -41,6 +43,7 @@ RUN apk add --no-cache \
     && rm -rf /var/cache/apk/*
 
 COPY --from=builder /anyclaw /usr/local/bin/anyclaw
+COPY --from=builder /anyclaw-registry /usr/local/bin/anyclaw-registry
 COPY --from=ui-builder /app/dist/control-ui /opt/anyclaw/control-ui
 
 ENV ANYCLAW_SANDBOX=1

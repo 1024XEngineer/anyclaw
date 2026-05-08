@@ -94,6 +94,23 @@ func (c *Config) Validate() error {
 	if c.Plugins.ExecTimeoutSeconds < 0 {
 		errs = append(errs, fmt.Sprintf("plugins.exec_timeout_seconds must be >= 0 (got %d)", c.Plugins.ExecTimeoutSeconds))
 	}
+	if c.Marketplace.RegistryEndpoint != "" {
+		if !strings.HasPrefix(c.Marketplace.RegistryEndpoint, "http://") && !strings.HasPrefix(c.Marketplace.RegistryEndpoint, "https://") {
+			errs = append(errs, fmt.Sprintf("marketplace.registry_endpoint must start with http:// or https:// (got %q)", c.Marketplace.RegistryEndpoint))
+		}
+	}
+	if c.Marketplace.CacheTTLSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("marketplace.cache_ttl_seconds must be >= 0 (got %d)", c.Marketplace.CacheTTLSeconds))
+	}
+	if c.Marketplace.RequestTimeoutSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("marketplace.request_timeout_seconds must be >= 0 (got %d)", c.Marketplace.RequestTimeoutSeconds))
+	}
+	if c.Marketplace.DownloadTimeoutSeconds < 0 {
+		errs = append(errs, fmt.Sprintf("marketplace.download_timeout_seconds must be >= 0 (got %d)", c.Marketplace.DownloadTimeoutSeconds))
+	}
+	if c.Marketplace.RetryCount < 0 {
+		errs = append(errs, fmt.Sprintf("marketplace.retry_count must be >= 0 (got %d)", c.Marketplace.RetryCount))
+	}
 
 	validBackends := map[string]bool{"local": true, "docker": true}
 	if c.Sandbox.Backend != "" && !validBackends[c.Sandbox.Backend] {

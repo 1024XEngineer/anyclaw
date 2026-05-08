@@ -45,7 +45,10 @@ skills-lock.json
 
 # Build artifacts
 bin/
+tmp/
+site/dist/
 .gstack/
+.release/
 
 # Delegate LLM config (contains API keys)
 .anyclaw/delegate_config.json
@@ -90,3 +93,10 @@ ui/tailwind.config.js
 ui/tailwind.config.d.ts
 ui/.vite/
 ui/.vite-temp/
+
+# Website generated files
+site/*.tsbuildinfo
+site/vite.config.js
+site/vite.config.d.ts
+site/.vite/
+site/.vite-temp/

@@ -86,6 +86,7 @@ func (h routeHandler) handleControlUI(w http.ResponseWriter, r *http.Request) {
 		}
 		indexPath := filepath.Join(root, "index.html")
 		if _, err := os.Stat(indexPath); err == nil {
+			setNoStore(w)
 			http.ServeFile(w, r, indexPath)
 			return
 		}
@@ -123,6 +124,7 @@ func (h routeHandler) tryServeControlUIAsset(w http.ResponseWriter, r *http.Requ
 		if err != nil || info.IsDir() {
 			return false
 		}
+		setNoStore(w)
 		http.ServeFile(w, r, target)
 		return true
 	}
@@ -145,4 +147,10 @@ func (h routeHandler) redirectLegacyUI(w http.ResponseWriter, r *http.Request, s
 
 	target := h.controlUIBasePath() + "#/" + strings.TrimPrefix(section, "/")
 	http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+}
+
+func setNoStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 }

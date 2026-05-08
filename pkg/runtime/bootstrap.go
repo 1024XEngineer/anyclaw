@@ -9,11 +9,14 @@ import (
 	"time"
 
 	agent "github.com/1024XEngineer/anyclaw/pkg/capability/agents"
+	"github.com/1024XEngineer/anyclaw/pkg/capability/markettools"
 	llm "github.com/1024XEngineer/anyclaw/pkg/capability/models"
 	"github.com/1024XEngineer/anyclaw/pkg/capability/skills"
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	"github.com/1024XEngineer/anyclaw/pkg/config"
 	"github.com/1024XEngineer/anyclaw/pkg/extensions/plugin"
+	"github.com/1024XEngineer/anyclaw/pkg/marketplace"
+	marketregistry "github.com/1024XEngineer/anyclaw/pkg/marketplace/registry"
 	"github.com/1024XEngineer/anyclaw/pkg/qmd"
 	"github.com/1024XEngineer/anyclaw/pkg/runtime/orchestrator"
 	"github.com/1024XEngineer/anyclaw/pkg/state/audit"
@@ -339,6 +342,12 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 		QMDClient:      qmdClient,
 	}
 	tools.RegisterBuiltins(registry, builtinOpts)
+	markettools.Register(registry, markettools.Options{
+		Store:            marketplace.NewStore(workingDir),
+		Registry:         marketplaceRegistryClient(app.Config.Marketplace),
+		AutoInstallSkill: app.Config.Marketplace.AutoInstallSkill,
+		AuditLogger:      auditLogger,
+	})
 	sk.RegisterTools(registry, skills.ExecutionOptions{AllowExec: app.Config.Plugins.AllowExec, ExecTimeoutSeconds: app.Config.Plugins.ExecTimeoutSeconds})
 	app.Tools = registry
 
@@ -444,6 +453,13 @@ func buildWorkspaceBootstrapOptions(cfg *config.Config) workspace.BootstrapOptio
 	opts.AssistantStyle = strings.TrimSpace(cfg.Agent.BehaviorStyle)
 	opts.Constraints = strings.TrimSpace(cfg.Agent.Constraints)
 	return opts
+}
+
+func marketplaceRegistryClient(cfg config.MarketplaceConfig) *marketregistry.Client {
+	if !marketregistry.IsEnabled(cfg) {
+		return nil
+	}
+	return marketregistry.NewClientFromConfig(cfg)
 }
 
 func bootstrapUserProfile(cfg *config.Config) string {

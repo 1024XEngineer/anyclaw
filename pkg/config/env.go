@@ -110,4 +110,26 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Plugins.ExecTimeoutSeconds = sec
 		}
 	}
+	if v := os.Getenv("ANYCLAW_MARKETPLACE_ENDPOINT"); v != "" {
+		cfg.Marketplace.RegistryEndpoint = v
+	}
+	if v := os.Getenv("ANYCLAW_REGISTRY_TOKEN"); v != "" {
+		cfg.Marketplace.RegistryToken = v
+	}
+	if v := os.Getenv("ANYCLAW_MARKETPLACE_DISABLE_REMOTE"); v != "" {
+		cfg.Marketplace.DisableRemote = strings.EqualFold(v, "1") || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+	}
+	if v := os.Getenv("ANYCLAW_MARKETPLACE_CACHE_TTL_SECONDS"); v != "" {
+		if sec, err := strconv.Atoi(v); err == nil && sec >= 0 {
+			cfg.Marketplace.CacheTTLSeconds = sec
+		}
+	}
+	if v := os.Getenv("ANYCLAW_MARKETPLACE_REQUEST_TIMEOUT_SECONDS"); v != "" {
+		if sec, err := strconv.Atoi(v); err == nil && sec > 0 {
+			cfg.Marketplace.RequestTimeoutSeconds = sec
+		}
+	}
+	if v := os.Getenv("ANYCLAW_MARKETPLACE_AUTO_INSTALL_SKILL"); v != "" {
+		cfg.Marketplace.AutoInstallSkill = strings.EqualFold(v, "1") || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+	}
 }

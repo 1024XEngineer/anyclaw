@@ -1,0 +1,38 @@
+{
+  "artifact": {
+    "id": "cloud.skill.example-release-notes",
+    "kind": "skill",
+    "name": "Example Release Notes Skill",
+    "summary": "Turns git history and release notes into a compact changelog draft.",
+    "description_md": "A minimal AnyClaw marketplace skill example used to verify publisher-token based publishing.",
+    "latest_version": "1.0.0",
+    "source": "anyclaw-cloud",
+    "risk_level": "low",
+    "trust_level": "verified",
+    "permissions": ["fs.read", "git.read"],
+    "compatibility": {
+      "anyclaw_min": "0.1.0",
+      "os": ["windows", "linux", "darwin"],
+      "arch": ["amd64", "arm64"]
+    },
+    "tags": ["skill", "release", "writing"],
+    "hit_signals": ["release notes", "changelog", "发布说明"],
+    "manifest_summary": {
+      "entry": "skill/SKILL.md"
+    }
+  },
+  "versions": [
+    {
+      "version": "1.0.0",
+      "released_at": "2026-05-07T00:00:00Z",
+      "changelog_md": "Initial example marketplace skill.",
+      "permissions": ["fs.read", "git.read"],
+      "permissions_diff": ["fs.read", "git.read"],
+      "compatibility": {
+        "anyclaw_min": "0.1.0",
+        "os": ["windows", "linux", "darwin"],
+        "arch": ["amd64", "arm64"]
+      }
+    }
+  ]
+}

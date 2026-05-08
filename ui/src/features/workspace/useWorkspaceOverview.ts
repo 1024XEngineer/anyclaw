@@ -288,19 +288,19 @@ const priorityChannelOrder = ["wechat", "feishu", "telegram", "slack", "discord"
 
 const cloudRoadmap: CloudRecord[] = [
   {
-    title: "云端 Skill Hub",
-    status: "预留位",
-    summary: "未来可以像 ClawHub 一样浏览、安装和更新云端 Skill。",
+    title: "Skill Author",
+    status: "已上线",
+    summary: "云端市场真实 Skill 条目，可在 Marketplace 的 Cloud / Skill 目录中查看和安装。",
   },
   {
-    title: "云端 Agent Catalog",
-    status: "预留位",
-    summary: "后续支持把云端 Agent 作为模板或商品直接接进来使用。",
+    title: "Marketplace Operator",
+    status: "已上线",
+    summary: "云端市场真实 Agent 条目，可在 Marketplace 的 Cloud / Agent 目录中查看。",
   },
   {
-    title: "统一连接中心",
-    status: "规划中",
-    summary: "本地能力、云端能力和渠道接入会统一汇总在一个视图里。",
+    title: "Agent Native Runner",
+    status: "已上线",
+    summary: "云端市场真实 CLI 条目，可在 Marketplace 的 Cloud / CLI 目录中查看。",
   },
 ];
 

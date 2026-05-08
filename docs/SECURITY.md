@@ -1,210 +1,119 @@
-# AnyClaw 安全配置指南
+# AnyClaw Website And Marketplace Security
 
-AnyClaw 的安全边界由配置、Gateway 鉴权、渠道策略、工具权限、沙箱和审计日志共同组成。
+This document is the Round 9 security baseline for the first public deployment.
 
-## 默认安全姿态
+## Tokens
 
-```json
-{
-  "agent": {
-    "permission_level": "limited",
-    "require_confirmation_for_dangerous": true
-  },
-  "sandbox": {
-    "enabled": false,
-    "execution_mode": "sandbox"
-  },
-  "channels": {
-    "security": {
-      "dm_policy": "allow-list",
-      "group_policy": "mention-only",
-      "mention_gate": true,
-      "default_deny_dm": true
-    }
-  },
-  "security": {
-    "protect_events": true,
-    "rate_limit_rpm": 120
-  }
-}
+Registry admin token:
+
+- Required in production.
+- Stored only in `.env.production` or server secret storage.
+- Used for admin-only APIs: publisher token creation/revocation, quarantine, audit, download stats.
+- Generate with `openssl rand -hex 32`.
+
+Publisher token:
+
+- Created by an admin.
+- Shown once by `POST /v1/admin/tokens`.
+- Used by publishers for `POST /v1/publish`.
+- Rotate by creating a new token, updating the publisher environment, testing publish, then revoking the old token.
+
+Gateway API token:
+
+- Required if the Gateway is reachable from the public internet.
+- Prefer not exposing port `18789` publicly for the first launch.
+
+## Registry Production Guard
+
+Production compose runs:
+
+```text
+anyclaw-registry serve --require-admin-token=true
 ```
 
-注意：如果 `sandbox.execution_mode` 为 `sandbox`，但 `sandbox.enabled=false`，host shell 执行会被拒绝。需要本机审阅执行时，将 `sandbox.execution_mode` 设置为 `host-reviewed`。
+If `ANYCLAW_REGISTRY_ADMIN_TOKEN` is empty, registry startup fails. This prevents accidental public admin access.
 
-## Gateway 鉴权
+## Publisher Token Scripts
 
-对非本地或公网部署，建议设置 `security.api_token`：
+Create:
 
-```json
-{
-  "security": {
-    "api_token": "replace-with-a-strong-token"
-  }
-}
+```powershell
+.\scripts\registry-create-publisher-token.ps1 `
+  -BaseUrl http://SERVER_IP `
+  -AdminToken $env:ANYCLAW_REGISTRY_ADMIN_TOKEN `
+  -PublisherId "AnyClaw Labs"
 ```
 
-请求时使用：
+Revoke:
 
-```bash
-curl -H "Authorization: Bearer replace-with-a-strong-token" http://127.0.0.1:18789/status
+```powershell
+.\scripts\registry-revoke-publisher-token.ps1 `
+  -BaseUrl http://SERVER_IP `
+  -AdminToken $env:ANYCLAW_REGISTRY_ADMIN_TOKEN `
+  -TokenId token-20260507120000.000000000
 ```
 
-## 用户和角色
+The scripts accept either a site origin such as `http://SERVER_IP`, a same-origin API base such as `http://SERVER_IP/v1`, or direct registry testing via `http://SERVER_IP:8791`.
 
-```json
-{
-  "security": {
-    "users": [
-      {
-        "name": "admin",
-        "token": "replace-with-user-token",
-        "role": "admin",
-        "permissions": ["*"]
-      }
-    ],
-    "roles": [
-      {
-        "name": "admin",
-        "description": "Full access",
-        "permissions": ["*"]
-      },
-      {
-        "name": "viewer",
-        "description": "Read-only access",
-        "permissions": ["status.read", "sessions.read", "tasks.read"]
-      }
-    ]
-  }
-}
-```
+## Ports And Security Group
 
-## 渠道安全策略
+Open to the internet:
 
-| 配置 | 建议值 | 说明 |
-| --- | --- | --- |
-| `dm_policy` | `allow-list` | 只允许明确配置的私聊来源 |
-| `group_policy` | `mention-only` | 群聊中仅响应 mention |
-| `mention_gate` | `true` | 强制群聊 mention gate |
-| `default_deny_dm` | `true` | 默认拒绝未授权私聊 |
-| `pairing_enabled` | `false` 或按需开启 | 移动端/设备接入时开启 |
+- `80`: website and `/v1/*` same-origin registry proxy.
+- `443`: later HTTPS entry after domain setup.
+- `22`: SSH, preferably restricted to the owner's IP.
 
-配对命令：
+Do not open by default:
 
-```bash
-./anyclaw pairing generate --config anyclaw.json --name "Phone" --type mobile
-./anyclaw pairing list --config anyclaw.json
-./anyclaw pairing unpair --config anyclaw.json --device <device_id>
-```
+- `8791`: registry internal port. Open only temporarily for smoke tests.
+- `18789`: AnyClaw Gateway. Keep private unless `ANYCLAW_API_TOKEN` is set and there is a concrete public-use reason.
 
-## 工具权限
+## First Launch Rules
 
-Agent 权限级别：
+- Do not commit `.env.production`.
+- Do not put admin token or publisher token in website code.
+- The `/admin` web console must stay behind manual admin token entry. Do not persist the token in localStorage or hard-code it in frontend bundles.
+- `/v1/admin/tokens` returns publisher token metadata only. Token secrets are shown only once on creation.
+- Keep registry writes behind bearer tokens.
+- Use same-origin `/v1/*` for public read APIs to avoid browser CORS and extra exposed ports.
+- Review `GET /v1/admin/audit` after publishing and admin operations.
 
-| 级别 | 说明 |
-| --- | --- |
-| `read-only` | 禁止写入和命令执行 |
-| `limited` | 限制写入范围，危险操作需审查 |
-| `full` | 允许更广泛操作，仍受安全策略约束 |
+## Marketplace Install Policy
 
-危险命令模式示例：
+Round 18 adds the client-side and server-side install safety gate:
 
-```json
-{
-  "security": {
-    "dangerous_command_patterns": [
-      "rm -rf",
-      "del /f",
-      "format ",
-      "mkfs",
-      "shutdown",
-      "reboot",
-      "poweroff",
-      "chmod 777",
-      "takeown",
-      "icacls",
-      "git reset --hard"
-    ]
-  }
-}
-```
+- Every install resolves metadata before download and records a `market.policy.decision` audit/event.
+- High-risk artifacts are blocked by policy and are not downloaded.
+- Quarantined artifacts cannot be resolved or downloaded. Registry returns `410 artifact_unavailable`.
+- Marketplace installs require `user_confirmed=true` unless a low-risk verified skill is explicitly allowed by local auto-install policy.
+- High-risk permissions require a separate `risk_acknowledged=true` acknowledgement. Examples include `process.exec`, `process.kill`, `desktop.control`, `browser.control`, `network.any`, `secrets.read`, and `fs.delete`.
+- Client job responses include policy `reason`, `reasons`, risk/trust levels, permissions, and high-risk permissions so the UI can show the reason instead of failing silently.
 
-保护路径和允许路径：
+## Download Integrity
 
-```json
-{
-  "security": {
-    "protected_paths": ["~/.ssh", "~/.gnupg"],
-    "allowed_read_paths": ["workflows"],
-    "allowed_write_paths": ["workflows"]
-  }
-}
-```
+- Registry resolve responses must include `checksum_sha256`.
+- The installer blocks before download when checksum metadata is missing.
+- The installer calculates SHA256 after download and before extraction. A mismatch blocks the install and rolls back any staged files.
+- Registry download responses include `X-Checksum-SHA256`; optional signature metadata is exposed through `signature` and `X-Artifact-Signature`.
+- Archives are extracted with path traversal and symlink checks before being copied into the installed artifact directory.
 
-## 沙箱
+## Package Signature Scheme
 
-本地文件系统沙箱：
+Round 18 documents the signature contract but does not add signing or malware-scanning dependencies.
 
-```json
-{
-  "sandbox": {
-    "enabled": true,
-    "execution_mode": "sandbox",
-    "backend": "local",
-    "base_dir": ".anyclaw/sandboxes"
-  }
-}
-```
+Current production-safe contract:
 
-Docker 沙箱需要本机 Docker 可用，并会由运行时通过 Docker CLI 创建执行容器：
+- `versions[].signature` is optional metadata accepted at publish time and returned by resolve/download.
+- `checksum_sha256` remains the mandatory install integrity gate.
+- Unsigned packages are allowed only when checksum verification passes and the local policy permits the artifact.
 
-```json
-{
-  "sandbox": {
-    "enabled": true,
-    "execution_mode": "sandbox",
-    "backend": "docker",
-    "docker_image": "anyclaw-sandbox:local",
-    "docker_network": "none"
-  }
-}
-```
+Proposed enforcement path for a later round:
 
-## 审计日志
+- Use a detached Ed25519 signature over the exact package bytes identified by `checksum_sha256`.
+- Store publisher public keys in registry admin-managed publisher metadata.
+- Resolve responses return `signature`, `signature_algorithm`, and `publisher_key_id`.
+- Clients verify checksum first, then verify the detached signature against the trusted publisher key.
+- Key rotation keeps old public keys active until all still-supported versions age out.
+- Signature verification failure should be a policy block before extraction.
 
-默认位置：
-
-```json
-{
-  "security": {
-    "audit_log": ".anyclaw/audit/audit.jsonl"
-  }
-}
-```
-
-查看：
-
-```bash
-tail -n 50 .anyclaw/audit/audit.jsonl
-```
-
-## 配置检查
-
-```bash
-./anyclaw config validate --config anyclaw.json
-./anyclaw doctor --config anyclaw.json
-./anyclaw health --config anyclaw.json --verbose
-```
-
-## 上线前检查清单
-
-- 设置 `security.api_token` 或放在可信内网。
-- 不把真实 API key 写入公开仓库。
-- 公网访问时使用 HTTPS 反向代理。
-- 保持 `channels.security.default_deny_dm=true`。
-- 对 shell 执行启用沙箱，或明确使用 `host-reviewed` 并限制保护路径。
-- 定期检查 `.anyclaw/audit/audit.jsonl`。
-
-## 下一步
-
-- 阅读 [部署指南](DEPLOYMENT.md)
-- 阅读 [故障排查指南](TROUBLESHOOTING.md)
+Malware scanning and third-party signing tools may require new operational dependencies and must be separately approved before implementation.

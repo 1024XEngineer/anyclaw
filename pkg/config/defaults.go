@@ -127,6 +127,14 @@ func DefaultConfig() *Config {
 			EnableDecomposition: true,
 			SubAgents:           nil,
 		},
+		Marketplace: MarketplaceConfig{
+			ProtocolVersion:        "1.0",
+			CacheTTLSeconds:        60,
+			RequestTimeoutSeconds:  30,
+			DownloadTimeoutSeconds: 300,
+			RetryCount:             1,
+			AutoInstallSkill:       false,
+		},
 	}
 }
 

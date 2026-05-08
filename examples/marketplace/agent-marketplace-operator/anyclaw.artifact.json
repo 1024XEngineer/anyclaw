@@ -1,0 +1,41 @@
+{
+  "artifact": {
+    "id": "anyclaw.agent.marketplace-operator",
+    "kind": "agent",
+    "name": "Marketplace Operator",
+    "summary": "Plans marketplace releases, checks publish readiness, and prepares audit-friendly rollout notes.",
+    "description_md": "Marketplace Operator is an AnyClaw agent for running a small cloud marketplace safely. It helps maintain artifact metadata, review release notes, verify risk and permission declarations, and prepare publish or quarantine actions for an administrator to approve.",
+    "latest_version": "1.0.0",
+    "source": "anyclaw-cloud",
+    "publisher": "AnyClaw Labs",
+    "risk_level": "medium",
+    "trust_level": "verified",
+    "permissions": ["fs.read", "git.read", "network.registry"],
+    "compatibility": {
+      "anyclaw_min": "0.1.0",
+      "os": ["windows", "linux", "darwin"],
+      "arch": ["amd64", "arm64"]
+    },
+    "tags": ["agent", "marketplace", "release", "audit"],
+    "hit_signals": ["publish artifact", "marketplace release", "release review", "quarantine", "audit"],
+    "score": 0.98,
+    "manifest_summary": {
+      "entry": "agent/profile.json",
+      "use_case": "marketplace operations"
+    }
+  },
+  "versions": [
+    {
+      "version": "1.0.0",
+      "released_at": "2026-05-07T00:00:00Z",
+      "changelog_md": "Initial Marketplace Operator agent for release planning, metadata review, and audit-oriented marketplace operations.",
+      "permissions": ["fs.read", "git.read", "network.registry"],
+      "permissions_diff": ["fs.read", "git.read", "network.registry"],
+      "compatibility": {
+        "anyclaw_min": "0.1.0",
+        "os": ["windows", "linux", "darwin"],
+        "arch": ["amd64", "arm64"]
+      }
+    }
+  ]
+}

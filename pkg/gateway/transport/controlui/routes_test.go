@@ -25,11 +25,17 @@ func TestRegisterRoutesServesAssetsAndRedirects(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /console = %d", rec.Code)
 	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store, max-age=0" {
+		t.Fatalf("GET /console Cache-Control = %q", got)
+	}
 
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/console/app.js", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /console/app.js = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store, max-age=0" {
+		t.Fatalf("GET /console/app.js Cache-Control = %q", got)
 	}
 
 	rec = httptest.NewRecorder()

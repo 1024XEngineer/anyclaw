@@ -62,6 +62,23 @@ func (s *Server) registerMCPRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) registerMarketRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/market/artifacts", s.wrap("/market/artifacts", requirePermission("market.read", s.handleMarketArtifacts)))
+	mux.HandleFunc("/market/artifacts/", s.wrap("/market/artifacts/", requirePermission("market.read", s.handleMarketArtifactDetail)))
+	mux.HandleFunc("/market/install", s.wrap("/market/install", requirePermission("market.write", s.handleMarketInstall)))
+	mux.HandleFunc("/market/upgrade", s.wrap("/market/upgrade", requirePermission("market.write", s.handleMarketUpgrade)))
+	mux.HandleFunc("/market/uninstall", s.wrap("/market/uninstall", requirePermission("market.write", s.handleMarketUninstall)))
+	mux.HandleFunc("/market/jobs", s.wrap("/market/jobs", requirePermission("market.read", s.handleMarketJobs)))
+	mux.HandleFunc("/market/jobs/", s.wrap("/market/jobs/", requirePermission("market.read", s.handleMarketJobDetail)))
+	mux.HandleFunc("/market/events", s.wrap("/market/events", requirePermission("market.read", s.handleMarketEvents)))
+	mux.HandleFunc("/market/bindings", s.wrap("/market/bindings", requirePermissionByMethod(map[string]string{
+		http.MethodGet:  "market.read",
+		http.MethodPost: "market.write",
+	}, "market.read", s.handleMarketBindings)))
+	mux.HandleFunc("/market/bindings/", s.wrap("/market/bindings/", requirePermissionByMethod(map[string]string{
+		http.MethodDelete: "market.write",
+		http.MethodGet:    "market.read",
+	}, "market.read", s.handleMarketBindingByID)))
+	mux.HandleFunc("/market/refresh", s.wrap("/market/refresh", requirePermission("market.write", s.handleMarketRefresh)))
 	mux.HandleFunc("/market/search", s.wrap("/market/search", requirePermission("market.read", s.handleMarketSearch)))
 	mux.HandleFunc("/market/plugins", s.wrap("/market/plugins", requirePermission("market.read", s.handleMarketPlugins)))
 	mux.HandleFunc("/market/plugins/", s.wrap("/market/plugins/", requirePermissionByMethod(map[string]string{

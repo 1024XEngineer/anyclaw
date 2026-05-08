@@ -1,0 +1,41 @@
+{
+  "artifact": {
+    "id": "anyclaw.skill.skill-author",
+    "kind": "skill",
+    "name": "Skill Author",
+    "summary": "Drafts high-quality AnyClaw skills with clear triggers, workflows, safety notes, and validation steps.",
+    "description_md": "Skill Author helps turn repeatable work into an installable AnyClaw skill. It focuses on SKILL.md structure, trigger clarity, minimal dependency footprint, examples, validation steps, and marketplace-ready metadata. It is inspired by skill-market patterns such as public skill catalogs, but uses AnyClaw's own artifact contract.",
+    "latest_version": "1.0.0",
+    "source": "anyclaw-cloud",
+    "publisher": "AnyClaw Labs",
+    "risk_level": "low",
+    "trust_level": "verified",
+    "permissions": ["fs.read", "fs.write"],
+    "compatibility": {
+      "anyclaw_min": "0.1.0",
+      "os": ["windows", "linux", "darwin"],
+      "arch": ["amd64", "arm64"]
+    },
+    "tags": ["skill", "authoring", "SKILL.md", "marketplace", "documentation"],
+    "hit_signals": ["create skill", "SKILL.md", "skill authoring", "marketplace skill", "authoring"],
+    "score": 0.97,
+    "manifest_summary": {
+      "entry": "skill/SKILL.md",
+      "use_case": "skill authoring"
+    }
+  },
+  "versions": [
+    {
+      "version": "1.0.0",
+      "released_at": "2026-05-07T00:00:00Z",
+      "changelog_md": "Initial Skill Author skill for creating AnyClaw marketplace-ready skills.",
+      "permissions": ["fs.read", "fs.write"],
+      "permissions_diff": ["fs.read", "fs.write"],
+      "compatibility": {
+        "anyclaw_min": "0.1.0",
+        "os": ["windows", "linux", "darwin"],
+        "arch": ["amd64", "arm64"]
+      }
+    }
+  ]
+}

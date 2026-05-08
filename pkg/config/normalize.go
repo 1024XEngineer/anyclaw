@@ -144,6 +144,24 @@ func normalizeLoadedConfig(cfg *Config) {
 	cfg.LLM.BaseURL = strings.TrimSpace(cfg.LLM.BaseURL)
 	cfg.LLM.DefaultProviderRef = strings.TrimSpace(cfg.LLM.DefaultProviderRef)
 	cfg.LLM.Proxy = strings.TrimSpace(cfg.LLM.Proxy)
+	cfg.Marketplace.RegistryEndpoint = strings.TrimRight(strings.TrimSpace(cfg.Marketplace.RegistryEndpoint), "/")
+	cfg.Marketplace.RegistryToken = strings.TrimSpace(cfg.Marketplace.RegistryToken)
+	cfg.Marketplace.ProtocolVersion = strings.TrimSpace(cfg.Marketplace.ProtocolVersion)
+	if cfg.Marketplace.ProtocolVersion == "" {
+		cfg.Marketplace.ProtocolVersion = "1.0"
+	}
+	if cfg.Marketplace.CacheTTLSeconds < 0 {
+		cfg.Marketplace.CacheTTLSeconds = 0
+	}
+	if cfg.Marketplace.RequestTimeoutSeconds <= 0 {
+		cfg.Marketplace.RequestTimeoutSeconds = 30
+	}
+	if cfg.Marketplace.DownloadTimeoutSeconds <= 0 {
+		cfg.Marketplace.DownloadTimeoutSeconds = 300
+	}
+	if cfg.Marketplace.RetryCount < 0 {
+		cfg.Marketplace.RetryCount = 0
+	}
 	cfg.Agent.Name = strings.TrimSpace(cfg.Agent.Name)
 	cfg.Agent.Description = strings.TrimSpace(cfg.Agent.Description)
 	cfg.Agent.ActiveProfile = strings.TrimSpace(cfg.Agent.ActiveProfile)

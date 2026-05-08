@@ -1,0 +1,38 @@
+{
+  "artifact": {
+    "id": "cloud.agent.example-code-reviewer",
+    "kind": "agent",
+    "name": "Example Code Reviewer Agent",
+    "summary": "Reviews local changes and highlights concrete risks before merge.",
+    "description_md": "A minimal AnyClaw marketplace agent example used for publishing smoke tests.",
+    "latest_version": "1.0.0",
+    "source": "anyclaw-cloud",
+    "risk_level": "medium",
+    "trust_level": "verified",
+    "permissions": ["fs.read", "git.read"],
+    "compatibility": {
+      "anyclaw_min": "0.1.0",
+      "os": ["windows", "linux", "darwin"],
+      "arch": ["amd64", "arm64"]
+    },
+    "tags": ["agent", "review", "quality"],
+    "hit_signals": ["code review", "pull request", "风险检查"],
+    "manifest_summary": {
+      "entry": "agent/profile.json"
+    }
+  },
+  "versions": [
+    {
+      "version": "1.0.0",
+      "released_at": "2026-05-07T00:00:00Z",
+      "changelog_md": "Initial example marketplace agent.",
+      "permissions": ["fs.read", "git.read"],
+      "permissions_diff": ["fs.read", "git.read"],
+      "compatibility": {
+        "anyclaw_min": "0.1.0",
+        "os": ["windows", "linux", "darwin"],
+        "arch": ["amd64", "arm64"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "artifact": {
+    "id": "anyclaw.cli.agent-native-runner",
+    "kind": "cli",
+    "name": "Agent Native Runner",
+    "summary": "Wraps project commands as agent-friendly CLI actions with predictable inputs, outputs, and safety checks.",
+    "description_md": "Agent Native Runner is an AnyClaw CLI artifact for exposing repeatable project commands to agents in a predictable way. It follows the same product direction as agent-native CLI hubs: make command-line tools discoverable, installable, and safe for agent workflows without hiding execution risk.",
+    "latest_version": "1.0.0",
+    "source": "anyclaw-cloud",
+    "publisher": "AnyClaw Labs",
+    "risk_level": "medium",
+    "trust_level": "verified",
+    "permissions": ["process.exec", "fs.read", "fs.write"],
+    "compatibility": {
+      "anyclaw_min": "0.1.0",
+      "os": ["windows", "linux", "darwin"],
+      "arch": ["amd64", "arm64"]
+    },
+    "tags": ["cli", "agent-native", "automation", "commands", "workflow"],
+    "hit_signals": ["agent-native cli", "wrap command", "CLI hub", "automation command", "run tool"],
+    "score": 0.96,
+    "manifest_summary": {
+      "command": "anyclaw-agent-runner",
+      "use_case": "agent-native command wrapper"
+    }
+  },
+  "versions": [
+    {
+      "version": "1.0.0",
+      "released_at": "2026-05-07T00:00:00Z",
+      "changelog_md": "Initial Agent Native Runner CLI artifact for agent-friendly command wrappers.",
+      "permissions": ["process.exec", "fs.read", "fs.write"],
+      "permissions_diff": ["process.exec", "fs.read", "fs.write"],
+      "compatibility": {
+        "anyclaw_min": "0.1.0",
+        "os": ["windows", "linux", "darwin"],
+        "arch": ["amd64", "arm64"]
+      }
+    }
+  ]
+}

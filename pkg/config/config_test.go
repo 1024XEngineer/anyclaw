@@ -45,6 +45,12 @@ func clearConfigEnv(t *testing.T) {
 		"ANYCLAW_WEBHOOK_SECRET",
 		"ANYCLAW_RATE_LIMIT_RPM",
 		"ANYCLAW_PLUGIN_EXEC_TIMEOUT",
+		"ANYCLAW_MARKETPLACE_ENDPOINT",
+		"ANYCLAW_REGISTRY_TOKEN",
+		"ANYCLAW_MARKETPLACE_DISABLE_REMOTE",
+		"ANYCLAW_MARKETPLACE_CACHE_TTL_SECONDS",
+		"ANYCLAW_MARKETPLACE_REQUEST_TIMEOUT_SECONDS",
+		"ANYCLAW_MARKETPLACE_AUTO_INSTALL_SKILL",
 	} {
 		t.Setenv(key, "")
 	}
@@ -70,6 +76,12 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Sandbox.DockerImage == "alpine:3.20" {
 		t.Fatal("default sandbox docker image should use the bundled sandbox image, not plain Alpine")
 	}
+	if cfg.Marketplace.ProtocolVersion != "1.0" {
+		t.Fatalf("default marketplace protocol = %q, want 1.0", cfg.Marketplace.ProtocolVersion)
+	}
+	if cfg.Marketplace.RegistryEndpoint != "" {
+		t.Fatalf("default marketplace registry endpoint should be empty, got %q", cfg.Marketplace.RegistryEndpoint)
+	}
 }
 
 func TestModularManagerMissingConfigUsesCanonicalDefaults(t *testing.T) {
@@ -94,6 +106,9 @@ func TestModularManagerMissingConfigUsesCanonicalDefaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.Security, defaults.Security) {
 		t.Fatalf("modular default security drifted: %#v want %#v", cfg.Security, defaults.Security)
+	}
+	if !reflect.DeepEqual(cfg.Marketplace, defaults.Marketplace) {
+		t.Fatalf("modular default marketplace drifted: %#v want %#v", cfg.Marketplace, defaults.Marketplace)
 	}
 }
 
@@ -436,6 +451,44 @@ func TestEnvOverrides(t *testing.T) {
 	}
 	if loaded.LLM.APIKey != "test-key-123" {
 		t.Errorf("expected API key from env, got %s", loaded.LLM.APIKey)
+	}
+}
+
+func TestMarketplaceEnvOverrides(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("ANYCLAW_MARKETPLACE_ENDPOINT", "http://127.0.0.1:8791/")
+	t.Setenv("ANYCLAW_REGISTRY_TOKEN", "registry-token")
+	t.Setenv("ANYCLAW_MARKETPLACE_DISABLE_REMOTE", "true")
+	t.Setenv("ANYCLAW_MARKETPLACE_CACHE_TTL_SECONDS", "7")
+	t.Setenv("ANYCLAW_MARKETPLACE_REQUEST_TIMEOUT_SECONDS", "5")
+	t.Setenv("ANYCLAW_MARKETPLACE_AUTO_INSTALL_SKILL", "true")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	data, _ := json.MarshalIndent(DefaultConfig(), "", "  ")
+	os.WriteFile(path, data, 0644)
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("loading config with marketplace env override should succeed: %v", err)
+	}
+	if loaded.Marketplace.RegistryEndpoint != "http://127.0.0.1:8791" {
+		t.Fatalf("expected normalized marketplace endpoint, got %q", loaded.Marketplace.RegistryEndpoint)
+	}
+	if loaded.Marketplace.RegistryToken != "registry-token" {
+		t.Fatalf("expected registry token from env, got %q", loaded.Marketplace.RegistryToken)
+	}
+	if !loaded.Marketplace.DisableRemote {
+		t.Fatal("expected marketplace remote to be disabled by env")
+	}
+	if loaded.Marketplace.CacheTTLSeconds != 7 {
+		t.Fatalf("expected cache ttl 7, got %d", loaded.Marketplace.CacheTTLSeconds)
+	}
+	if loaded.Marketplace.RequestTimeoutSeconds != 5 {
+		t.Fatalf("expected request timeout 5, got %d", loaded.Marketplace.RequestTimeoutSeconds)
+	}
+	if !loaded.Marketplace.AutoInstallSkill {
+		t.Fatal("expected auto install skill to be enabled by env")
 	}
 }
 

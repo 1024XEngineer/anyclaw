@@ -143,6 +143,34 @@ func (p *RuntimePool) Refresh(agentName string, org string, project string, work
 	p.Invalidate(agentName, org, project, workspaceID)
 }
 
+func (p *RuntimePool) RefreshByAgent(agentName string) {
+	p.mu.Lock()
+	p.metrics.Refreshes++
+	p.mu.Unlock()
+	p.InvalidateByAgent(agentName)
+}
+
+func (p *RuntimePool) RefreshByWorkspace(workspaceID string) {
+	p.mu.Lock()
+	p.metrics.Refreshes++
+	p.mu.Unlock()
+	p.InvalidateByWorkspace(workspaceID)
+}
+
+func (p *RuntimePool) RefreshByProject(projectID string) {
+	p.mu.Lock()
+	p.metrics.Refreshes++
+	p.mu.Unlock()
+	p.InvalidateByProject(projectID)
+}
+
+func (p *RuntimePool) RefreshAll() {
+	p.mu.Lock()
+	p.metrics.Refreshes++
+	p.mu.Unlock()
+	p.InvalidateAll()
+}
+
 func (p *RuntimePool) Metrics() RuntimeMetrics {
 	p.mu.Lock()
 	defer p.mu.Unlock()
