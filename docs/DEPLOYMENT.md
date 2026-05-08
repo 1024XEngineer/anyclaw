@@ -159,14 +159,6 @@ tar -czf anyclaw-data.tar.gz .anyclaw workflows
 - 使用 Tailscale 或 SSH tunnel 时，只暴露 Gateway 端口，不需要 AnyClaw 专用 remote CLI。
 - 对公网部署时，务必设置 `security.api_token`，并限制来源网络。
 
-## 官网与云端市场上线
-
-官网、云端 Registry、IP 先跑通、域名 HTTPS、端口和安全组规划见：
-
-- [官网 + 云端市场部署上线总执行计划](WEBSITE_MARKETPLACE_DEPLOYMENT_PLAN.md)
-- [官网 + 云端市场部署架构](WEBSITE_MARKETPLACE_DEPLOYMENT_ARCHITECTURE.md)
-- [官网信息架构与视觉方案](WEBSITE_INFORMATION_ARCHITECTURE.md)
-
 ## 下一步
 
 - 阅读 [安全配置指南](SECURITY.md)

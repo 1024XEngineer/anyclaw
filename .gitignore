@@ -46,6 +46,7 @@ skills-lock.json
 # Build artifacts
 bin/
 tmp/
+.tmp-*.png
 site/dist/
 .gstack/
 .release/
@@ -100,3 +101,6 @@ site/vite.config.js
 site/vite.config.d.ts
 site/.vite/
 site/.vite-temp/
+
+# Local marketing drafts and exported media
+docs/wechat/

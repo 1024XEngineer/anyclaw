@@ -8,40 +8,6 @@ importers:
 
   .: {}
 
-  site:
-    dependencies:
-      lucide-react:
-        specifier: ^0.542.0
-        version: 0.542.0(react@19.2.5)
-      react:
-        specifier: ^19.1.1
-        version: 19.2.5
-      react-dom:
-        specifier: ^19.1.1
-        version: 19.2.5(react@19.2.5)
-      react-router-dom:
-        specifier: ^7.8.2
-        version: 7.14.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-    devDependencies:
-      '@types/node':
-        specifier: ^24.3.0
-        version: 24.12.2
-      '@types/react':
-        specifier: ^19.1.10
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: ^19.1.7
-        version: 19.2.3(@types/react@19.2.14)
-      '@vitejs/plugin-react':
-        specifier: ^5.0.2
-        version: 5.2.0(vite@7.3.2(@types/node@24.12.2)(jiti@1.21.7))
-      typescript:
-        specifier: ^5.9.2
-        version: 5.9.3
-      vite:
-        specifier: ^7.1.3
-        version: 7.3.2(@types/node@24.12.2)(jiti@1.21.7)
-
   ui:
     dependencies:
       '@tanstack/react-query':

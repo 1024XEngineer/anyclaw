@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -268,71 +266,6 @@ func TestEnsureDesktopConfigPersistsPrimaryProviderProfile(t *testing.T) {
 	}
 	if _, ok := updated.FindProviderProfile("primary-openai"); !ok {
 		t.Fatalf("expected primary-openai provider profile to persist, got %#v", updated.Providers)
-	}
-}
-
-func TestControlUIURLDefaultsToChatHome(t *testing.T) {
-	cfg := config.DefaultConfig()
-
-	got := controlUIURL(cfg)
-	if !strings.Contains(got, "/dashboard?v=") || !strings.HasSuffix(got, "#/") {
-		t.Fatalf("expected dashboard chat home URL, got %q", got)
-	}
-	if strings.Contains(got, "market") {
-		t.Fatalf("expected desktop to avoid defaulting to market, got %q", got)
-	}
-}
-
-func TestEnsureDesktopMarketplaceEndpointEnvUsesPublicRegistryWhenUnset(t *testing.T) {
-	cfg := config.DefaultConfig()
-	t.Setenv("ANYCLAW_MARKETPLACE_ENDPOINT", "")
-	t.Setenv("ANYCLAW_MARKETPLACE_DISABLE_REMOTE", "")
-
-	ensureDesktopMarketplaceEndpointEnv(cfg)
-
-	if got := os.Getenv("ANYCLAW_MARKETPLACE_ENDPOINT"); got != defaultDesktopMarketplaceEndpoint {
-		t.Fatalf("expected default desktop marketplace endpoint %q, got %q", defaultDesktopMarketplaceEndpoint, got)
-	}
-}
-
-func TestEnsureDesktopMarketplaceEndpointEnvKeepsExplicitConfig(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Marketplace.RegistryEndpoint = "http://127.0.0.1:8791"
-	t.Setenv("ANYCLAW_MARKETPLACE_ENDPOINT", "")
-	t.Setenv("ANYCLAW_MARKETPLACE_DISABLE_REMOTE", "")
-
-	ensureDesktopMarketplaceEndpointEnv(cfg)
-
-	if got := os.Getenv("ANYCLAW_MARKETPLACE_ENDPOINT"); got != "" {
-		t.Fatalf("expected explicit config to avoid env override, got %q", got)
-	}
-}
-
-func TestGatewayCloudEndpointMissingDetectsStaleGateway(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/market/artifacts" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"items":[],"total":0},"meta":{"cloud_error":"cloud registry endpoint is not configured"}}`))
-	}))
-	t.Cleanup(server.Close)
-
-	if !gatewayCloudEndpointMissing(server.URL) {
-		t.Fatal("expected missing cloud endpoint to be detected")
-	}
-}
-
-func TestGatewayCloudEndpointMissingIgnoresWorkingGateway(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"items":[{"id":"anyclaw.agent.marketplace-operator"}],"total":1}}`))
-	}))
-	t.Cleanup(server.Close)
-
-	if gatewayCloudEndpointMissing(server.URL) {
-		t.Fatal("did not expect working cloud endpoint to be treated as missing")
 	}
 }
 

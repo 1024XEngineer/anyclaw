@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,11 +25,10 @@ import (
 )
 
 const (
-	defaultDesktopConfigName          = "anyclaw.json"
-	desktopLaunchTimeout              = 20 * time.Second
-	desktopHealthPoll                 = 250 * time.Millisecond
-	desktopSnapshotTimeout            = 4 * time.Second
-	defaultDesktopMarketplaceEndpoint = "http://47.76.186.80/v1"
+	defaultDesktopConfigName = "anyclaw.json"
+	desktopLaunchTimeout     = 20 * time.Second
+	desktopHealthPoll        = 250 * time.Millisecond
+	desktopSnapshotTimeout   = 4 * time.Second
 
 	desktopWindowDefaultWidth  = 1480
 	desktopWindowDefaultHeight = 960
@@ -354,6 +352,7 @@ func (a *DesktopApp) startDesktop() LaunchResult {
 			ConfigPath: configPath,
 		}
 	}
+
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return LaunchResult{
@@ -362,7 +361,6 @@ func (a *DesktopApp) startDesktop() LaunchResult {
 			ConfigPath: configPath,
 		}
 	}
-	ensureDesktopMarketplaceEndpointEnv(cfg)
 
 	if err := ensureDesktopControlUIBuilt(context.Background(), configPath, bundleRoot); err != nil {
 		return LaunchResult{
@@ -373,12 +371,6 @@ func (a *DesktopApp) startDesktop() LaunchResult {
 	}
 
 	baseURL := gatewayBaseURL(cfg)
-	if gatewayHealthy(baseURL) && gatewayCloudEndpointMissing(baseURL) {
-		if port, ok := reserveDesktopGatewayPort(cfg); ok {
-			cfg.Gateway.Port = port
-			baseURL = gatewayBaseURL(cfg)
-		}
-	}
 	result := LaunchResult{
 		Attached:   false,
 		BundleRoot: bundleRoot,
@@ -431,69 +423,6 @@ func (a *DesktopApp) startDesktop() LaunchResult {
 	}()
 
 	return result
-}
-
-func ensureDesktopMarketplaceEndpointEnv(cfg *config.Config) {
-	if strings.TrimSpace(os.Getenv("ANYCLAW_MARKETPLACE_ENDPOINT")) != "" {
-		return
-	}
-	if cfg != nil && strings.TrimSpace(cfg.Marketplace.RegistryEndpoint) != "" {
-		return
-	}
-	if cfg != nil && cfg.Marketplace.DisableRemote {
-		return
-	}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("ANYCLAW_MARKETPLACE_DISABLE_REMOTE")), "true") {
-		return
-	}
-	if strings.TrimSpace(os.Getenv("ANYCLAW_MARKETPLACE_DISABLE_REMOTE")) == "1" {
-		return
-	}
-	_ = os.Setenv("ANYCLAW_MARKETPLACE_ENDPOINT", defaultDesktopMarketplaceEndpoint)
-}
-
-func gatewayCloudEndpointMissing(baseURL string) bool {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(strings.TrimRight(baseURL, "/") + "/market/artifacts?source=cloud&kind=agent&limit=1")
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false
-	}
-
-	var payload struct {
-		Meta struct {
-			CloudError string `json:"cloud_error"`
-		} `json:"meta"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(payload.Meta.CloudError), "endpoint is not configured")
-}
-
-func reserveDesktopGatewayPort(cfg *config.Config) (int, bool) {
-	host := "127.0.0.1"
-	if cfg != nil && strings.TrimSpace(cfg.Gateway.Host) != "" {
-		host = strings.TrimSpace(cfg.Gateway.Host)
-	}
-	if host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-
-	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
-	if err != nil {
-		return 0, false
-	}
-	defer listener.Close()
-
-	addr, ok := listener.Addr().(*net.TCPAddr)
-	if !ok || addr.Port <= 0 {
-		return 0, false
-	}
-	return addr.Port, true
 }
 
 func (a *DesktopApp) stopGateway() {
@@ -900,8 +829,7 @@ func controlUIURL(cfg *config.Config) string {
 	if !strings.HasPrefix(basePath, "/") {
 		basePath = "/" + basePath
 	}
-	cacheKey := strconv.FormatInt(time.Now().Unix(), 36)
-	return strings.TrimRight(baseURL, "/") + basePath + "?v=" + cacheKey + "#/"
+	return strings.TrimRight(baseURL, "/") + basePath
 }
 
 func gatewayHealthy(baseURL string) bool {

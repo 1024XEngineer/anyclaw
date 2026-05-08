@@ -654,9 +654,9 @@ export function SettingsModal({ onClose }: SettingsModalProps) {
           <section className="rounded-[28px] border border-[#eceff3] bg-white p-5">
             <div className="flex items-center gap-2 text-sm font-medium text-[#667085]">
               <CheckCircle2 size={16} strokeWidth={2.1} />
-              云端市场
+              预留说明
             </div>
-            <div className="mt-4 text-sm leading-7 text-[#667085]">云端市场已接入真实 Agent、Skill 和 CLI 条目，可从 Marketplace 的 Cloud 目录查看。</div>
+            <div className="mt-4 text-sm leading-7 text-[#667085]">云端 Skill 和云端 Agent 目前尚未接入。</div>
           </section>
         </div>
       </div>
