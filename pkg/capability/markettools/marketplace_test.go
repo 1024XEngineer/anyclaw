@@ -132,6 +132,65 @@ func TestBindToolCreatesAgentBinding(t *testing.T) {
 	}
 }
 
+func TestMarketToolsValidationAndHelpers(t *testing.T) {
+	if _, err := installArtifact(context.Background(), Options{}, map[string]any{"artifact_id": "x"}); err == nil {
+		t.Fatal("expected install not configured error")
+	}
+	if _, err := installArtifact(context.Background(), Options{Store: marketplace.NewStore(t.TempDir()), Registry: marketregistry.NewClient(marketregistry.ClientConfig{Endpoint: "http://127.0.0.1:1"})}, map[string]any{}); err == nil || !strings.Contains(err.Error(), "artifact_id is required") {
+		t.Fatalf("expected artifact id error, got %v", err)
+	}
+	if _, err := bindArtifact(context.Background(), Options{Store: marketplace.NewStore(t.TempDir())}, map[string]any{"artifact_id": "x"}); err == nil || !strings.Contains(err.Error(), "artifact_id and target_type") {
+		t.Fatalf("expected bind validation error, got %v", err)
+	}
+	if stringValue(123) != "123" || !boolValue("true") || boolValue("false") || intValue(float64(7), 1) != 7 || intValue("bad", 9) != 9 {
+		t.Fatal("market tool scalar helpers mismatch")
+	}
+	if firstNonEmpty("", " value ") != "value" {
+		t.Fatal("firstNonEmpty mismatch")
+	}
+	out, err := marshalJSON(map[string]any{"ok": true})
+	if err != nil || !strings.Contains(out, `"ok": true`) {
+		t.Fatalf("marshalJSON = %q err=%v", out, err)
+	}
+}
+
+func TestSearchArtifactsCloudOnlyAndLocalLimit(t *testing.T) {
+	archive := testMarketToolArchive(t, "cloud.skill.release-notes", marketplace.ArtifactKindSkill, "1.0.0")
+	server := testMarketRegistryServer(t, "cloud.skill.release-notes", "skill", "low", "verified", []string{"fs.read"}, archive)
+	defer server.Close()
+
+	store := marketplace.NewStore(t.TempDir())
+	if err := store.SaveReceipt(&marketplace.InstallReceipt{
+		ID:            "local.skill@1.0.0",
+		ArtifactID:    "local.skill",
+		Kind:          marketplace.ArtifactKindSkill,
+		Name:          "Local Skill",
+		Version:       "1.0.0",
+		Source:        marketplace.SourceCloud,
+		InstalledPath: t.TempDir(),
+		InstalledAt:   "2026-05-07T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := searchArtifacts(context.Background(), Options{
+		Store:    store,
+		Registry: marketregistry.NewClient(marketregistry.ClientConfig{Endpoint: server.URL}),
+	}, map[string]any{"query": "release", "kind": "skill", "source": "cloud", "limit": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "Local Skill") || !strings.Contains(out, "cloud.skill.release-notes") {
+		t.Fatalf("unexpected cloud-only search output: %s", out)
+	}
+	local, err := localArtifacts(store, marketplace.ArtifactKindSkill, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(local) != 1 || local[0].ID != "local.skill" {
+		t.Fatalf("unexpected local artifacts: %#v", local)
+	}
+}
+
 func toolListed(items []tools.ToolInfo, name string) bool {
 	for _, item := range items {
 		if item.Name == name {

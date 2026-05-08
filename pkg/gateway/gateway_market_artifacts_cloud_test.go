@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/marketplace"
 	appRuntime "github.com/1024XEngineer/anyclaw/pkg/runtime"
 )
 
@@ -193,6 +194,55 @@ func TestMarketArtifactCloudDetailFallsBackToCloudForUnknownNonCloudPrefix(t *te
 	server.handleMarketArtifactDetail(rec, httptest.NewRequest(http.MethodGet, "/market/artifacts/anyclaw.skill.skill-author", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("detail status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMarketArtifactHandlersValidateMethodRuntimeAndPaths(t *testing.T) {
+	rec := httptest.NewRecorder()
+	(*Server)(nil).handleMarketArtifacts(rec, httptest.NewRequest(http.MethodGet, "/market/artifacts", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("nil artifacts status = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	newCloudMarketTestServer(t, "").handleMarketArtifacts(rec, httptest.NewRequest(http.MethodPost, "/market/artifacts", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("method status = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	newCloudMarketTestServer(t, "").handleMarketArtifactDetail(rec, httptest.NewRequest(http.MethodGet, "/market/artifacts", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("collection path status = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	(*Server)(nil).handleMarketArtifactDetail(rec, httptest.NewRequest(http.MethodGet, "/market/artifacts/skill:missing", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("nil detail status = %d", rec.Code)
+	}
+}
+
+func TestMarketArtifactHelpers(t *testing.T) {
+	if id, versions := parseMarketArtifactPath("/market/artifacts/skill:release/versions"); id != "skill:release" || !versions {
+		t.Fatalf("unexpected versions path parse id=%q versions=%v", id, versions)
+	}
+	if id, versions := parseMarketArtifactPath("/market/artifacts/"); id != "" || versions {
+		t.Fatalf("unexpected empty path parse id=%q versions=%v", id, versions)
+	}
+	empty := emptyMarketList(marketplace.Filter{Limit: -1, Offset: -4})
+	if empty.Limit != 50 || empty.Offset != 0 || empty.Total != 0 || len(empty.Items) != 0 {
+		t.Fatalf("unexpected empty list: %#v", empty)
+	}
+	server := newCloudMarketTestServer(t, "")
+	if server.cloudRegistryClient() != nil {
+		t.Fatal("expected nil cloud client without endpoint")
+	}
+	if !server.shouldUseCloudMarketArtifact(httptest.NewRequest(http.MethodGet, "/market/artifacts/cloud.skill.x", nil), "cloud.skill.x") {
+		t.Fatal("expected cloud prefix to use cloud")
+	}
+	if !server.shouldUseCloudMarketArtifact(httptest.NewRequest(http.MethodGet, "/market/artifacts/local?source=cloud", nil), "local") {
+		t.Fatal("expected source=cloud to use cloud")
+	}
+	if _, err := server.cloudMarketArtifact(httptest.NewRequest(http.MethodGet, "/market/artifacts/x", nil), "x"); err == nil {
+		t.Fatal("expected missing cloud client error")
 	}
 }
 

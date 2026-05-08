@@ -187,6 +187,42 @@ func TestMarketRefreshSupportsSessionScope(t *testing.T) {
 	}
 }
 
+func TestMarketBindingHandlersErrorPaths(t *testing.T) {
+	server := newMarketBindingTestServer(t)
+	rec := httptest.NewRecorder()
+	server.handleMarketBindings(rec, httptest.NewRequest(http.MethodPost, "/market/bindings", strings.NewReader(`{`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid create status = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	server.handleMarketBindingByID(rec, httptest.NewRequest(http.MethodDelete, "/market/bindings/missing", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("delete missing status = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	server.handleMarketBindingByID(rec, httptest.NewRequest(http.MethodGet, "/market/bindings/missing", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("method status = %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	server.handleMarketRefresh(rec, httptest.NewRequest(http.MethodPost, "/market/refresh", strings.NewReader(`{"scope":"runtime","workspace":""}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh defaults status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	server.handleMarketRefresh(rec, httptest.NewRequest(http.MethodPost, "/market/refresh", strings.NewReader(`{"scope":"unknown"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported refresh status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if binding := server.findMarketBinding("missing"); binding != nil {
+		t.Fatalf("expected missing binding nil, got %#v", binding)
+	}
+	agent, orgID, projectID, workspaceID := (*Server)(nil).marketRefreshTarget("a", "o", "p", "w")
+	if agent != "a" || orgID != "o" || projectID != "p" || workspaceID != "w" {
+		t.Fatalf("nil target changed values: %q %q %q %q", agent, orgID, projectID, workspaceID)
+	}
+}
+
 func newMarketBindingTestServer(t *testing.T) *Server {
 	t.Helper()
 	workDir := t.TempDir()

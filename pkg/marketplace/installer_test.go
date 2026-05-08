@@ -1,8 +1,10 @@
 package marketplace
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"os"
@@ -375,6 +377,72 @@ func TestUpgradeChecksumFailureKeepsPreviousReceiptAndBinding(t *testing.T) {
 	}
 }
 
+func TestInstallUseCaseStartAndExecuteValidation(t *testing.T) {
+	if _, _, err := (*InstallUseCase)(nil).Start(context.Background(), InstallRequest{ArtifactID: "x"}); err == nil {
+		t.Fatal("expected nil use case start error")
+	}
+	uc := NewInstallUseCase(NewStore(t.TempDir()), &fakeInstallRegistry{})
+	if _, _, err := uc.Start(context.Background(), InstallRequest{}); err == nil || !strings.Contains(err.Error(), "artifact_id is required") {
+		t.Fatalf("expected artifact_id error, got %v", err)
+	}
+	if err := (*InstallUseCase)(nil).Execute(context.Background(), "job-1"); err == nil {
+		t.Fatal("expected nil use case execute error")
+	}
+	job, _, err := uc.Start(context.Background(), InstallRequest{ArtifactID: "cloud.skill.done"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.State = JobSucceeded
+	if err := uc.store.UpdateJob(job); err != nil {
+		t.Fatal(err)
+	}
+	if err := uc.Execute(context.Background(), job.ID); err != nil {
+		t.Fatalf("terminal job should no-op: %v", err)
+	}
+}
+
+func TestArchiveExtractionRejectsUnsafeEntriesAndSupportsTarGz(t *testing.T) {
+	dest := t.TempDir()
+	if err := extractArchiveBytes(testTarGzArchive(t, map[string]string{"dir/file.txt": "ok"}), "https://example.test/pkg.tgz", dest); err != nil {
+		t.Fatalf("extract tar.gz: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dest, "dir", "file.txt")); err != nil || string(data) != "ok" {
+		t.Fatalf("unexpected tar extract data=%q err=%v", data, err)
+	}
+	if err := extractArchiveBytes(testZipArchiveWithEntry(t, "../escape.txt", "bad"), "https://example.test/pkg.zip", t.TempDir()); err == nil {
+		t.Fatal("expected zip escape rejection")
+	}
+	if err := extractArchiveBytes(testTarGzArchive(t, map[string]string{"../escape.txt": "bad"}), "https://example.test/pkg.tar.gz", t.TempDir()); err == nil {
+		t.Fatal("expected tar escape rejection")
+	}
+}
+
+func TestInstallerHelpers(t *testing.T) {
+	decision := &PolicyDecision{
+		Decision:            DecisionAsk,
+		Reasons:             []string{"confirm"},
+		Permissions:         []string{"fs.read"},
+		HighRiskPermissions: []string{"process.exec"},
+	}
+	cloned := cloneDecision(decision)
+	cloned.Reasons[0] = "changed"
+	if decision.Reasons[0] != "confirm" {
+		t.Fatal("cloneDecision should deep-copy slices")
+	}
+	if eventLevelForDecision(PolicyDecision{Decision: DecisionBlock}) != "error" ||
+		eventLevelForDecision(PolicyDecision{Decision: DecisionAuto}) != "success" ||
+		eventLevelForDecision(PolicyDecision{Decision: DecisionAsk}) != "info" {
+		t.Fatal("unexpected decision levels")
+	}
+	if receiptID("artifact", "1.0.0") != "artifact@1.0.0" {
+		t.Fatal("receiptID mismatch")
+	}
+	base := t.TempDir()
+	if !pathWithinBase(base, filepath.Join(base, "child")) || pathWithinBase(base, filepath.Join(base, "..", "other")) {
+		t.Fatal("pathWithinBase mismatch")
+	}
+}
+
 type fakeInstallRegistry struct {
 	resolved  ResolvedPackage
 	archive   []byte
@@ -416,6 +484,45 @@ func testArtifactArchive(t *testing.T, id string, kind ArtifactKind, version str
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func testZipArchiveWithEntry(t *testing.T, name string, content string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	w, err := writer.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(content)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func testTarGzArchive(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+	for name, content := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzw.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
