@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	"github.com/1024XEngineer/anyclaw/pkg/clawbridge"
 	"github.com/1024XEngineer/anyclaw/pkg/clihub"
+	"github.com/1024XEngineer/anyclaw/pkg/marketplace"
 	ctxpkg "github.com/1024XEngineer/anyclaw/pkg/runtime/context/store"
 	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
 	"github.com/1024XEngineer/anyclaw/pkg/workspace"
@@ -133,14 +135,16 @@ func (a *Agent) Run(ctx context.Context, userInput string) (string, error) {
 	if execResult, handled, err := a.tryAutoRouteCLIHubIntent(ctx, userInput); handled {
 		return execResult, err
 	}
-	selectedTools := a.selectToolInfos(userInput)
+	capabilityPlan := a.planCapability(userInput)
+	selectedTools := a.selectToolInfosWithPlan(userInput, capabilityPlan)
 	a.appendHistoryMessage(ctx, "user", userInput)
 	toolDefs := a.buildSelectedToolDefinitions(selectedTools)
-	systemPrompt, err := a.prepareSystemPrompt(ctx, selectedTools, toolDefs)
+	systemPrompt, err := a.prepareSystemPrompt(ctx, selectedTools, toolDefs, capabilityPlan)
 	if err != nil {
 		return "", err
 	}
 	messages := a.buildMessages(systemPrompt)
+	messages = a.appendCapabilityPlanningContext(ctx, messages, capabilityPlan, selectedTools)
 
 	a.heartbeatContextExecution(exec)
 	response, err := NewCodexChain(a).Run(ctx, CodexChainRequest{
@@ -183,14 +187,16 @@ func (a *Agent) RunStream(ctx context.Context, userInput string, onChunk func(st
 		return nil
 	}
 
-	selectedTools := a.selectToolInfos(userInput)
+	capabilityPlan := a.planCapability(userInput)
+	selectedTools := a.selectToolInfosWithPlan(userInput, capabilityPlan)
 	a.appendHistoryMessage(ctx, "user", userInput)
 	toolDefs := a.buildSelectedToolDefinitions(selectedTools)
-	systemPrompt, err := a.prepareSystemPrompt(ctx, selectedTools, toolDefs)
+	systemPrompt, err := a.prepareSystemPrompt(ctx, selectedTools, toolDefs, capabilityPlan)
 	if err != nil {
 		return err
 	}
 	messages := a.buildMessages(systemPrompt)
+	messages = a.appendCapabilityPlanningContext(ctx, messages, capabilityPlan, selectedTools)
 
 	a.heartbeatContextExecution(exec)
 	response, err := NewCodexChain(a).Run(ctx, CodexChainRequest{
@@ -424,6 +430,10 @@ func (a *Agent) BuildSystemPrompt() (string, error) {
 }
 
 func (a *Agent) buildSystemPromptForToolInfos(toolList []tools.ToolInfo) (string, error) {
+	return a.buildSystemPromptForToolInfosWithPlan(toolList, nil)
+}
+
+func (a *Agent) buildSystemPromptForToolInfosWithPlan(toolList []tools.ToolInfo, capabilityPlan *CapabilityPlan) (string, error) {
 	workspaceFiles := []prompt.WorkspaceFile{}
 	if strings.TrimSpace(a.workingDir) != "" {
 		files, err := a.loadBootstrapFiles()
@@ -509,11 +519,31 @@ func (a *Agent) buildSystemPromptForToolInfos(toolList []tools.ToolInfo) (string
 		Personality:     strings.TrimSpace(a.config.Personality),
 		WorkingDir:      a.workingDir,
 		AvailableSkills: availableSkills,
+		SkillPrompts:    a.selectedSkillPrompts(toolList),
 		Tools:           toolInfos,
 		CLIHub:          cliHubInfo,
 		ClawBridge:      bridgeInfo,
 		WorkspaceFiles:  workspaceFiles,
 		History:         a.history,
+	}
+	if capabilityPlan != nil {
+		data.CapabilityPlan = prompt.CapabilityPlanInfo{
+			TaskClass:                capabilityPlan.TaskClass,
+			Route:                    capabilityPlan.Route,
+			Need:                     capabilityPlan.Need,
+			KindHint:                 capabilityPlan.KindHint,
+			ShouldExposeMarketSearch: capabilityPlan.ShouldExposeMarketSearch,
+			Reason:                   capabilityPlan.Reason,
+		}
+		if len(capabilityPlan.LocalMatches) > 0 {
+			match := capabilityPlan.LocalMatches[0]
+			data.CapabilityPlan.TopLocalMatch = prompt.CapabilityMatchInfo{
+				Kind:   match.Kind,
+				Name:   match.Name,
+				Score:  match.Score,
+				Reason: match.Reason,
+			}
+		}
 	}
 
 	return prompt.BuildSystemPrompt(a.config.Name, description, data)
@@ -580,6 +610,10 @@ func readableSkillLocation(skill *skills.Skill) string {
 }
 
 func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
+	return a.selectToolInfosWithPlan(userInput, nil)
+}
+
+func (a *Agent) selectToolInfosWithPlan(userInput string, capabilityPlan *CapabilityPlan) []tools.ToolInfo {
 	if a.tools == nil {
 		return nil
 	}
@@ -590,10 +624,12 @@ func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
 	}
 
 	query := normalizeToolSelectionText(userInput)
-	cliHubIntent := a.shouldExposeCLIHubIntentTools(userInput)
+	marketFollowUp := a.marketFollowUpIntent(userInput)
+	cliHubIntent := a.shouldExposeCLIHubIntentTools(userInput) || capabilityPlanUsesCLI(capabilityPlan)
 	toolExposure := shouldExposeToolsForInput(query, allTools)
 	skillInstructions := a.hasReadableSkillInstructions()
-	if !toolExposure && !cliHubIntent && !skillInstructions {
+	plannerExposure := capabilityPlanExposesTools(capabilityPlan)
+	if !toolExposure && !cliHubIntent && !skillInstructions && !plannerExposure && !marketFollowUp.ShouldExpose() {
 		return nil
 	}
 
@@ -603,7 +639,10 @@ func (a *Agent) selectToolInfos(userInput string) []tools.ToolInfo {
 		coreExact["read"] = struct{}{}
 		coreExact["read_file"] = struct{}{}
 	}
+	applyCapabilityPlanToolSelection(coreExact, capabilityPlan)
+	applyMarketFollowUpToolSelection(coreExact, marketFollowUp)
 	prefixes := selectedToolPrefixesForIntent(query, allTools, intent)
+	prefixes = append(prefixes, selectedToolPrefixesForCapabilityPlan(capabilityPlan)...)
 	appPrefixes := matchedToolPrefixes(query, allTools)
 	prefixes = append(prefixes, appPrefixes...)
 
@@ -633,6 +672,372 @@ func (a *Agent) hasReadableSkillInstructions() bool {
 	}
 	for _, skill := range a.skills.List() {
 		if readableSkillLocation(skill) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Agent) planCapability(userInput string) *CapabilityPlan {
+	allTools := []tools.ToolInfo(nil)
+	if a.tools != nil {
+		allTools = a.visibleToolInfos()
+	}
+	input := CapabilityPlannerInput{
+		UserInput:       userInput,
+		Tools:           allTools,
+		Skills:          a.skillCatalogForCapabilityPlanner(),
+		CLICapabilities: a.cliCapabilitiesForCapabilityPlanner(),
+		LocalArtifacts:  a.localArtifactsForCapabilityPlanner(),
+	}
+	plan := CapabilityPlanner{}.Plan(input)
+	return &plan
+}
+
+func (a *Agent) skillCatalogForCapabilityPlanner() []skills.SkillCatalogEntry {
+	if a == nil || a.skills == nil {
+		return nil
+	}
+	return a.skills.Catalog()
+}
+
+func (a *Agent) cliCapabilitiesForCapabilityPlanner() []clihub.Capability {
+	if a == nil {
+		return nil
+	}
+	root := strings.TrimSpace(firstNonEmpty(a.config.CLIHubRoot, a.workingDir, a.workDir))
+	if root == "" {
+		return nil
+	}
+	reg, err := clihub.LoadCapabilityRegistry(root)
+	if err != nil || reg == nil {
+		return nil
+	}
+	return reg.All()
+}
+
+func (a *Agent) localArtifactsForCapabilityPlanner() []CapabilityArtifactSummary {
+	if a == nil {
+		return nil
+	}
+	root := strings.TrimSpace(firstNonEmpty(a.workingDir, a.workDir))
+	if root == "" {
+		return nil
+	}
+	store := marketplace.NewStore(root)
+	if _, err := os.Stat(store.ReceiptsDir()); err != nil {
+		return nil
+	}
+	receipts, err := store.ListReceipts()
+	if err != nil {
+		return nil
+	}
+	bound := map[string]bool{}
+	if _, err := os.Stat(store.BindingsDir()); err == nil {
+		if bindings, err := store.ListBindings(); err == nil {
+			for _, binding := range bindings.Items {
+				if binding.State == marketplace.BindingEnabled {
+					bound[strings.ToLower(strings.TrimSpace(binding.ArtifactID))] = true
+				}
+			}
+		}
+	}
+	items := make([]CapabilityArtifactSummary, 0, len(receipts))
+	for _, receipt := range receipts {
+		id := strings.TrimSpace(receipt.ArtifactID)
+		if id == "" {
+			continue
+		}
+		capabilities := append([]string(nil), receipt.Permissions...)
+		if receipt.RiskLevel != "" {
+			capabilities = append(capabilities, receipt.RiskLevel)
+		}
+		if receipt.TrustLevel != "" {
+			capabilities = append(capabilities, receipt.TrustLevel)
+		}
+		items = append(items, CapabilityArtifactSummary{
+			ArtifactID:   id,
+			Kind:         string(receipt.Kind),
+			Name:         receipt.Name,
+			Description:  receipt.Description,
+			Capabilities: capabilities,
+			Installed:    true,
+			Bound:        bound[strings.ToLower(id)],
+		})
+	}
+	return items
+}
+
+func capabilityPlanExposesTools(plan *CapabilityPlan) bool {
+	if plan == nil {
+		return false
+	}
+	switch plan.Route {
+	case CapabilityRouteUseSkill, CapabilityRouteDelegateAgent, CapabilityRouteUseCLI, CapabilityRouteSearchMarket:
+		return true
+	default:
+		return plan.ShouldExposeMarketSearch
+	}
+}
+
+func capabilityPlanUsesCLI(plan *CapabilityPlan) bool {
+	return plan != nil && plan.Route == CapabilityRouteUseCLI
+}
+
+func applyCapabilityPlanToolSelection(selected map[string]struct{}, plan *CapabilityPlan) {
+	if selected == nil || plan == nil {
+		return
+	}
+	add := func(names ...string) {
+		for _, name := range names {
+			selected[name] = struct{}{}
+		}
+	}
+	switch plan.Route {
+	case CapabilityRouteDelegateAgent:
+		add("delegate_task")
+	case CapabilityRouteUseCLI:
+		add("clihub_catalog", "clihub_exec", "intent_route", "intent_list_capabilities")
+	case CapabilityRouteSearchMarket:
+		if plan.ShouldExposeMarketSearch {
+			add("market_search_artifacts")
+		}
+	}
+}
+
+func selectedToolPrefixesForCapabilityPlan(plan *CapabilityPlan) []string {
+	if plan == nil {
+		return nil
+	}
+	switch plan.Route {
+	case CapabilityRouteUseSkill:
+		if len(plan.LocalMatches) > 0 && strings.TrimSpace(plan.LocalMatches[0].Name) != "" {
+			return []string{"skill_" + strings.TrimSpace(plan.LocalMatches[0].Name)}
+		}
+		return []string{"skill_"}
+	default:
+		return nil
+	}
+}
+
+type marketFollowUpIntent struct {
+	Install    bool
+	Bind       bool
+	ArtifactID string
+}
+
+func (m marketFollowUpIntent) ShouldExpose() bool {
+	return m.Install || m.Bind
+}
+
+func (a *Agent) marketFollowUpIntent(userInput string) marketFollowUpIntent {
+	combined := strings.TrimSpace(userInput + "\n" + a.recentConversationText(6))
+	artifactID := firstArtifactID(combined)
+	if artifactID == "" {
+		return marketFollowUpIntent{}
+	}
+	query := normalizeCapabilityPlannerText(userInput)
+	raw := strings.ToLower(strings.TrimSpace(userInput))
+	install := capabilityPlannerContainsAny(query,
+		"install", "install it", "install this", "install that", "go ahead", "confirmed", "i confirm", "yes install",
+		"安装", "确认安装", "同意安装", "可以安装", "继续安装",
+	)
+	bind := capabilityPlannerContainsAny(query,
+		"bind", "activate", "enable", "use it", "attach", "make it available",
+		"绑定", "启用", "激活", "使用它", "挂载",
+	)
+	if !install && !bind {
+		return marketFollowUpIntent{}
+	}
+	if strings.Contains(raw, "don't") || strings.Contains(raw, "do not") || strings.Contains(raw, "取消") || strings.Contains(raw, "不要") {
+		return marketFollowUpIntent{}
+	}
+	return marketFollowUpIntent{Install: install, Bind: bind, ArtifactID: artifactID}
+}
+
+func (a *Agent) recentConversationText(limit int) string {
+	if a == nil || len(a.history) == 0 {
+		return ""
+	}
+	if limit <= 0 || limit > len(a.history) {
+		limit = len(a.history)
+	}
+	start := len(a.history) - limit
+	parts := make([]string, 0, limit)
+	for _, msg := range a.history[start:] {
+		if strings.TrimSpace(msg.Content) != "" {
+			parts = append(parts, msg.Content)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func firstArtifactID(text string) string {
+	for _, match := range artifactIDRegex.FindAllString(text, -1) {
+		match = strings.Trim(match, ".,;:()[]{}<>\"'`")
+		if isLikelyMarketplaceArtifactID(match) {
+			return match
+		}
+	}
+	return ""
+}
+
+var artifactIDRegex = regexp.MustCompile(`(?i)\b[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*){1,}\b`)
+
+func isLikelyMarketplaceArtifactID(value string) bool {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(value)), ".")
+	if len(parts) < 2 {
+		return false
+	}
+	hasKind := false
+	hasAlpha := false
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		switch part {
+		case "agent", "skill", "cli", "plugin":
+			hasKind = true
+		}
+		for _, r := range part {
+			if r >= 'a' && r <= 'z' {
+				hasAlpha = true
+				break
+			}
+		}
+	}
+	return hasKind && hasAlpha
+}
+
+func applyMarketFollowUpToolSelection(selected map[string]struct{}, intent marketFollowUpIntent) {
+	if selected == nil || !intent.ShouldExpose() {
+		return
+	}
+	if intent.Install {
+		selected["market_install_artifact"] = struct{}{}
+	}
+	if intent.Bind {
+		selected["market_bind_artifact"] = struct{}{}
+	}
+}
+
+func (a *Agent) appendCapabilityPlanningContext(ctx context.Context, messages []llm.Message, plan *CapabilityPlan, selectedTools []tools.ToolInfo) []llm.Message {
+	result, ok := a.searchMarketplaceForCapabilityPlan(ctx, plan, selectedTools)
+	if !ok {
+		return messages
+	}
+	return append(messages, llm.Message{Role: "user", Content: result})
+}
+
+func (a *Agent) searchMarketplaceForCapabilityPlan(ctx context.Context, plan *CapabilityPlan, selectedTools []tools.ToolInfo) (string, bool) {
+	if a == nil || a.tools == nil || plan == nil || !plan.ShouldExposeMarketSearch || plan.Route != CapabilityRouteSearchMarket {
+		return "", false
+	}
+	if !toolInfoListContains(selectedTools, "market_search_artifacts") {
+		return "", false
+	}
+	query := strings.TrimSpace(firstNonEmpty(plan.Need, plan.Summary()))
+	if query == "" {
+		return "", false
+	}
+	args := map[string]any{
+		"query": query,
+		"limit": 3,
+	}
+	if kind := strings.TrimSpace(plan.KindHint); kind != "" {
+		args["kind"] = kind
+	}
+	result, err := a.tools.Call(a.toolCallContext(ctx), "market_search_artifacts", args)
+	if err != nil {
+		a.recordToolActivity(ToolActivity{ToolName: "market_search_artifacts", Args: args, Error: err.Error()})
+		return "## Capability Planning Search\nMarketplace search was attempted for the missing capability, but it failed: " + truncateString(err.Error(), 240) + "\nContinue with local tools if possible, or explain the limitation clearly.", true
+	}
+	a.recordToolActivity(ToolActivity{ToolName: "market_search_artifacts", Args: args, Result: result})
+	return formatCapabilityPlanningSearchContext(result), true
+}
+
+func formatCapabilityPlanningSearchContext(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "## Capability Planning Search\nMarketplace search returned no usable result. Continue with local tools if possible, or explain the limitation clearly."
+	}
+	var payload struct {
+		Route struct {
+			Action string `json:"action"`
+			Reason string `json:"reason"`
+		} `json:"route"`
+		LocalCount int                                 `json:"local_count"`
+		CloudCount int                                 `json:"cloud_count"`
+		CloudError string                              `json:"cloud_error"`
+		Local      []capabilityPlanningSearchCandidate `json:"local"`
+		Cloud      []capabilityPlanningSearchCandidate `json:"cloud"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "## Capability Planning Search\nMarketplace search result:\n" + truncateString(raw, 1600)
+	}
+	lines := []string{
+		"## Capability Planning Search",
+		fmt.Sprintf("- Search counts: %d installed/local, %d cloud.", payload.LocalCount, payload.CloudCount),
+	}
+	if strings.TrimSpace(payload.Route.Action) != "" {
+		line := "- Recommended route: " + payload.Route.Action
+		if strings.TrimSpace(payload.Route.Reason) != "" {
+			line += " (" + truncateString(payload.Route.Reason, 180) + ")"
+		}
+		lines = append(lines, line+".")
+	}
+	if len(payload.Local) > 0 {
+		lines = append(lines, "- Local candidates: "+formatCapabilityPlanningCandidates(payload.Local)+".")
+	}
+	if len(payload.Cloud) > 0 {
+		lines = append(lines, "- Cloud candidates: "+formatCapabilityPlanningCandidates(payload.Cloud)+".")
+	}
+	if strings.TrimSpace(payload.CloudError) != "" {
+		lines = append(lines, "- Cloud search error: "+truncateString(payload.CloudError, 220)+".")
+	}
+	lines = append(lines,
+		"- Use installed/local candidates directly when they are already bound and available through current tools.",
+		"- For cloud candidates, explain the option and request explicit user confirmation before installing or binding anything.",
+		"- If no candidate fits, continue locally when reasonable or state the capability gap honestly.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+type capabilityPlanningSearchCandidate struct {
+	ArtifactID string `json:"artifact_id"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	RiskLevel  string `json:"risk_level"`
+	TrustLevel string `json:"trust_level"`
+}
+
+func formatCapabilityPlanningCandidates(items []capabilityPlanningSearchCandidate) string {
+	limit := 3
+	if len(items) < limit {
+		limit = len(items)
+	}
+	parts := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		item := items[i]
+		label := firstNonEmpty(item.Name, item.ArtifactID)
+		if item.Kind != "" {
+			label += " [" + item.Kind + "]"
+		}
+		meta := compactStrings(item.ArtifactID, item.RiskLevel, item.TrustLevel)
+		if len(meta) > 0 {
+			label += " (" + strings.Join(meta, ", ") + ")"
+		}
+		parts = append(parts, truncateString(label, 180))
+	}
+	if len(items) > limit {
+		parts = append(parts, "and "+strconv.Itoa(len(items)-limit)+" more")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func toolInfoListContains(list []tools.ToolInfo, name string) bool {
+	for _, tool := range list {
+		if tool.Name == name {
 			return true
 		}
 	}
@@ -1415,7 +1820,7 @@ func (a *Agent) loadBootstrapFiles() ([]workspace.BootstrapFile, error) {
 	return workspace.LoadBootstrapFiles(a.workingDir, workspace.BootstrapOptions{})
 }
 
-func (a *Agent) prepareSystemPrompt(ctx context.Context, selectedTools []tools.ToolInfo, toolDefs []llm.ToolDefinition) (string, error) {
+func (a *Agent) prepareSystemPrompt(ctx context.Context, selectedTools []tools.ToolInfo, toolDefs []llm.ToolDefinition, capabilityPlan *CapabilityPlan) (string, error) {
 	if a.contextRuntime != nil {
 		compacted, err := a.contextRuntime.compactHistory(ctx, a.history, a.llm)
 		if err != nil {
@@ -1424,7 +1829,7 @@ func (a *Agent) prepareSystemPrompt(ctx context.Context, selectedTools []tools.T
 		a.history = compacted
 	}
 
-	systemPrompt, err := a.buildSystemPromptForToolInfos(selectedTools)
+	systemPrompt, err := a.buildSystemPromptForToolInfosWithPlan(selectedTools, capabilityPlan)
 	if err != nil {
 		return "", fmt.Errorf("failed to build system prompt: %w", err)
 	}

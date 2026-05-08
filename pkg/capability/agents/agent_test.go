@@ -89,6 +89,15 @@ func (s *stubAgentLLM) Name() string {
 	return "stub"
 }
 
+func toolInfoListHas(list []tools.ToolInfo, name string) bool {
+	for _, tool := range list {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 type compactionAwareLLM struct {
 	mu       sync.Mutex
 	messages [][]llm.Message
@@ -376,6 +385,39 @@ func TestBuildSystemPromptHandlesNilDependencies(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptIncludesCompactCapabilityPlan(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("market_search_artifacts", "Search marketplace artifacts", map[string]any{}, nil)
+	registry.RegisterTool("market_install_artifact", "Install marketplace artifact", map[string]any{}, nil)
+
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		Tools:       registry,
+	})
+	plan := CapabilityPlan{
+		TaskClass:                CapabilityTaskSpecialized,
+		Route:                    CapabilityRouteSearchMarket,
+		Need:                     "code review",
+		KindHint:                 "agent",
+		ShouldExposeMarketSearch: true,
+		Reason:                   "specialized capability is not available locally",
+	}
+	selected := ag.selectToolInfosWithPlan("review this pull request", &plan)
+	systemPrompt, err := ag.buildSystemPromptForToolInfosWithPlan(selected, &plan)
+	if err != nil {
+		t.Fatalf("buildSystemPromptForToolInfosWithPlan: %v", err)
+	}
+	for _, want := range []string{"## Capability Planning", "Task class: specialized", "Planned route: search_market", "market_search_artifacts"} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("expected prompt to contain %q, got %q", want, systemPrompt)
+		}
+	}
+	if strings.Contains(systemPrompt, "market_install_artifact:") {
+		t.Fatalf("prompt should not expose install tool before confirmation, got %q", systemPrompt)
+	}
+}
+
 func TestBuildSystemPromptDoesNotInjectMemoryByDefault(t *testing.T) {
 	mem := memory.NewFileMemory(t.TempDir())
 	if err := mem.Init(); err != nil {
@@ -603,6 +645,142 @@ func TestSelectToolInfosUsesCodexCodeToolsForChineseAppBuild(t *testing.T) {
 	}
 }
 
+func TestSelectToolInfosWithPlanExposesOnlyMarketSearchForSpecializedGap(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("market_search_artifacts", "Search marketplace artifacts", map[string]any{}, nil)
+	registry.RegisterTool("market_install_artifact", "Install marketplace artifact", map[string]any{}, nil)
+	registry.RegisterTool("market_bind_artifact", "Bind marketplace artifact", map[string]any{}, nil)
+	registry.RegisterTool("read_file", "Read file", map[string]any{}, nil)
+
+	ag := New(Config{Tools: registry})
+	plan := CapabilityPlanner{}.Plan(CapabilityPlannerInput{
+		UserInput: "review this pull request for security and maintainability",
+	})
+
+	selected := ag.selectToolInfosWithPlan("review this pull request for security and maintainability", &plan)
+	names := make(map[string]bool, len(selected))
+	for _, tool := range selected {
+		names[tool.Name] = true
+	}
+
+	if !names["market_search_artifacts"] {
+		t.Fatalf("expected market search to be exposed, got %#v", names)
+	}
+	if names["market_install_artifact"] || names["market_bind_artifact"] {
+		t.Fatalf("install/bind must stay hidden before explicit user confirmation, got %#v", names)
+	}
+}
+
+func TestSelectToolInfosExposesMarketInstallOnlyAfterConfirmation(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("market_search_artifacts", "Search marketplace artifacts", map[string]any{}, nil)
+	registry.RegisterTool("market_install_artifact", "Install marketplace artifact", map[string]any{}, nil)
+	registry.RegisterTool("market_bind_artifact", "Bind marketplace artifact", map[string]any{}, nil)
+
+	ag := New(Config{Tools: registry})
+	ag.SetHistory([]prompt.Message{
+		{Role: "assistant", Content: "Cloud candidate: Code Reviewer (cloud.agent.code-reviewer, medium risk, verified)."},
+	})
+
+	selected := ag.selectToolInfos("确认安装这个 code reviewer")
+	names := make(map[string]bool, len(selected))
+	for _, tool := range selected {
+		names[tool.Name] = true
+	}
+	if !names["market_install_artifact"] {
+		t.Fatalf("expected install tool after explicit confirmation, got %#v", names)
+	}
+	if names["market_bind_artifact"] {
+		t.Fatalf("did not expect bind tool for install-only confirmation, got %#v", names)
+	}
+}
+
+func TestSelectToolInfosDoesNotTreatVersionAsMarketArtifactConfirmation(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("market_install_artifact", "Install marketplace artifact", map[string]any{}, nil)
+
+	ag := New(Config{Tools: registry})
+	ag.SetHistory([]prompt.Message{
+		{Role: "assistant", Content: "Version 1.0.0 is available."},
+	})
+	selected := ag.selectToolInfos("yes install it")
+	if toolInfoListHas(selected, "market_install_artifact") {
+		t.Fatalf("did not expect install tool for version-only context, got %#v", selected)
+	}
+}
+
+func TestSelectToolInfosExposesMarketBindAfterBindingConfirmation(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("market_install_artifact", "Install marketplace artifact", map[string]any{}, nil)
+	registry.RegisterTool("market_bind_artifact", "Bind marketplace artifact", map[string]any{}, nil)
+
+	ag := New(Config{Tools: registry})
+	ag.SetHistory([]prompt.Message{
+		{Role: "assistant", Content: "Installed cloud.skill.release-notes successfully. It can be bound to main_agent."},
+	})
+
+	selected := ag.selectToolInfos("绑定到 main agent 并启用")
+	names := make(map[string]bool, len(selected))
+	for _, tool := range selected {
+		names[tool.Name] = true
+	}
+	if !names["market_bind_artifact"] {
+		t.Fatalf("expected bind tool after binding confirmation, got %#v", names)
+	}
+}
+
+func TestBuildSystemPromptIncludesMarketplaceConfirmationGuidance(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("market_install_artifact", "Install marketplace artifact", map[string]any{}, nil)
+
+	ag := New(Config{Tools: registry})
+	ag.SetHistory([]prompt.Message{
+		{Role: "assistant", Content: "Cloud candidate: cloud.agent.code-reviewer."},
+	})
+	selected := ag.selectToolInfos("yes install it")
+	systemPrompt, err := ag.buildSystemPromptForToolInfosWithPlan(selected, &CapabilityPlan{
+		TaskClass: CapabilityTaskSpecialized,
+		Route:     CapabilityRouteMainAgent,
+		Need:      "code review",
+	})
+	if err != nil {
+		t.Fatalf("buildSystemPromptForToolInfosWithPlan: %v", err)
+	}
+	if !strings.Contains(systemPrompt, "follow-up confirmation") || !strings.Contains(systemPrompt, "requires_confirmation") {
+		t.Fatalf("expected marketplace confirmation guidance, got %q", systemPrompt)
+	}
+}
+
+func TestSelectToolInfosWithPlanExposesLocalRoutes(t *testing.T) {
+	registry := tools.NewRegistry()
+	for _, name := range []string{"skill_release-notes", "delegate_task", "intent_route", "intent_list_capabilities", "clihub_exec", "clihub_catalog"} {
+		registry.RegisterTool(name, "tool "+name, map[string]any{}, nil)
+	}
+	ag := New(Config{Tools: registry})
+
+	skillPlan := &CapabilityPlan{
+		Route:        CapabilityRouteUseSkill,
+		TaskClass:    CapabilityTaskSpecialized,
+		LocalMatches: []CapabilityMatch{{Kind: "skill", Name: "release-notes", Score: 0.9}},
+	}
+	if selected := ag.selectToolInfosWithPlan("write release notes", skillPlan); !toolInfoListHas(selected, "skill_release-notes") {
+		t.Fatalf("expected matching skill tool, got %#v", selected)
+	}
+
+	agentPlan := &CapabilityPlan{Route: CapabilityRouteDelegateAgent, TaskClass: CapabilityTaskSpecialized}
+	if selected := ag.selectToolInfosWithPlan("review this pull request", agentPlan); !toolInfoListHas(selected, "delegate_task") {
+		t.Fatalf("expected delegate_task, got %#v", selected)
+	}
+
+	cliPlan := &CapabilityPlan{Route: CapabilityRouteUseCLI, TaskClass: CapabilityTaskLocalExecution}
+	selected := ag.selectToolInfosWithPlan("render the timeline", cliPlan)
+	for _, name := range []string{"intent_route", "intent_list_capabilities", "clihub_exec"} {
+		if !toolInfoListHas(selected, name) {
+			t.Fatalf("expected CLIHub tool %q, got %#v", name, selected)
+		}
+	}
+}
+
 func TestAgentRunUsesToolsForNaturalChineseCreateFolderRequest(t *testing.T) {
 	mem := memory.NewFileMemory(t.TempDir())
 	if err := mem.Init(); err != nil {
@@ -661,6 +839,100 @@ func TestAgentRunUsesToolsForNaturalChineseCreateFolderRequest(t *testing.T) {
 	got := strings.Join(names, ",")
 	if !strings.Contains(got, "run_command") || !strings.Contains(got, "write_file") || !strings.Contains(got, "list_directory") {
 		t.Fatalf("expected run path to pass core tool definitions, got %q", got)
+	}
+}
+
+func TestAgentRunPresearchesMarketplaceForSpecializedGap(t *testing.T) {
+	registry := tools.NewRegistry()
+	var searched bool
+	registry.RegisterTool("market_search_artifacts", "Search marketplace artifacts", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		searched = true
+		if input["query"] != "code review" || input["kind"] != "agent" {
+			t.Fatalf("unexpected market search input: %#v", input)
+		}
+		return `{
+			"route":{"action":"install_from_market","reason":"cloud candidate available"},
+			"local_count":0,
+			"cloud_count":1,
+			"cloud":[{"artifact_id":"cloud.agent.code-reviewer","kind":"agent","name":"Code Reviewer","risk_level":"medium","trust_level":"verified"}]
+		}`, nil
+	})
+	registry.RegisterTool("market_install_artifact", "Install marketplace artifact", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		t.Fatal("market install must not run during presearch")
+		return "", nil
+	})
+	registry.RegisterTool("market_bind_artifact", "Bind marketplace artifact", map[string]any{}, func(ctx context.Context, input map[string]any) (string, error) {
+		t.Fatal("market bind must not run during presearch")
+		return "", nil
+	})
+
+	llmStub := &stubAgentLLM{responses: []*llm.Response{{Content: "我找到了一个可选的 code review agent，需要你确认后再安装。"}}}
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		LLM:         llmStub,
+		Tools:       registry,
+	})
+
+	if _, err := ag.Run(context.Background(), "review this pull request for security and maintainability"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !searched {
+		t.Fatal("expected marketplace search to run before model turn")
+	}
+	if len(llmStub.messages) == 0 {
+		t.Fatal("expected model messages")
+	}
+	joined := ""
+	for _, msg := range llmStub.messages[0] {
+		joined += "\n" + msg.Content
+	}
+	if !strings.Contains(joined, "## Capability Planning Search") || !strings.Contains(joined, "cloud.agent.code-reviewer") {
+		t.Fatalf("expected compact market search context, got %q", joined)
+	}
+	for _, def := range llmStub.toolDefs[0] {
+		if def.Function.Name == "market_install_artifact" || def.Function.Name == "market_bind_artifact" {
+			t.Fatalf("install/bind should not be exposed before user confirmation, got %#v", llmStub.toolDefs[0])
+		}
+	}
+	activities := ag.GetLastToolActivities()
+	if len(activities) != 1 || activities[0].ToolName != "market_search_artifacts" || activities[0].Error != "" {
+		t.Fatalf("expected one successful market search activity, got %#v", activities)
+	}
+}
+
+func TestAgentRunExposesInstallToolOnMarketplaceConfirmationTurn(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.RegisterTool("market_install_artifact", "Install marketplace artifact", map[string]any{}, nil)
+	registry.RegisterTool("market_bind_artifact", "Bind marketplace artifact", map[string]any{}, nil)
+
+	llmStub := &stubAgentLLM{responses: []*llm.Response{{Content: "我会安装这个 artifact。"}}}
+	ag := New(Config{
+		Name:        "assistant",
+		Description: "General helper",
+		LLM:         llmStub,
+		Tools:       registry,
+	})
+	ag.SetHistory([]prompt.Message{
+		{Role: "user", Content: "review this pull request"},
+		{Role: "assistant", Content: "Cloud candidate: Code Reviewer (cloud.agent.code-reviewer). Install it?"},
+	})
+
+	if _, err := ag.Run(context.Background(), "yes, install it"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(llmStub.toolDefs) == 0 {
+		t.Fatal("expected tool definitions")
+	}
+	names := map[string]bool{}
+	for _, def := range llmStub.toolDefs[0] {
+		names[def.Function.Name] = true
+	}
+	if !names["market_install_artifact"] {
+		t.Fatalf("expected install tool on confirmation turn, got %#v", names)
+	}
+	if names["market_bind_artifact"] {
+		t.Fatalf("did not expect bind tool on install confirmation turn, got %#v", names)
 	}
 }
 

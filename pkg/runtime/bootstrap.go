@@ -347,6 +347,8 @@ func Bootstrap(opts BootstrapOptions) (*MainRuntime, error) {
 		Registry:         marketplaceRegistryClient(app.Config.Marketplace),
 		AutoInstallSkill: app.Config.Marketplace.AutoInstallSkill,
 		AuditLogger:      auditLogger,
+		AfterInstall:     app.IntegrateMarketReceiptAndRefresh,
+		AfterBind:        app.RefreshAfterMarketBinding,
 	})
 	sk.RegisterTools(registry, skills.ExecutionOptions{AllowExec: app.Config.Plugins.AllowExec, ExecTimeoutSeconds: app.Config.Plugins.ExecTimeoutSeconds})
 	app.Tools = registry

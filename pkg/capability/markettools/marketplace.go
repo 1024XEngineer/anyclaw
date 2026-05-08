@@ -16,6 +16,8 @@ type Options struct {
 	Registry         *marketregistry.Client
 	AutoInstallSkill bool
 	AuditLogger      tools.AuditLogger
+	AfterInstall     func(ctx context.Context, receipt *marketplace.InstallReceipt) error
+	AfterBind        func(ctx context.Context, binding *marketplace.Binding) error
 }
 
 func Register(registry *tools.Registry, opts Options) {
@@ -91,7 +93,7 @@ func Register(registry *tools.Registry, opts Options) {
 				if err := tools.RequestToolApproval(ctx, "market_bind_artifact", input); err != nil {
 					return "", err
 				}
-				return bindArtifact(opts, input)
+				return bindArtifact(ctx, opts, input)
 			})(ctx, input)
 		},
 	})
@@ -191,10 +193,17 @@ func installArtifact(ctx context.Context, opts Options, input map[string]any) (s
 		}
 	}
 	latest, _ := opts.Store.GetJob(job.ID)
+	if latest != nil && latest.State == marketplace.JobSucceeded && strings.TrimSpace(latest.ReceiptID) != "" && opts.AfterInstall != nil {
+		if receipt, receiptErr := opts.Store.GetReceipt(latest.ReceiptID); receiptErr == nil {
+			if hookErr := opts.AfterInstall(ctx, receipt); hookErr != nil {
+				return marshalJSON(map[string]any{"status": "installed", "job": latest, "reused": reused, "integration_error": hookErr.Error()})
+			}
+		}
+	}
 	return marshalJSON(map[string]any{"status": "installed", "job": latest, "reused": reused})
 }
 
-func bindArtifact(opts Options, input map[string]any) (string, error) {
+func bindArtifact(ctx context.Context, opts Options, input map[string]any) (string, error) {
 	artifactID := strings.TrimSpace(stringValue(input["artifact_id"]))
 	targetType := marketplace.NormalizeBindingTargetType(stringValue(input["target_type"]))
 	if artifactID == "" || targetType == "" {
@@ -207,6 +216,11 @@ func bindArtifact(opts Options, input map[string]any) (string, error) {
 	})
 	if err != nil {
 		return "", err
+	}
+	if opts.AfterBind != nil {
+		if err := opts.AfterBind(ctx, binding); err != nil {
+			return marshalJSON(map[string]any{"status": "bound", "binding": binding, "refresh_error": err.Error()})
+		}
 	}
 	_ = opts.Store.AppendAudit(marketplace.MarketAuditEvent{
 		Type:       "market.agent_bind.succeeded",

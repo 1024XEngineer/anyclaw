@@ -40,6 +40,9 @@ func (b *SystemPromptBuilder) Build(data PromptData) (string, error) {
 	if capabilities := b.buildCapabilities(data); capabilities != "" {
 		parts = append(parts, capabilities)
 	}
+	if capabilityPlan := b.buildCapabilityPlanning(data); capabilityPlan != "" {
+		parts = append(parts, capabilityPlan)
+	}
 	if operatingMode := b.buildOperatingMode(data); operatingMode != "" {
 		parts = append(parts, operatingMode)
 	}
@@ -122,6 +125,53 @@ func (b *SystemPromptBuilder) buildCapabilities(data PromptData) string {
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+func (b *SystemPromptBuilder) buildCapabilityPlanning(data PromptData) string {
+	plan := data.CapabilityPlan
+	if strings.TrimSpace(plan.TaskClass) == "" || strings.TrimSpace(plan.Route) == "" {
+		return ""
+	}
+
+	lines := []string{
+		"## Capability Planning",
+		fmt.Sprintf("- Task class: %s.", plan.TaskClass),
+		fmt.Sprintf("- Planned route: %s.", plan.Route),
+	}
+	if strings.TrimSpace(plan.Need) != "" {
+		lines = append(lines, "- Capability need: "+trimPromptLine(plan.Need, 180)+".")
+	}
+	if strings.TrimSpace(plan.KindHint) != "" {
+		lines = append(lines, "- Preferred capability kind: "+trimPromptLine(plan.KindHint, 80)+".")
+	}
+	if strings.TrimSpace(plan.TopLocalMatch.Name) != "" {
+		match := plan.TopLocalMatch
+		matchLine := fmt.Sprintf("- Best local match: %s/%s", trimPromptLine(match.Kind, 60), trimPromptLine(match.Name, 100))
+		if match.Score > 0 {
+			matchLine += fmt.Sprintf(" (score %.2f)", match.Score)
+		}
+		if strings.TrimSpace(match.Reason) != "" {
+			matchLine += ": " + trimPromptLine(match.Reason, 180)
+		}
+		lines = append(lines, matchLine+".")
+	}
+	if strings.TrimSpace(plan.Reason) != "" {
+		lines = append(lines, "- Reason: "+trimPromptLine(plan.Reason, 220)+".")
+	}
+	if plan.ShouldExposeMarketSearch {
+		lines = append(lines,
+			"- If local tools and skills are insufficient, use market_search_artifacts to search installed and cloud marketplace artifacts for this missing capability.",
+			"- Do not call market_install_artifact or market_bind_artifact unless the user explicitly confirms the proposed artifact and any required risk acknowledgement.",
+		)
+	}
+	if hasTool(data.Tools, "market_install_artifact") || hasTool(data.Tools, "market_bind_artifact") {
+		lines = append(lines,
+			"- Marketplace install/bind tools are visible because this turn appears to be a follow-up confirmation. Use the artifact id from the conversation or ask for clarification if multiple candidates are possible.",
+			"- Call market_install_artifact only after explicit user confirmation. If it returns requires_confirmation, explain the policy decision and ask for the missing confirmation or risk acknowledgement instead of retrying blindly.",
+			"- Call market_bind_artifact only after an artifact is installed and the user has confirmed where it should be bound. After install or bind succeeds, continue the original task using the refreshed capability when it is available.",
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (b *SystemPromptBuilder) buildClawBridge(data PromptData) string {
@@ -477,11 +527,29 @@ type PromptData struct {
 	Skills          []string
 	SkillPrompts    []string
 	AvailableSkills []AvailableSkill
+	CapabilityPlan  CapabilityPlanInfo
 	Tools           []ToolInfo
 	CLIHub          *CLIHubInfo
 	ClawBridge      *ClawBridgeInfo
 	WorkspaceFiles  []WorkspaceFile
 	History         []Message
+}
+
+type CapabilityPlanInfo struct {
+	TaskClass                string
+	Route                    string
+	Need                     string
+	KindHint                 string
+	TopLocalMatch            CapabilityMatchInfo
+	ShouldExposeMarketSearch bool
+	Reason                   string
+}
+
+type CapabilityMatchInfo struct {
+	Kind   string
+	Name   string
+	Score  float64
+	Reason string
 }
 
 type AvailableSkill struct {
@@ -587,6 +655,17 @@ func formatToolNameList(tools []ToolInfo, limit int) string {
 		names = append(names[:limit], fmt.Sprintf("and %d more", remaining))
 	}
 	return strings.Join(names, ", ")
+}
+
+func trimPromptLine(value string, limit int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	if limit <= 1 {
+		return value[:limit]
+	}
+	return value[:limit-1] + "..."
 }
 
 func hasTool(tools []ToolInfo, name string) bool {

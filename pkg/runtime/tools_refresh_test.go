@@ -1,7 +1,14 @@
 package runtime
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +18,7 @@ import (
 	"github.com/1024XEngineer/anyclaw/pkg/capability/skills"
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
 	"github.com/1024XEngineer/anyclaw/pkg/config"
+	"github.com/1024XEngineer/anyclaw/pkg/marketplace"
 	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
 )
 
@@ -96,6 +104,51 @@ func TestRefreshToolRegistrySynchronizesMainAgentTools(t *testing.T) {
 	}
 }
 
+func TestMarketInstallToolIntegratesSkillAndRefreshesRuntime(t *testing.T) {
+	tempDir := t.TempDir()
+	archive := runtimeMarketArchive(t, "cloud.skill.release-notes", marketplace.ArtifactKindSkill, "1.0.0")
+	server := runtimeMarketRegistryServer(t, "cloud.skill.release-notes", "skill", archive)
+	defer server.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Agent.WorkDir = filepath.Join(tempDir, ".anyclaw")
+	cfg.Agent.WorkingDir = tempDir
+	cfg.Skills.Dir = filepath.Join(tempDir, "skills")
+	cfg.Plugins.Dir = filepath.Join(tempDir, "plugins")
+	cfg.Security.AuditLog = filepath.Join(tempDir, "audit.jsonl")
+	cfg.Marketplace.RegistryEndpoint = server.URL
+	cfg.Marketplace.AutoInstallSkill = true
+	cfg.Marketplace.DisableRemote = false
+	cfg.Marketplace.ProtocolVersion = "v1"
+	cfg.Marketplace.RequestTimeoutSeconds = 5
+	cfg.Marketplace.DownloadTimeoutSeconds = 5
+
+	rt, err := NewMainRuntimeFromConfig(filepath.Join(tempDir, "anyclaw.json"), cfg)
+	if err != nil {
+		t.Fatalf("NewMainRuntimeFromConfig: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+	if hasAgentTool(rt.Agent, "skill_cloud.skill.release-notes") {
+		t.Fatal("did not expect market skill tool before install")
+	}
+
+	out, err := rt.CallTool(tools.WithToolCaller(context.Background(), tools.ToolCaller{Role: tools.ToolCallerRoleMainAgent}), "market_install_artifact", map[string]any{
+		"artifact_id": "cloud.skill.release-notes",
+	})
+	if err != nil {
+		t.Fatalf("market_install_artifact: %v", err)
+	}
+	if !strings.Contains(out, `"status": "installed"`) {
+		t.Fatalf("install output = %s, want installed", out)
+	}
+	if !hasAgentTool(rt.Agent, "skill_cloud.skill.release-notes") {
+		t.Fatalf("expected installed skill tool after integration refresh, tools=%#v", rt.Agent.ListTools())
+	}
+	if !hasAgentTool(rt.Agent, "market_search_artifacts") {
+		t.Fatal("expected marketplace tools to remain registered after refresh")
+	}
+}
+
 type refreshToolLLM struct {
 	toolName string
 	calls    int
@@ -140,4 +193,81 @@ func hasAgentTool(ag *agent.Agent, name string) bool {
 		}
 	}
 	return false
+}
+
+func runtimeMarketRegistryServer(t *testing.T, id, kind string, archive []byte) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/resolve"):
+			writeRuntimeMarketJSON(t, w, map[string]any{"data": map[string]any{
+				"artifact_id":     id,
+				"version":         "1.0.0",
+				"download_url":    "http://" + r.Host + "/v1/download/" + id + "/1.0.0",
+				"checksum_sha256": runtimeMarketSHA256(archive),
+				"size_bytes":      len(archive),
+				"risk_level":      "low",
+				"trust_level":     "verified",
+				"permissions":     []string{"fs.read"},
+				"kind":            kind,
+				"name":            id,
+			}})
+		case strings.Contains(r.URL.Path, "/v1/download/"):
+			_, _ = w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+func runtimeMarketArchive(t *testing.T, id string, kind marketplace.ArtifactKind, version string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	writeZipJSONRuntimeMarket(t, writer, "anyclaw.artifact.json", map[string]any{
+		"id":          id,
+		"kind":        string(kind),
+		"name":        id,
+		"summary":     "Release notes helper",
+		"description": "Draft release notes.",
+		"version":     version,
+	})
+	writeZipTextRuntimeMarket(t, writer, "skill/SKILL.md", "# Release Notes\n\nDraft release notes.\n")
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func writeZipJSONRuntimeMarket(t *testing.T, writer *zip.Writer, name string, value any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal zip json: %v", err)
+	}
+	writeZipTextRuntimeMarket(t, writer, name, string(data))
+}
+
+func writeZipTextRuntimeMarket(t *testing.T, writer *zip.Writer, name string, value string) {
+	t.Helper()
+	file, err := writer.Create(name)
+	if err != nil {
+		t.Fatalf("create zip entry %s: %v", name, err)
+	}
+	if _, err := file.Write([]byte(value)); err != nil {
+		t.Fatalf("write zip entry %s: %v", name, err)
+	}
+}
+
+func writeRuntimeMarketJSON(t *testing.T, w http.ResponseWriter, value any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		t.Fatalf("encode json: %v", err)
+	}
+}
+
+func runtimeMarketSHA256(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }

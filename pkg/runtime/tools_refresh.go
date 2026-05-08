@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/1024XEngineer/anyclaw/pkg/capability/markettools"
 	"github.com/1024XEngineer/anyclaw/pkg/capability/skills"
 	"github.com/1024XEngineer/anyclaw/pkg/capability/tools"
+	"github.com/1024XEngineer/anyclaw/pkg/marketplace"
 	"github.com/1024XEngineer/anyclaw/pkg/state/memory"
 )
 
@@ -33,6 +35,15 @@ func (a *MainRuntime) RefreshToolRegistry() error {
 		}
 	}
 	memoryWorkDir := memory.CodexMemoryWorkspaceDir(a.WorkDir, workingDir)
+
+	refreshedSkills, _, err := reloadRuntimeSkills(a.Config)
+	if err != nil {
+		return fmt.Errorf("reload skills: %w", err)
+	}
+	a.Skills = refreshedSkills
+	if a.Agent != nil {
+		a.Agent.SetSkills(refreshedSkills)
+	}
 
 	registry := tools.NewRegistry()
 	sandboxManager := tools.NewSandboxManager(a.Config.Sandbox, workingDir)
@@ -92,6 +103,14 @@ func (a *MainRuntime) RefreshToolRegistry() error {
 		QMDClient:      qmdClient,
 	}
 	tools.RegisterBuiltins(registry, builtinOpts)
+	markettools.Register(registry, markettools.Options{
+		Store:            marketplace.NewStore(workingDir),
+		Registry:         marketplaceRegistryClient(a.Config.Marketplace),
+		AutoInstallSkill: a.Config.Marketplace.AutoInstallSkill,
+		AuditLogger:      auditLogger,
+		AfterInstall:     a.IntegrateMarketReceiptAndRefresh,
+		AfterBind:        a.RefreshAfterMarketBinding,
+	})
 	if a.Skills != nil {
 		a.Skills.RegisterTools(registry, skills.ExecutionOptions{AllowExec: a.Config.Plugins.AllowExec, ExecTimeoutSeconds: a.Config.Plugins.ExecTimeoutSeconds})
 	}
