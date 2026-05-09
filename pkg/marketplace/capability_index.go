@@ -6,16 +6,23 @@ func BuildCapabilityIndex(items []Artifact) []CapabilityIndexItem {
 	out := make([]CapabilityIndexItem, 0, len(items))
 	for _, item := range items {
 		out = append(out, CapabilityIndexItem{
-			ArtifactID:   item.ID,
-			Kind:         item.Kind,
-			Name:         firstNonEmpty(item.DisplayName, item.Name),
-			Source:       item.Source,
-			Status:       string(item.Status),
-			Capabilities: artifactCapabilityTerms(item),
-			Permissions:  append([]string(nil), item.Permissions...),
-			RiskLevel:    item.RiskLevel,
-			TrustLevel:   item.TrustLevel,
-			Score:        item.Score,
+			ID:            item.ID,
+			ArtifactID:    item.ID,
+			Kind:          item.Kind,
+			Name:          firstNonEmpty(item.DisplayName, item.Name),
+			Description:   item.Description,
+			Source:        item.Source,
+			Status:        string(item.Status),
+			Capabilities:  artifactCapabilityTerms(item),
+			Permissions:   append([]string(nil), item.Permissions...),
+			RiskLevel:     item.RiskLevel,
+			TrustLevel:    item.TrustLevel,
+			Compatibility: item.Compatibility,
+			Installed:     item.Installed,
+			Score:         item.Score,
+			FinalScore:    item.FinalScore,
+			VectorScore:   item.VectorScore,
+			MatchSignals:  append([]string(nil), item.MatchSignals...),
 		})
 	}
 	return out

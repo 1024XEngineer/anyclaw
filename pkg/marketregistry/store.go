@@ -29,7 +29,14 @@ var (
 )
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	vector *vectorRuntime
+}
+
+type searchExecution struct {
+	items []searchCandidate
+	total int
+	meta  RetrievalMeta
 }
 
 func OpenStore(ctx context.Context, dataDir string) (*Store, error) {
@@ -75,6 +82,13 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func (s *Store) SetVectorRuntime(runtime *vectorRuntime) {
+	if s == nil {
+		return
+	}
+	s.vector = runtime
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -150,6 +164,48 @@ func (s *Store) migrate(ctx context.Context) error {
 			detail_json TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS artifact_embeddings (
+			artifact_id TEXT PRIMARY KEY,
+			model TEXT NOT NULL DEFAULT '',
+			vector_json TEXT NOT NULL DEFAULT '[]',
+			vector_dim INTEGER NOT NULL DEFAULT 0,
+			embedding_text TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			error TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS artifact_embedding_jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			artifact_id TEXT NOT NULL,
+			job_type TEXT NOT NULL,
+			status TEXT NOT NULL,
+			attempt_count INTEGER NOT NULL DEFAULT 0,
+			error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
+			artifact_id UNINDEXED,
+			name,
+			summary,
+			description_md,
+			publisher,
+			kind,
+			tags_text,
+			hit_signals_text,
+			use_case_text,
+			search_text,
+			tokenize = 'unicode61'
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_kind ON artifacts(kind)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_source ON artifacts(source)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_risk ON artifacts(risk_level)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_trust ON artifacts(trust_level)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_updated ON artifacts(updated_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_quarantine_artifact_id ON quarantine(artifact_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_embedding_jobs_unique ON artifact_embedding_jobs(artifact_id, job_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifact_embedding_jobs_status ON artifact_embedding_jobs(status, updated_at, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_artifact_embeddings_status ON artifact_embeddings(status, updated_at)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -157,7 +213,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE artifact_versions ADD COLUMN signature TEXT NOT NULL DEFAULT ''`)
-	return nil
+	return s.rebuildArtifactSearchIndex(ctx)
 }
 
 func (s *Store) CountArtifacts(ctx context.Context) (int, error) {
@@ -184,6 +240,15 @@ func (s *Store) DeleteArtifact(ctx context.Context, artifactID string) (Artifact
 		}
 	}()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM artifact_versions WHERE artifact_id = ?`, artifactID); err != nil {
+		return ArtifactDeletion{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM artifact_embedding_jobs WHERE artifact_id = ?`, artifactID); err != nil {
+		return ArtifactDeletion{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM artifact_embeddings WHERE artifact_id = ?`, artifactID); err != nil {
+		return ArtifactDeletion{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM artifacts_fts WHERE artifact_id = ?`, artifactID); err != nil {
 		return ArtifactDeletion{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM quarantine WHERE artifact_id = ?`, artifactID); err != nil {
@@ -348,58 +413,32 @@ func (s *Store) UpsertArtifact(ctx context.Context, artifact Artifact, versions 
 			return err
 		}
 	}
+	if err := s.upsertArtifactSearchDocTx(ctx, tx, artifact); err != nil {
+		return err
+	}
+	if err := s.queueArtifactEmbeddingJobTx(ctx, tx, artifact); err != nil {
+		return err
+	}
 	err = tx.Commit()
 	return err
 }
 
 func (s *Store) List(ctx context.Context, filter SearchFilter) (ListResult, error) {
-	if filter.Limit <= 0 {
-		filter.Limit = 50
-	}
-	if filter.Offset < 0 {
-		filter.Offset = 0
-	}
-
-	rows, err := s.db.QueryContext(ctx, `SELECT
-		id, kind, name, summary, description_md, latest_version, source, publisher,
-		risk_level, trust_level, permissions_json, compatibility_json, dependencies_json,
-		icon_url, tags_json, hit_signals_json, score, updated_at, manifest_summary_json
-		FROM artifacts`)
+	normalized := normalizeSearchFilter(filter)
+	exec, err := s.search(ctx, normalized)
 	if err != nil {
 		return ListResult{}, err
 	}
-	defer rows.Close()
-
-	var all []Artifact
-	for rows.Next() {
-		artifact, err := scanArtifact(rows)
-		if err != nil {
-			return ListResult{}, err
-		}
-		if matchesArtifact(artifact, filter) {
-			all = append(all, artifact)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return ListResult{}, err
-	}
-
-	sortArtifacts(all, filter.Sort)
-
-	total := len(all)
-	if filter.Offset >= len(all) {
-		all = nil
-	} else {
-		all = all[filter.Offset:]
-		if len(all) > filter.Limit {
-			all = all[:filter.Limit]
-		}
+	items := make([]Artifact, 0, len(exec.items))
+	for _, candidate := range exec.items {
+		items = append(items, candidate.Artifact)
 	}
 	return ListResult{
-		Items:  all,
-		Total:  total,
-		Limit:  filter.Limit,
-		Offset: filter.Offset,
+		Items:         items,
+		Total:         exec.total,
+		Limit:         normalized.Limit,
+		Offset:        normalized.Offset,
+		RetrievalMeta: cloneRetrievalMeta(exec.meta),
 	}, nil
 }
 
@@ -760,50 +799,6 @@ func scanVersion(row scanner) (ArtifactVersion, error) {
 	return version, nil
 }
 
-func matchesArtifact(artifact Artifact, filter SearchFilter) bool {
-	if filter.Kind != "" && artifact.Kind != filter.Kind {
-		return false
-	}
-	if filter.Source != "" && !strings.EqualFold(artifact.Source, filter.Source) {
-		return false
-	}
-	if filter.Risk != "" && !strings.EqualFold(artifact.RiskLevel, filter.Risk) {
-		return false
-	}
-	if filter.Trust != "" && !strings.EqualFold(artifact.TrustLevel, filter.Trust) {
-		return false
-	}
-	if filter.Tag != "" && !containsFold(artifact.Tags, filter.Tag) {
-		return false
-	}
-	if filter.Permission != "" && !containsFold(artifact.Permissions, filter.Permission) {
-		return false
-	}
-	if filter.Publisher != "" && !strings.Contains(strings.ToLower(artifact.Publisher), strings.ToLower(strings.TrimSpace(filter.Publisher))) {
-		return false
-	}
-	if filter.OS != "" && len(artifact.Compatibility.OS) > 0 && !containsFold(artifact.Compatibility.OS, filter.OS) {
-		return false
-	}
-	if filter.Arch != "" && len(artifact.Compatibility.Arch) > 0 && !containsFold(artifact.Compatibility.Arch, filter.Arch) {
-		return false
-	}
-	query := strings.ToLower(strings.TrimSpace(filter.Query))
-	if query == "" {
-		return true
-	}
-	fields := []string{
-		artifact.ID,
-		artifact.Name,
-		artifact.Summary,
-		artifact.DescriptionMD,
-		artifact.Publisher,
-		strings.Join(artifact.Tags, " "),
-		strings.Join(artifact.HitSignals, " "),
-	}
-	return strings.Contains(strings.ToLower(strings.Join(fields, " ")), query)
-}
-
 func sortArtifacts(items []Artifact, mode string) {
 	sortMode := strings.ToLower(strings.TrimSpace(mode))
 	sort.SliceStable(items, func(i, j int) bool {
@@ -821,15 +816,367 @@ func sortArtifacts(items []Artifact, mode string) {
 			}
 			return left < right
 		default:
-			if items[i].Score == items[j].Score {
+			leftScore := scoreValue(items[i])
+			rightScore := scoreValue(items[j])
+			if leftScore == rightScore {
 				if items[i].UpdatedAt == items[j].UpdatedAt {
 					return fallbackArtifactLess(items[i], items[j])
 				}
 				return items[i].UpdatedAt > items[j].UpdatedAt
 			}
-			return items[i].Score > items[j].Score
+			return leftScore > rightScore
 		}
 	})
+}
+
+func (s *Store) search(ctx context.Context, filter SearchFilter) (searchExecution, error) {
+	candidates, total, err := s.searchCandidates(ctx, filter)
+	if err != nil {
+		return searchExecution{}, err
+	}
+	meta := RetrievalMeta{
+		SearchMode:    resolvedSearchMode(filter, false),
+		VectorApplied: false,
+		CandidateCounts: &CandidateCounts{
+			Lexical: total,
+			Vector:  0,
+			Merged:  total,
+		},
+	}
+	if shouldAttemptHybrid(filter) {
+		merged, mergedTotal, hybridMeta := s.searchHybrid(ctx, filter, candidates, total)
+		if hybridMeta.VectorApplied {
+			candidates = merged
+			total = mergedTotal
+			meta = hybridMeta
+		} else {
+			meta = hybridMeta
+		}
+	}
+	return searchExecution{
+		items: paginateCandidates(candidates, filter.Offset, filter.Limit),
+		total: total,
+		meta:  meta,
+	}, nil
+}
+
+func (s *Store) searchCandidates(ctx context.Context, filter SearchFilter) ([]searchCandidate, int, error) {
+	if strings.TrimSpace(filter.Query) == "" {
+		return s.listStructuredCandidates(ctx, filter)
+	}
+	return s.listLexicalCandidates(ctx, filter)
+}
+
+func (s *Store) listStructuredCandidates(ctx context.Context, filter SearchFilter) ([]searchCandidate, int, error) {
+	where, args := appendStructuredFilterClauses(nil, nil, filter)
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = " WHERE " + strings.Join(where, " AND ")
+	}
+	countQuery := `SELECT COUNT(*) FROM artifacts a` + whereSQL
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 || filter.Offset >= total {
+		return nil, total, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		a.id, a.kind, a.name, a.summary, a.description_md, a.latest_version, a.source, a.publisher,
+		a.risk_level, a.trust_level, a.permissions_json, a.compatibility_json, a.dependencies_json,
+		a.icon_url, a.tags_json, a.hit_signals_json, a.score, a.updated_at, a.manifest_summary_json
+		FROM artifacts a`+whereSQL, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	candidates := make([]searchCandidate, 0, total)
+	for rows.Next() {
+		artifact, err := scanArtifact(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		candidate := searchCandidate{Artifact: artifact}
+		applySearchScores(&candidate, filter)
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	sortSearchCandidates(candidates, filter.Sort)
+	return candidates, total, nil
+}
+
+func (s *Store) listLexicalCandidates(ctx context.Context, filter SearchFilter) ([]searchCandidate, int, error) {
+	matchQuery := buildFTSQuery(filter.Query)
+	if matchQuery == "" {
+		return s.listStructuredCandidates(ctx, filter)
+	}
+	where, args := appendStructuredFilterClauses([]string{`artifacts_fts MATCH ?`}, []any{matchQuery}, filter)
+	whereSQL := " WHERE " + strings.Join(where, " AND ")
+	countQuery := `SELECT COUNT(*) FROM artifacts_fts JOIN artifacts a ON a.id = artifacts_fts.artifact_id` + whereSQL
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if total == 0 || filter.Offset >= total {
+		return nil, total, nil
+	}
+
+	candidateLimit := filter.Offset + filter.Limit*4
+	if candidateLimit < filter.Offset+filter.Limit {
+		candidateLimit = filter.Offset + filter.Limit
+	}
+	if candidateLimit < filter.Limit*2 {
+		candidateLimit = filter.Limit * 2
+	}
+	if candidateLimit < defaultSearchCandidateCap/2 {
+		candidateLimit = defaultSearchCandidateCap / 2
+	}
+	if candidateLimit > defaultSearchCandidateCap {
+		candidateLimit = defaultSearchCandidateCap
+	}
+
+	query := `SELECT
+		a.id, a.kind, a.name, a.summary, a.description_md, a.latest_version, a.source, a.publisher,
+		a.risk_level, a.trust_level, a.permissions_json, a.compatibility_json, a.dependencies_json,
+		a.icon_url, a.tags_json, a.hit_signals_json, a.score, a.updated_at, a.manifest_summary_json,
+		bm25(artifacts_fts) AS lexical_rank
+		FROM artifacts_fts
+		JOIN artifacts a ON a.id = artifacts_fts.artifact_id` + whereSQL + `
+		ORDER BY bm25(artifacts_fts), a.updated_at DESC
+		LIMIT ?`
+	argsWithLimit := append(append([]any(nil), args...), candidateLimit)
+	rows, err := s.db.QueryContext(ctx, query, argsWithLimit...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	candidates := make([]searchCandidate, 0, candidateLimit)
+	for rows.Next() {
+		artifact, rank, err := scanArtifactWithLexicalRank(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		candidate := searchCandidate{Artifact: artifact, lexicalRank: rank}
+		applySearchScores(&candidate, filter)
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	sortSearchCandidates(candidates, filter.Sort)
+	return candidates, total, nil
+}
+
+func paginateCandidates(items []searchCandidate, offset int, limit int) []searchCandidate {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+	if offset >= len(items) {
+		return nil
+	}
+	items = items[offset:]
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+func sortSearchCandidates(items []searchCandidate, mode string) {
+	sort.SliceStable(items, func(i, j int) bool {
+		switch strings.ToLower(strings.TrimSpace(mode)) {
+		case "updated", "updated_desc":
+			if items[i].UpdatedAt == items[j].UpdatedAt {
+				return fallbackArtifactLess(items[i].Artifact, items[j].Artifact)
+			}
+			return items[i].UpdatedAt > items[j].UpdatedAt
+		case "name", "name_asc":
+			left := strings.ToLower(items[i].Name)
+			right := strings.ToLower(items[j].Name)
+			if left == right {
+				return fallbackArtifactLess(items[i].Artifact, items[j].Artifact)
+			}
+			return left < right
+		default:
+			if items[i].FinalScore == items[j].FinalScore {
+				if items[i].lexicalRank == items[j].lexicalRank {
+					return fallbackArtifactLess(items[i].Artifact, items[j].Artifact)
+				}
+				return items[i].lexicalRank < items[j].lexicalRank
+			}
+			return items[i].FinalScore > items[j].FinalScore
+		}
+	})
+}
+
+func normalizeSearchFilter(filter SearchFilter) SearchFilter {
+	if filter.Limit <= 0 {
+		filter.Limit = defaultSearchLimit
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+	filter.Query = strings.TrimSpace(filter.Query)
+	switch filter.SearchMode {
+	case SearchModeAuto, SearchModeLexical, SearchModeHybrid:
+	default:
+		filter.SearchMode = SearchModeAuto
+	}
+	return filter
+}
+
+func resolvedSearchMode(filter SearchFilter, vectorApplied bool) SearchMode {
+	if strings.TrimSpace(filter.Query) == "" {
+		return SearchModeLexical
+	}
+	switch filter.SearchMode {
+	case SearchModeLexical:
+		return SearchModeLexical
+	case SearchModeAuto, SearchModeHybrid:
+		if vectorApplied {
+			return SearchModeHybrid
+		}
+		return SearchModeHybrid
+	default:
+		return SearchModeLexical
+	}
+}
+
+func shouldAttemptHybrid(filter SearchFilter) bool {
+	if strings.TrimSpace(filter.Query) == "" {
+		return false
+	}
+	return filter.SearchMode == SearchModeAuto || filter.SearchMode == SearchModeHybrid
+}
+
+func cloneRetrievalMeta(meta RetrievalMeta) *RetrievalMeta {
+	counts := meta.CandidateCounts
+	if counts != nil {
+		copyCounts := *counts
+		counts = &copyCounts
+	}
+	return &RetrievalMeta{
+		SearchMode:           meta.SearchMode,
+		VectorApplied:        meta.VectorApplied,
+		VectorFallbackReason: meta.VectorFallbackReason,
+		CandidateCounts:      counts,
+	}
+}
+
+func scoreValue(item Artifact) float64 {
+	if item.FinalScore > 0 {
+		return item.FinalScore
+	}
+	if item.Score > 0 {
+		return item.Score
+	}
+	return item.LexicalScore
+}
+
+func scanArtifactWithLexicalRank(row scanner) (Artifact, float64, error) {
+	var artifact Artifact
+	var permissions, compatibility, dependencies, tags, hitSignals, manifestSummary string
+	var lexicalRank float64
+	err := row.Scan(
+		&artifact.ID, &artifact.Kind, &artifact.Name, &artifact.Summary,
+		&artifact.DescriptionMD, &artifact.LatestVersion, &artifact.Source,
+		&artifact.Publisher, &artifact.RiskLevel, &artifact.TrustLevel,
+		&permissions, &compatibility, &dependencies, &artifact.IconURL,
+		&tags, &hitSignals, &artifact.Score, &artifact.UpdatedAt,
+		&manifestSummary, &lexicalRank,
+	)
+	if err != nil {
+		return Artifact{}, 0, err
+	}
+	artifact.Version = artifact.LatestVersion
+	if err := decodeJSON(permissions, &artifact.Permissions); err != nil {
+		return Artifact{}, 0, err
+	}
+	if err := decodeJSON(compatibility, &artifact.Compatibility); err != nil {
+		return Artifact{}, 0, err
+	}
+	if err := decodeJSON(dependencies, &artifact.Dependencies); err != nil {
+		return Artifact{}, 0, err
+	}
+	if err := decodeJSON(tags, &artifact.Tags); err != nil {
+		return Artifact{}, 0, err
+	}
+	if err := decodeJSON(hitSignals, &artifact.HitSignals); err != nil {
+		return Artifact{}, 0, err
+	}
+	if err := decodeJSON(manifestSummary, &artifact.ManifestSummary); err != nil {
+		return Artifact{}, 0, err
+	}
+	return artifact, lexicalRank, nil
+}
+
+func (s *Store) upsertArtifactSearchDocTx(ctx context.Context, tx *sql.Tx, artifact Artifact) error {
+	doc := buildArtifactSearchDocument(artifact)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM artifacts_fts WHERE artifact_id = ?`, artifact.ID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO artifacts_fts (
+		artifact_id, name, summary, description_md, publisher, kind,
+		tags_text, hit_signals_text, use_case_text, search_text
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		doc["artifact_id"], doc["name"], doc["summary"], doc["description_md"],
+		doc["publisher"], doc["kind"], doc["tags_text"], doc["hit_signals_text"],
+		doc["use_case_text"], doc["search_text"],
+	)
+	return err
+}
+
+func (s *Store) rebuildArtifactSearchIndex(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		id, kind, name, summary, description_md, latest_version, source, publisher,
+		risk_level, trust_level, permissions_json, compatibility_json, dependencies_json,
+		icon_url, tags_json, hit_signals_json, score, updated_at, manifest_summary_json
+		FROM artifacts`)
+	if err != nil {
+		return err
+	}
+	artifacts := make([]Artifact, 0, 64)
+	for rows.Next() {
+		artifact, scanErr := scanArtifact(rows)
+		if scanErr != nil {
+			_ = rows.Close()
+			return scanErr
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	if _, err = tx.ExecContext(ctx, `DELETE FROM artifacts_fts`); err != nil {
+		return err
+	}
+	for _, artifact := range artifacts {
+		if err = s.upsertArtifactSearchDocTx(ctx, tx, artifact); err != nil {
+			return err
+		}
+	}
+	err = tx.Commit()
+	return err
 }
 
 func fallbackArtifactLess(left, right Artifact) bool {

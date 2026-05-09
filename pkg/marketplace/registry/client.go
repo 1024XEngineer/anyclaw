@@ -110,6 +110,9 @@ func (c *Client) List(ctx context.Context, filter marketplace.Filter) (marketpla
 	if filter.Query != "" {
 		values.Set("q", filter.Query)
 	}
+	if filter.SearchMode != "" {
+		values.Set("search_mode", string(filter.SearchMode))
+	}
 	if filter.Risk != "" {
 		values.Set("risk", filter.Risk)
 	}
@@ -149,10 +152,11 @@ func (c *Client) List(ctx context.Context, filter marketplace.Filter) (marketpla
 		items = append(items, convertArtifact(item))
 	}
 	return marketplace.ListResult{
-		Items:  items,
-		Total:  envelope.Data.Total,
-		Limit:  envelope.Data.Limit,
-		Offset: envelope.Data.Offset,
+		Items:         items,
+		Total:         envelope.Data.Total,
+		Limit:         envelope.Data.Limit,
+		Offset:        envelope.Data.Offset,
+		RetrievalMeta: firstRetrievalMeta(envelope.Data.RetrievalMeta, &envelope.Meta),
 	}, nil
 }
 
@@ -380,4 +384,14 @@ type remoteStatusError struct {
 
 func (e remoteStatusError) Error() string {
 	return fmt.Sprintf("marketplace registry returned HTTP %d", e.StatusCode)
+}
+
+func firstRetrievalMeta(values ...*remoteRetrievalMeta) *marketplace.RetrievalMeta {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		return convertRetrievalMeta(value)
+	}
+	return nil
 }

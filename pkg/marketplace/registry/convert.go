@@ -30,34 +30,42 @@ func convertArtifact(item remoteArtifact) marketplace.Artifact {
 	description := firstNonEmpty(item.DescriptionMD, item.Summary)
 	version := firstNonEmpty(item.Version, item.LatestVersion)
 	return marketplace.Artifact{
-		ID:            item.ID,
-		Kind:          item.Kind,
-		Name:          item.Name,
-		DisplayName:   item.Name,
-		Description:   description,
-		Version:       version,
-		LatestVersion: item.LatestVersion,
-		Source:        marketplace.SourceCloud,
-		SourceID:      firstNonEmpty(item.Source, "registry"),
-		Status:        marketplace.StatusAvailable,
-		Installed:     false,
-		Bound:         false,
-		Active:        false,
-		Enabled:       true,
-		Owner:         item.Publisher,
-		Category:      string(item.Kind),
-		Tags:          append([]string(nil), item.Tags...),
-		Permissions:   append([]string(nil), item.Permissions...),
-		RiskLevel:     item.RiskLevel,
-		TrustLevel:    item.TrustLevel,
-		Verified:      strings.EqualFold(item.TrustLevel, "verified"),
-		Compatibility: convertCompatibility(item.Compatibility),
-		Dependencies:  convertDependencies(item.Dependencies),
-		HitSignals:    append([]string(nil), item.HitSignals...),
-		Score:         item.Score,
-		TargetHints:   targetHintsForKind(item.Kind),
-		Capabilities:  appendUnique(nil, append(append(item.Tags, item.HitSignals...), string(item.Kind))...),
-		Metadata:      metadata,
+		ID:             item.ID,
+		Kind:           item.Kind,
+		Name:           item.Name,
+		DisplayName:    item.Name,
+		Description:    description,
+		Version:        version,
+		LatestVersion:  item.LatestVersion,
+		Source:         marketplace.SourceCloud,
+		SourceID:       firstNonEmpty(item.Source, "registry"),
+		Status:         marketplace.StatusAvailable,
+		Installed:      false,
+		Bound:          false,
+		Active:         false,
+		Enabled:        true,
+		Owner:          item.Publisher,
+		Category:       string(item.Kind),
+		Tags:           append([]string(nil), item.Tags...),
+		Permissions:    append([]string(nil), item.Permissions...),
+		RiskLevel:      item.RiskLevel,
+		TrustLevel:     item.TrustLevel,
+		Verified:       strings.EqualFold(item.TrustLevel, "verified"),
+		Compatibility:  convertCompatibility(item.Compatibility),
+		Dependencies:   convertDependencies(item.Dependencies),
+		HitSignals:     append([]string(nil), item.HitSignals...),
+		Score:          item.Score,
+		LexicalScore:   item.LexicalScore,
+		VectorScore:    item.VectorScore,
+		TagScore:       item.TagScore,
+		TrustScore:     item.TrustScore,
+		FreshnessScore: item.FreshnessScore,
+		RiskPenalty:    item.RiskPenalty,
+		FinalScore:     item.FinalScore,
+		MatchSignals:   append([]string(nil), item.MatchSignals...),
+		TargetHints:    targetHintsForKind(item.Kind),
+		Capabilities:   appendUnique(nil, append(append(item.Tags, item.HitSignals...), string(item.Kind))...),
+		Metadata:       metadata,
 	}
 }
 
@@ -131,4 +139,24 @@ func appendUnique(base []string, values ...string) []string {
 		filtered = append(filtered, trimmed)
 	}
 	return filtered
+}
+
+func convertRetrievalMeta(meta *remoteRetrievalMeta) *marketplace.RetrievalMeta {
+	if meta == nil {
+		return nil
+	}
+	var counts *marketplace.CandidateCounts
+	if meta.CandidateCounts != nil {
+		counts = &marketplace.CandidateCounts{
+			Lexical: meta.CandidateCounts.Lexical,
+			Vector:  meta.CandidateCounts.Vector,
+			Merged:  meta.CandidateCounts.Merged,
+		}
+	}
+	return &marketplace.RetrievalMeta{
+		SearchMode:           meta.SearchMode,
+		VectorApplied:        meta.VectorApplied,
+		VectorFallbackReason: meta.VectorFallbackReason,
+		CandidateCounts:      counts,
+	}
 }

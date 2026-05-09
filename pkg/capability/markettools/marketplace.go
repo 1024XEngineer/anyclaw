@@ -16,6 +16,13 @@ type Options struct {
 	AuditLogger tools.AuditLogger
 }
 
+type retrievalMetaPayload struct {
+	SearchMode           string         `json:"search_mode,omitempty"`
+	VectorApplied        *bool          `json:"vector_applied,omitempty"`
+	VectorFallbackReason string         `json:"vector_fallback_reason,omitempty"`
+	CandidateCounts      map[string]int `json:"candidate_counts,omitempty"`
+}
+
 func Register(registry *tools.Registry, opts Options) {
 	if registry == nil || opts.Bridge == nil {
 		return
@@ -26,10 +33,11 @@ func Register(registry *tools.Registry, opts Options) {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query":  map[string]string{"type": "string", "description": "Capability need or search query"},
-				"kind":   map[string]string{"type": "string", "description": "Optional kind: agent, skill, or cli"},
-				"source": map[string]string{"type": "string", "description": "Optional source: local, cloud, or all"},
-				"limit":  map[string]string{"type": "number", "description": "Maximum results"},
+				"query":       map[string]string{"type": "string", "description": "Capability need or search query"},
+				"kind":        map[string]string{"type": "string", "description": "Optional kind: agent, skill, or cli"},
+				"source":      map[string]string{"type": "string", "description": "Optional source: local, cloud, or all"},
+				"search_mode": map[string]string{"type": "string", "description": "Optional search mode: auto, lexical, or hybrid"},
+				"limit":       map[string]string{"type": "number", "description": "Maximum results"},
 			},
 			"required": []string{"query"},
 		},
@@ -99,22 +107,31 @@ func searchArtifacts(ctx context.Context, opts Options, input map[string]any) (s
 	query := stringValue(input["query"])
 	kind := marketplace.NormalizeKind(stringValue(input["kind"]))
 	source := marketplace.NormalizeSource(stringValue(input["source"]))
+	searchMode := marketplace.NormalizeSearchMode(stringValue(input["search_mode"]))
 	limit := intValue(input["limit"], 5)
-	result, err := opts.Bridge.Search(ctx, marketbridge.SearchRequest{Query: query, Kind: kind, Source: source, Limit: limit})
+	result, err := opts.Bridge.Search(ctx, marketbridge.SearchRequest{
+		Query:      query,
+		Kind:       kind,
+		Source:     source,
+		SearchMode: searchMode,
+		Limit:      limit,
+	})
 	if err != nil {
 		return "", err
 	}
 	route := marketplace.RouteCapabilityNeed(query, result.Local, result.Cloud, limit)
 	return marshalJSON(map[string]any{
-		"query":       query,
-		"kind":        kind,
-		"source":      firstNonEmpty(string(source), "all"),
-		"route":       route,
-		"local_count": len(result.Local),
-		"cloud_count": len(result.Cloud),
-		"local":       marketplace.BuildCapabilityIndex(result.Local),
-		"cloud":       marketplace.BuildCapabilityIndex(result.Cloud),
-		"cloud_error": result.CloudErr,
+		"query":           query,
+		"kind":            kind,
+		"source":          firstNonEmpty(string(source), "all"),
+		"route":           route,
+		"local_count":     len(result.Local),
+		"cloud_count":     len(result.Cloud),
+		"local":           marketplace.BuildCapabilityIndex(result.Local),
+		"cloud":           marketplace.BuildCapabilityIndex(result.Cloud),
+		"cloud_artifacts": result.Cloud,
+		"cloud_error":     result.CloudErr,
+		"retrieval_meta":  buildRetrievalMetaPayload(result.RetrievalMeta),
 	})
 }
 
@@ -234,4 +251,23 @@ func marshalJSON(value any) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+func buildRetrievalMetaPayload(meta *marketplace.RetrievalMeta) *retrievalMetaPayload {
+	if meta == nil {
+		return nil
+	}
+	payload := &retrievalMetaPayload{
+		SearchMode:           string(meta.SearchMode),
+		VectorApplied:        meta.VectorApplied,
+		VectorFallbackReason: meta.VectorFallbackReason,
+	}
+	if meta.CandidateCounts != nil {
+		payload.CandidateCounts = map[string]int{
+			"lexical": meta.CandidateCounts.Lexical,
+			"vector":  meta.CandidateCounts.Vector,
+			"merged":  meta.CandidateCounts.Merged,
+		}
+	}
+	return payload
 }

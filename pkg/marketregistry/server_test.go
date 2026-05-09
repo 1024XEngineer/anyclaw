@@ -10,8 +10,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestServerSeededCatalogRoutes(t *testing.T) {
@@ -103,6 +105,28 @@ func TestServerSearchAndErrors(t *testing.T) {
 	}
 }
 
+func TestServerSearchUsesLexicalIndexAndScores(t *testing.T) {
+	server := newTestServer(t)
+
+	var search struct {
+		Data ListResult `json:"data"`
+	}
+	doJSON(t, server, http.MethodPost, "/v1/search", strings.NewReader(`{"kind":"skill","q":"relea"}`), http.StatusOK, &search)
+	if search.Data.Total != 1 || search.Data.Items[0].ID != "cloud.skill.release-notes" {
+		t.Fatalf("unexpected lexical search result: %#v", search.Data)
+	}
+	item := search.Data.Items[0]
+	if item.FinalScore <= 0 || item.LexicalScore <= 0 {
+		t.Fatalf("expected score breakdown in search result: %#v", item)
+	}
+	if item.Score != item.FinalScore {
+		t.Fatalf("expected score to mirror final_score, got score=%v final=%v", item.Score, item.FinalScore)
+	}
+	if len(item.MatchSignals) == 0 {
+		t.Fatalf("expected match signals in search result: %#v", item)
+	}
+}
+
 func TestServerSearchFiltersCombine(t *testing.T) {
 	server := newTestServer(t)
 
@@ -120,6 +144,330 @@ func TestServerSearchFiltersCombine(t *testing.T) {
 	doJSON(t, server, http.MethodGet, "/v1/artifacts?kind=skill&q=release&risk=high&trust=verified&tag=writing&publisher=AnyClaw%20Labs", nil, http.StatusOK, &empty)
 	if empty.Data.Total != 0 {
 		t.Fatalf("expected no results when one filter mismatches, got %#v", empty.Data)
+	}
+}
+
+func TestServerListSupportsStructuredFilteringWithoutQuery(t *testing.T) {
+	server, err := NewServer(context.Background(), ServerConfig{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	now := "2026-05-08T10:00:00Z"
+	for _, artifact := range []Artifact{
+		{
+			ID:            "cloud.skill.alpha-writer",
+			Kind:          ArtifactKindSkill,
+			Name:          "Alpha Writer",
+			Summary:       "Writes release notes.",
+			LatestVersion: "1.0.0",
+			Source:        defaultRegistrySourceID,
+			Publisher:     "AnyClaw Labs",
+			RiskLevel:     "low",
+			TrustLevel:    "verified",
+			Permissions:   []string{"fs.read"},
+			Compatibility: Compatibility{OS: []string{"windows"}, Arch: []string{"amd64"}},
+			Tags:          []string{"writer", "notes"},
+			UpdatedAt:     now,
+		},
+		{
+			ID:            "cloud.skill.beta-audit",
+			Kind:          ArtifactKindSkill,
+			Name:          "Beta Audit",
+			Summary:       "Audits permissions.",
+			LatestVersion: "1.0.0",
+			Source:        defaultRegistrySourceID,
+			Publisher:     "Community Labs",
+			RiskLevel:     "medium",
+			TrustLevel:    "community",
+			Permissions:   []string{"process.exec"},
+			Compatibility: Compatibility{OS: []string{"linux"}, Arch: []string{"arm64"}},
+			Tags:          []string{"audit"},
+			UpdatedAt:     now,
+		},
+	} {
+		if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
+			t.Fatalf("upsert artifact %s: %v", artifact.ID, err)
+		}
+	}
+
+	var list struct {
+		Data ListResult `json:"data"`
+	}
+	doJSON(t, server, http.MethodGet, "/v1/artifacts?kind=skill&tag=writer&permission=fs.read&publisher=AnyClaw%20Labs&os=windows&arch=amd64", nil, http.StatusOK, &list)
+	if list.Data.Total != 1 || list.Data.Items[0].ID != "cloud.skill.alpha-writer" {
+		t.Fatalf("unexpected structured filter result without query: %#v", list.Data)
+	}
+}
+
+func TestServerListSortsByUpdatedAndRiskAwareScore(t *testing.T) {
+	server, err := NewServer(context.Background(), ServerConfig{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	artifacts := []Artifact{
+		{
+			ID:            "cloud.skill.safe-writer",
+			Kind:          ArtifactKindSkill,
+			Name:          "Safe Writer",
+			Summary:       "Writes summaries safely.",
+			LatestVersion: "1.0.0",
+			Source:        defaultRegistrySourceID,
+			Publisher:     "AnyClaw Labs",
+			RiskLevel:     "low",
+			TrustLevel:    "verified",
+			Permissions:   []string{"fs.read"},
+			Tags:          []string{"writer"},
+			UpdatedAt:     "2026-05-01T10:00:00Z",
+		},
+		{
+			ID:            "cloud.skill.risky-writer",
+			Kind:          ArtifactKindSkill,
+			Name:          "Risky Writer",
+			Summary:       "Writes summaries with elevated permissions.",
+			LatestVersion: "1.0.0",
+			Source:        defaultRegistrySourceID,
+			Publisher:     "AnyClaw Labs",
+			RiskLevel:     "high",
+			TrustLevel:    "verified",
+			Permissions:   []string{"process.exec"},
+			Tags:          []string{"writer"},
+			UpdatedAt:     "2026-05-01T10:00:00Z",
+		},
+		{
+			ID:            "cloud.skill.new-writer",
+			Kind:          ArtifactKindSkill,
+			Name:          "New Writer",
+			Summary:       "Newest writing helper.",
+			LatestVersion: "1.0.0",
+			Source:        defaultRegistrySourceID,
+			Publisher:     "AnyClaw Labs",
+			RiskLevel:     "low",
+			TrustLevel:    "verified",
+			Permissions:   []string{"fs.read"},
+			Tags:          []string{"writer"},
+			UpdatedAt:     "2026-05-08T10:00:00Z",
+		},
+	}
+	for _, artifact := range artifacts {
+		if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
+			t.Fatalf("upsert artifact %s: %v", artifact.ID, err)
+		}
+	}
+
+	var scoreList struct {
+		Data ListResult `json:"data"`
+	}
+	doJSON(t, server, http.MethodGet, "/v1/artifacts?kind=skill&tag=writer", nil, http.StatusOK, &scoreList)
+	if scoreList.Data.Total != 3 {
+		t.Fatalf("expected 3 score-sorted items, got %#v", scoreList.Data)
+	}
+	if scoreList.Data.Items[0].ID != "cloud.skill.new-writer" || scoreList.Data.Items[2].ID != "cloud.skill.risky-writer" {
+		t.Fatalf("unexpected default score order: %#v", scoreList.Data.Items)
+	}
+
+	var updatedList struct {
+		Data ListResult `json:"data"`
+	}
+	doJSON(t, server, http.MethodGet, "/v1/artifacts?kind=skill&tag=writer&sort=updated", nil, http.StatusOK, &updatedList)
+	if updatedList.Data.Total != 3 {
+		t.Fatalf("expected 3 updated-sorted items, got %#v", updatedList.Data)
+	}
+	if updatedList.Data.Items[0].ID != "cloud.skill.new-writer" {
+		t.Fatalf("expected newest item first for updated sort, got %#v", updatedList.Data.Items)
+	}
+}
+
+func TestServerSearchModeLexicalMeta(t *testing.T) {
+	server := newTestServer(t)
+
+	var search struct {
+		Data ListResult   `json:"data"`
+		Meta ResponseMeta `json:"meta"`
+	}
+	doJSON(t, server, http.MethodGet, "/v1/artifacts?kind=skill&q=release&search_mode=lexical", nil, http.StatusOK, &search)
+	if search.Meta.SearchMode != SearchModeLexical {
+		t.Fatalf("expected lexical meta search mode, got %#v", search.Meta)
+	}
+	if search.Meta.VectorApplied == nil || *search.Meta.VectorApplied {
+		t.Fatalf("expected vector_applied=false, got %#v", search.Meta)
+	}
+	if search.Data.RetrievalMeta == nil || search.Data.RetrievalMeta.SearchMode != SearchModeLexical {
+		t.Fatalf("expected retrieval meta in data, got %#v", search.Data.RetrievalMeta)
+	}
+}
+
+func TestServerSearchModeHybridFallsBackOpen(t *testing.T) {
+	server := newTestServer(t)
+
+	var search struct {
+		Data ListResult   `json:"data"`
+		Meta ResponseMeta `json:"meta"`
+	}
+	doJSON(t, server, http.MethodPost, "/v1/search", strings.NewReader(`{"kind":"skill","q":"release","search_mode":"hybrid"}`), http.StatusOK, &search)
+	if search.Data.Total == 0 {
+		t.Fatalf("expected lexical fallback results, got %#v", search.Data)
+	}
+	if search.Meta.SearchMode != SearchModeLexicalFallback {
+		t.Fatalf("expected lexical_fallback meta, got %#v", search.Meta)
+	}
+	if search.Meta.VectorApplied == nil || *search.Meta.VectorApplied {
+		t.Fatalf("expected vector_applied=false during fallback, got %#v", search.Meta)
+	}
+	if search.Meta.VectorFallbackReason != "disabled" {
+		t.Fatalf("expected disabled fallback reason, got %#v", search.Meta)
+	}
+	if search.Data.RetrievalMeta == nil || search.Data.RetrievalMeta.SearchMode != SearchModeLexicalFallback {
+		t.Fatalf("expected fallback retrieval meta in data, got %#v", search.Data.RetrievalMeta)
+	}
+}
+
+func TestServerHybridSearchUsesVectorAndCanExpandBeyondLexicalHits(t *testing.T) {
+	artifactProvider := &mockEmbeddingProvider{
+		name: "mock-artifact",
+		dim:  3,
+		embeddings: map[string][]float32{
+			buildArtifactEmbeddingText(Artifact{
+				Kind:            ArtifactKindSkill,
+				Name:            "Alpha Writer",
+				Summary:         "Semantic authoring helper.",
+				Publisher:       "AnyClaw Labs",
+				Permissions:     []string{"fs.read"},
+				ManifestSummary: map[string]string{"use_case": "semantic writing"},
+			}): {0.99, 0.01, 0},
+			buildArtifactEmbeddingText(Artifact{
+				Kind:            ArtifactKindSkill,
+				Name:            "Beta Release Tool",
+				Summary:         "Release note generator.",
+				Publisher:       "AnyClaw Labs",
+				Permissions:     []string{"fs.read"},
+				ManifestSummary: map[string]string{"use_case": "release notes"},
+			}): {0.20, 0.80, 0},
+		},
+	}
+	queryProvider := &mockEmbeddingProvider{
+		name: "mock-query",
+		dim:  3,
+		embeddings: map[string][]float32{
+			"semantic author": {1, 0, 0},
+		},
+	}
+	server, err := NewServer(context.Background(), ServerConfig{
+		DataDir: t.TempDir(),
+		Vector: VectorConfig{
+			Enabled:         true,
+			FailOpen:        true,
+			Model:           "mock-doc",
+			QueryModel:      "mock-query",
+			HybridTopK:      10,
+			HybridCandidate: 20,
+		},
+		TestArtifactEmbed: artifactProvider,
+		TestQueryEmbed:    queryProvider,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	alpha := Artifact{
+		ID:              "cloud.skill.alpha-writer",
+		Kind:            ArtifactKindSkill,
+		Name:            "Alpha Writer",
+		Summary:         "Semantic authoring helper.",
+		LatestVersion:   "1.0.0",
+		Source:          defaultRegistrySourceID,
+		Publisher:       "AnyClaw Labs",
+		RiskLevel:       "low",
+		TrustLevel:      "verified",
+		Permissions:     []string{"fs.read"},
+		Tags:            []string{"semantic"},
+		UpdatedAt:       "2026-05-08T10:00:00Z",
+		ManifestSummary: map[string]string{"use_case": "semantic writing"},
+	}
+	beta := Artifact{
+		ID:              "cloud.skill.beta-release",
+		Kind:            ArtifactKindSkill,
+		Name:            "Beta Release Tool",
+		Summary:         "Release note generator.",
+		LatestVersion:   "1.0.0",
+		Source:          defaultRegistrySourceID,
+		Publisher:       "AnyClaw Labs",
+		RiskLevel:       "low",
+		TrustLevel:      "verified",
+		Permissions:     []string{"fs.read"},
+		Tags:            []string{"release"},
+		UpdatedAt:       "2026-05-08T10:00:00Z",
+		ManifestSummary: map[string]string{"use_case": "release notes"},
+	}
+	for _, artifact := range []Artifact{alpha, beta} {
+		if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
+			t.Fatalf("upsert artifact %s: %v", artifact.ID, err)
+		}
+	}
+	server.processOneEmbeddingJob(context.Background())
+	server.processOneEmbeddingJob(context.Background())
+
+	var search struct {
+		Data ListResult   `json:"data"`
+		Meta ResponseMeta `json:"meta"`
+	}
+	doJSON(t, server, http.MethodPost, "/v1/search", strings.NewReader(`{"kind":"skill","q":"semantic author","search_mode":"hybrid"}`), http.StatusOK, &search)
+	if search.Meta.SearchMode != SearchModeHybrid {
+		t.Fatalf("expected hybrid mode, got %#v", search.Meta)
+	}
+	if search.Meta.VectorApplied == nil || !*search.Meta.VectorApplied {
+		t.Fatalf("expected vector_applied=true, got %#v", search.Meta)
+	}
+	if search.Data.Total < 1 || len(search.Data.Items) < 1 {
+		t.Fatalf("expected hybrid results, got %#v", search.Data)
+	}
+	if search.Data.Items[0].ID != "cloud.skill.alpha-writer" {
+		t.Fatalf("expected semantic vector hit first, got %#v", search.Data.Items)
+	}
+	if search.Data.Items[0].VectorScore == nil || *search.Data.Items[0].VectorScore <= 0 {
+		t.Fatalf("expected vector score on first item, got %#v", search.Data.Items[0])
+	}
+}
+
+func TestServerPublishQueuesEmbeddingJob(t *testing.T) {
+	server, err := NewServer(context.Background(), ServerConfig{
+		DataDir: t.TempDir(),
+		Vector: VectorConfig{
+			Enabled:  true,
+			FailOpen: true,
+			Model:    "mock-doc",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	artifact := Artifact{
+		ID:            "cloud.skill.embedding-test",
+		Kind:          ArtifactKindSkill,
+		Name:          "Embedding Test",
+		Summary:       "Queues embedding jobs.",
+		LatestVersion: "1.0.0",
+		Source:        defaultRegistrySourceID,
+		Publisher:     "AnyClaw Labs",
+		RiskLevel:     "low",
+		TrustLevel:    "verified",
+		Permissions:   []string{"fs.read"},
+	}
+	if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
+		t.Fatal(err)
+	}
+	job, err := server.store.claimNextArtifactEmbeddingJob(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job == nil || job.ArtifactID != artifact.ID {
+		t.Fatalf("expected queued embedding job, got %#v", job)
 	}
 }
 
@@ -212,15 +560,25 @@ func TestServerAdminTokenPublishQuarantineAndStats(t *testing.T) {
 
 func TestServerRequiresAdminToken(t *testing.T) {
 	_, err := NewServer(context.Background(), ServerConfig{
-		DataDir: t.TempDir(),
+		DataDir:           t.TempDir(),
+		RequireAdminToken: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "admin token is required") {
 		t.Fatalf("expected missing admin token error, got %v", err)
 	}
 
+	serverWithoutAdmin, err := NewServer(context.Background(), ServerConfig{
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("expected registry to start without admin token when require flag is false, got %v", err)
+	}
+	t.Cleanup(func() { _ = serverWithoutAdmin.Close() })
+
 	server, err := NewServer(context.Background(), ServerConfig{
-		DataDir:    t.TempDir(),
-		AdminToken: "admin-secret",
+		DataDir:           t.TempDir(),
+		AdminToken:        "admin-secret",
+		RequireAdminToken: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -392,4 +750,231 @@ func assertZipContains(t *testing.T, data []byte, name string) {
 		}
 	}
 	t.Fatalf("zip did not contain %s", name)
+}
+
+type mockEmbeddingProvider struct {
+	name       string
+	dim        int
+	shouldFail bool
+	embeddings map[string][]float32
+	callCount  int
+}
+
+func (m *mockEmbeddingProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	m.callCount++
+	if m.shouldFail {
+		return nil, context.Canceled
+	}
+	if vectorData, ok := m.embeddings[text]; ok {
+		return append([]float32(nil), vectorData...), nil
+	}
+	result := make([]float32, m.dim)
+	for i := range result {
+		result[i] = float32(len(text) + i + 1)
+	}
+	return result, nil
+}
+
+func (m *mockEmbeddingProvider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, 0, len(texts))
+	for _, text := range texts {
+		item, err := m.Embed(ctx, text)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (m *mockEmbeddingProvider) Name() string {
+	return m.name
+}
+
+func (m *mockEmbeddingProvider) Dimension() int {
+	return m.dim
+}
+
+func TestWorkerCreatesArtifactEmbeddingRecord(t *testing.T) {
+	provider := &mockEmbeddingProvider{
+		name: "mock",
+		dim:  3,
+	}
+	server, err := NewServer(context.Background(), ServerConfig{
+		DataDir: t.TempDir(),
+		Vector: VectorConfig{
+			Enabled: true,
+			Model:   "mock-doc",
+		},
+		TestArtifactEmbed: provider,
+		TestQueryEmbed:    provider,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	artifact := Artifact{
+		ID:            "cloud.skill.worker-test",
+		Kind:          ArtifactKindSkill,
+		Name:          "Worker Test",
+		Summary:       "Creates embeddings asynchronously.",
+		LatestVersion: "1.0.0",
+		Source:        defaultRegistrySourceID,
+		Publisher:     "AnyClaw Labs",
+		RiskLevel:     "low",
+		TrustLevel:    "verified",
+		Permissions:   []string{"fs.read"},
+	}
+	if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
+		t.Fatal(err)
+	}
+	server.processOneEmbeddingJob(context.Background())
+	item, err := server.store.loadArtifactEmbedding(context.Background(), artifact.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item == nil || item.Status != artifactEmbeddingStatusReady {
+		t.Fatalf("expected ready embedding record, got %#v", item)
+	}
+	wantText := buildArtifactEmbeddingText(artifact)
+	if item.EmbeddingText != wantText {
+		t.Fatalf("unexpected embedding text: got %q want %q", item.EmbeddingText, wantText)
+	}
+	if len(item.Vector) != provider.dim {
+		t.Fatalf("unexpected vector dimension: %#v", item)
+	}
+	if item.Model != "mock-doc" {
+		t.Fatalf("unexpected model: %#v", item)
+	}
+	if reflect.DeepEqual(item.Vector, []float32{}) {
+		t.Fatalf("expected non-empty vector")
+	}
+}
+
+func TestServerAdminEmbeddingEndpointsAndMetrics(t *testing.T) {
+	provider := &mockEmbeddingProvider{name: "mock", dim: 3}
+	server, err := NewServer(context.Background(), ServerConfig{
+		DataDir:    t.TempDir(),
+		AdminToken: "admin-secret",
+		Vector: VectorConfig{
+			Enabled: true,
+			Model:   "mock-doc",
+		},
+		TestArtifactEmbed: provider,
+		TestQueryEmbed:    provider,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	artifact := Artifact{
+		ID:            "cloud.skill.admin-embed",
+		Kind:          ArtifactKindSkill,
+		Name:          "Admin Embed",
+		Summary:       "Visible from admin endpoints.",
+		LatestVersion: "1.0.0",
+		Source:        defaultRegistrySourceID,
+		Publisher:     "AnyClaw Labs",
+		RiskLevel:     "low",
+		TrustLevel:    "verified",
+		Permissions:   []string{"fs.read"},
+	}
+	if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
+		t.Fatal(err)
+	}
+	server.processOneEmbeddingJob(context.Background())
+
+	var jobs struct {
+		Data ArtifactEmbeddingJobList `json:"data"`
+	}
+	doJSONWithAuth(t, server, http.MethodGet, "/v1/admin/embedding-jobs", nil, "admin-secret", http.StatusOK, &jobs)
+	if jobs.Data.Total == 0 || jobs.Data.Items[0].ArtifactID != artifact.ID {
+		t.Fatalf("unexpected embedding jobs: %#v", jobs.Data)
+	}
+
+	var embeddings struct {
+		Data ArtifactEmbeddingList `json:"data"`
+	}
+	doJSONWithAuth(t, server, http.MethodGet, "/v1/admin/embeddings?status=ready", nil, "admin-secret", http.StatusOK, &embeddings)
+	if embeddings.Data.Total == 0 || embeddings.Data.Items[0].ArtifactID != artifact.ID {
+		t.Fatalf("unexpected embeddings list: %#v", embeddings.Data)
+	}
+
+	var detail struct {
+		Data ArtifactEmbedding `json:"data"`
+	}
+	doJSONWithAuth(t, server, http.MethodGet, "/v1/admin/embeddings/"+artifact.ID, nil, "admin-secret", http.StatusOK, &detail)
+	if detail.Data.ArtifactID != artifact.ID || detail.Data.Status != artifactEmbeddingStatusReady {
+		t.Fatalf("unexpected embedding detail: %#v", detail.Data)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics.json", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected metrics.json 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var metricsPayload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&metricsPayload); err != nil {
+		t.Fatalf("decode metrics json: %v", err)
+	}
+	if _, ok := metricsPayload["gauges"]; !ok {
+		t.Fatalf("expected gauges in metrics payload, got %#v", metricsPayload)
+	}
+}
+
+func TestServerHybridQueryCacheAvoidsRepeatedEmbeddingCalls(t *testing.T) {
+	artifactProvider := &mockEmbeddingProvider{name: "doc", dim: 3}
+	queryProvider := &mockEmbeddingProvider{
+		name: "query",
+		dim:  3,
+		embeddings: map[string][]float32{
+			"semantic author": {1, 0, 0},
+		},
+	}
+	server, err := NewServer(context.Background(), ServerConfig{
+		DataDir: t.TempDir(),
+		Vector: VectorConfig{
+			Enabled:        true,
+			Model:          "mock-doc",
+			QueryModel:     "mock-query",
+			QueryCacheTTL:  time.Minute,
+			QueryCacheSize: 16,
+		},
+		TestArtifactEmbed: artifactProvider,
+		TestQueryEmbed:    queryProvider,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+
+	artifact := Artifact{
+		ID:              "cloud.skill.cache-target",
+		Kind:            ArtifactKindSkill,
+		Name:            "Semantic Author",
+		Summary:         "Semantic authoring helper.",
+		LatestVersion:   "1.0.0",
+		Source:          defaultRegistrySourceID,
+		Publisher:       "AnyClaw Labs",
+		RiskLevel:       "low",
+		TrustLevel:      "verified",
+		Permissions:     []string{"fs.read"},
+		ManifestSummary: map[string]string{"use_case": "semantic writing"},
+	}
+	if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
+		t.Fatal(err)
+	}
+	server.processOneEmbeddingJob(context.Background())
+
+	var result struct {
+		Data ListResult `json:"data"`
+	}
+	doJSON(t, server, http.MethodPost, "/v1/search", strings.NewReader(`{"kind":"skill","q":"semantic author","search_mode":"hybrid"}`), http.StatusOK, &result)
+	doJSON(t, server, http.MethodPost, "/v1/search", strings.NewReader(`{"kind":"skill","q":"semantic author","search_mode":"hybrid"}`), http.StatusOK, &result)
+	if queryProvider.callCount != 1 {
+		t.Fatalf("expected query provider to be called once due to cache, got %d", queryProvider.callCount)
+	}
 }
