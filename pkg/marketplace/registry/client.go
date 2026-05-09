@@ -391,6 +391,9 @@ func firstRetrievalMeta(values ...*remoteRetrievalMeta) *marketplace.RetrievalMe
 		if value == nil {
 			continue
 		}
+		if value.SearchMode == "" && value.VectorApplied == nil && value.VectorFallbackReason == "" && value.CandidateCounts == nil {
+			continue
+		}
 		return convertRetrievalMeta(value)
 	}
 	return nil

@@ -29,8 +29,9 @@ var (
 )
 
 type Store struct {
-	db     *sql.DB
-	vector *vectorRuntime
+	db        *sql.DB
+	vector    *vectorRuntime
+	enableFTS bool
 }
 
 type searchExecution struct {
@@ -69,7 +70,13 @@ func OpenStoreWithConfig(ctx context.Context, cfg StoreConfig) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	if driver == "sqlite" {
+		// Serialize SQLite access so publish/upsert requests and the embedding
+		// worker do not contend on concurrent writes.
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+	}
+	store := &Store{db: db, enableFTS: driver == "sqlite"}
 	if err := store.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -184,19 +191,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
-			artifact_id UNINDEXED,
-			name,
-			summary,
-			description_md,
-			publisher,
-			kind,
-			tags_text,
-			hit_signals_text,
-			use_case_text,
-			search_text,
-			tokenize = 'unicode61'
-		)`,
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_kind ON artifacts(kind)`,
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_source ON artifacts(source)`,
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_risk ON artifacts(risk_level)`,
@@ -212,7 +206,27 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if s.enableFTS {
+		if _, err := s.db.ExecContext(ctx, `CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
+			artifact_id UNINDEXED,
+			name,
+			summary,
+			description_md,
+			publisher,
+			kind,
+			tags_text,
+			hit_signals_text,
+			use_case_text,
+			search_text,
+			tokenize = 'unicode61'
+		)`); err != nil {
+			return err
+		}
+	}
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE artifact_versions ADD COLUMN signature TEXT NOT NULL DEFAULT ''`)
+	if !s.enableFTS {
+		return nil
+	}
 	return s.rebuildArtifactSearchIndex(ctx)
 }
 
@@ -248,8 +262,10 @@ func (s *Store) DeleteArtifact(ctx context.Context, artifactID string) (Artifact
 	if _, err = tx.ExecContext(ctx, `DELETE FROM artifact_embeddings WHERE artifact_id = ?`, artifactID); err != nil {
 		return ArtifactDeletion{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM artifacts_fts WHERE artifact_id = ?`, artifactID); err != nil {
-		return ArtifactDeletion{}, err
+	if s.enableFTS {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM artifacts_fts WHERE artifact_id = ?`, artifactID); err != nil {
+			return ArtifactDeletion{}, err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM quarantine WHERE artifact_id = ?`, artifactID); err != nil {
 		return ArtifactDeletion{}, err
@@ -908,6 +924,9 @@ func (s *Store) listStructuredCandidates(ctx context.Context, filter SearchFilte
 }
 
 func (s *Store) listLexicalCandidates(ctx context.Context, filter SearchFilter) ([]searchCandidate, int, error) {
+	if s == nil || !s.enableFTS {
+		return s.listStructuredCandidates(ctx, filter)
+	}
 	matchQuery := buildFTSQuery(filter.Query)
 	if matchQuery == "" {
 		return s.listStructuredCandidates(ctx, filter)
@@ -1116,6 +1135,9 @@ func scanArtifactWithLexicalRank(row scanner) (Artifact, float64, error) {
 }
 
 func (s *Store) upsertArtifactSearchDocTx(ctx context.Context, tx *sql.Tx, artifact Artifact) error {
+	if s == nil || !s.enableFTS {
+		return nil
+	}
 	doc := buildArtifactSearchDocument(artifact)
 	if _, err := tx.ExecContext(ctx, `DELETE FROM artifacts_fts WHERE artifact_id = ?`, artifact.ID); err != nil {
 		return err
@@ -1132,6 +1154,9 @@ func (s *Store) upsertArtifactSearchDocTx(ctx context.Context, tx *sql.Tx, artif
 }
 
 func (s *Store) rebuildArtifactSearchIndex(ctx context.Context) error {
+	if s == nil || !s.enableFTS {
+		return nil
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT
 		id, kind, name, summary, description_md, latest_version, source, publisher,
 		risk_level, trust_level, permissions_json, compatibility_json, dependencies_json,

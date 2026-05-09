@@ -738,6 +738,27 @@ func doJSONWithAuth(t *testing.T, handler http.Handler, method, path string, bod
 	}
 }
 
+func waitForEmbeddingStatus(t *testing.T, server *Server, artifactID string, wantStatus string) *ArtifactEmbedding {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		item, err := server.store.loadArtifactEmbedding(context.Background(), artifactID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if item != nil && item.Status == wantStatus {
+			return item
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	item, err := server.store.loadArtifactEmbedding(context.Background(), artifactID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("timed out waiting for embedding %s to reach status %s, last=%#v", artifactID, wantStatus, item)
+	return nil
+}
+
 func assertZipContains(t *testing.T, data []byte, name string) {
 	t.Helper()
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
@@ -829,11 +850,7 @@ func TestWorkerCreatesArtifactEmbeddingRecord(t *testing.T) {
 	if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
 		t.Fatal(err)
 	}
-	server.processOneEmbeddingJob(context.Background())
-	item, err := server.store.loadArtifactEmbedding(context.Background(), artifact.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	item := waitForEmbeddingStatus(t, server, artifact.ID, artifactEmbeddingStatusReady)
 	if item == nil || item.Status != artifactEmbeddingStatusReady {
 		t.Fatalf("expected ready embedding record, got %#v", item)
 	}
@@ -884,7 +901,7 @@ func TestServerAdminEmbeddingEndpointsAndMetrics(t *testing.T) {
 	if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
 		t.Fatal(err)
 	}
-	server.processOneEmbeddingJob(context.Background())
+	waitForEmbeddingStatus(t, server, artifact.ID, artifactEmbeddingStatusReady)
 
 	var jobs struct {
 		Data ArtifactEmbeddingJobList `json:"data"`
@@ -967,7 +984,7 @@ func TestServerHybridQueryCacheAvoidsRepeatedEmbeddingCalls(t *testing.T) {
 	if err := server.store.UpsertArtifact(context.Background(), artifact, nil); err != nil {
 		t.Fatal(err)
 	}
-	server.processOneEmbeddingJob(context.Background())
+	waitForEmbeddingStatus(t, server, artifact.ID, artifactEmbeddingStatusReady)
 
 	var result struct {
 		Data ListResult `json:"data"`

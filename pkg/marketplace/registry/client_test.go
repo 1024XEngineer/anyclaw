@@ -99,6 +99,36 @@ func TestClientListConvertsCloudArtifactsAndCaches(t *testing.T) {
 	}
 }
 
+func TestClientListLegacyTopLevelMetaDoesNotFabricateRetrievalMeta(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(t, w, map[string]any{
+			"data": map[string]any{
+				"items":  []map[string]any{testRemoteArtifact("skill")},
+				"total":  1,
+				"limit":  10,
+				"offset": 0,
+			},
+			"meta": map[string]any{
+				"protocol_version": "1.0",
+				"count":            1,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{Endpoint: server.URL})
+	result, err := client.List(context.Background(), marketplace.Filter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.RetrievalMeta != nil {
+		t.Fatalf("expected nil retrieval meta for legacy top-level meta, got %#v", result.RetrievalMeta)
+	}
+}
+
 func TestClientDetailVersionsAndResolve(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
