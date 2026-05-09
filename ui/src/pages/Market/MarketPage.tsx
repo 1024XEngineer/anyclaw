@@ -86,6 +86,14 @@ function trustLabel(artifact: MarketArtifactDetail | null | undefined) {
   return artifact?.trust_level || "鏈煡";
 }
 
+function displayRiskLabel(artifact: MarketArtifactDetail | null | undefined) {
+  return artifact?.risk_level?.trim() ? artifact.risk_level : "未知";
+}
+
+function displayTrustLabel(artifact: MarketArtifactDetail | null | undefined) {
+  return artifact?.trust_level?.trim() ? artifact.trust_level : "未知";
+}
+
 function statusTone(status: string) {
   const normalized = status.toLowerCase();
   if (["error", "failed", "rolled back", "quarantined"].some((item) => normalized.includes(item))) return "warning";
@@ -109,6 +117,7 @@ export function MarketPage() {
     counts,
     data,
     detail,
+    directoryTotal,
     errorMessage,
     filters,
     installArtifact,
@@ -142,7 +151,7 @@ export function MarketPage() {
 
   const visibleCount = localEntries.length;
   const currentSourceCount =
-    source === "cloud" ? visibleCount : kind === "agent" ? counts.localAgents : kind === "skill" ? counts.localSkills : counts.localCLIs;
+    source === "cloud" ? directoryTotal : kind === "agent" ? counts.localAgents : kind === "skill" ? counts.localSkills : counts.localCLIs;
   const EntryIcon = kind === "agent" ? Bot : kind === "skill" ? Sparkles : TerminalSquare;
   const selectedStatus = selectedEntry?.rawStatus ?? "";
   const selectedBindings = selectedId ? bindings.filter((binding) => binding.artifact_id === selectedId) : [];
@@ -722,8 +731,8 @@ export function MarketPage() {
                           <span>{entry.owner}</span>
                           {entry.source === "cloud" && searchArtifact ? (
                             <div className="flex flex-wrap gap-2 text-[11px]">
-                              <span className="rounded-[8px] bg-[#f5f7fb] px-2 py-1 text-[#5b6f8b]">{riskLabel(searchArtifact)}</span>
-                              <span className="rounded-[8px] bg-[#f5f7fb] px-2 py-1 text-[#5b6f8b]">{trustLabel(searchArtifact)}</span>
+                              <span className="rounded-[8px] bg-[#f5f7fb] px-2 py-1 text-[#5b6f8b]">{displayRiskLabel(searchArtifact)}</span>
+                              <span className="rounded-[8px] bg-[#f5f7fb] px-2 py-1 text-[#5b6f8b]">{displayTrustLabel(searchArtifact)}</span>
                             </div>
                           ) : null}
                         </div>

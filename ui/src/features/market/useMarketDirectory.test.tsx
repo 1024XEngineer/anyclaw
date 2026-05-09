@@ -81,6 +81,15 @@ function setupMarketAPI(initialItems: MockArtifact[], queriedItems = initialItem
     const url = String(input);
 
     if (url.startsWith("/market/artifacts?")) {
+      if (url === "/market/artifacts?kind=agent&source=local&limit=1") {
+        return { data: { items: initialItems.filter((item) => item.kind === "agent" && item.source === "local"), total: initialItems.filter((item) => item.kind === "agent" && item.source === "local").length } };
+      }
+      if (url === "/market/artifacts?kind=skill&source=local&limit=1") {
+        return { data: { items: initialItems.filter((item) => item.kind === "skill" && item.source === "local"), total: initialItems.filter((item) => item.kind === "skill" && item.source === "local").length } };
+      }
+      if (url === "/market/artifacts?kind=cli&source=local&limit=1") {
+        return { data: { items: initialItems.filter((item) => item.kind === "cli" && item.source === "local"), total: initialItems.filter((item) => item.kind === "cli" && item.source === "local").length } };
+      }
       return url.includes("q=main") ? marketResponse(queriedItems) : marketResponse(initialItems);
     }
 
@@ -284,6 +293,7 @@ describe("useMarketDirectory", () => {
 
     await waitFor(() => expect(result.current.localEntries.map((entry) => entry.name)).toEqual(["Main Agent"]));
     expect(result.current.selectedEntry?.id).toBe("agent:Main Agent");
+    expect(result.current.counts.localAgents).toBe(2);
     expect(requestJSONMock).toHaveBeenCalledWith("/market/artifacts?kind=agent&source=local&limit=100&q=main");
   });
 
@@ -336,6 +346,30 @@ describe("useMarketDirectory", () => {
     expect(result.current.source).toBe("cloud");
     expect(result.current.selectedEntry?.id).toBe("cloud.skill.writer");
     expect(result.current.cloudPanels).toEqual([]);
+  });
+
+  it("loads stable local counts separately from the active filtered directory results", async () => {
+    setupMarketAPI(
+      [
+        { description: "Main entry", id: "agent:Main Agent", kind: "agent", name: "Main Agent", source: "local" },
+        { description: "Review work", id: "agent:Reviewer", kind: "agent", name: "Reviewer", source: "local" },
+        { description: "Writer", id: "skill:Writer", kind: "skill", name: "Writer", source: "local" },
+        { description: "Runner", id: "cli:Runner", kind: "cli", name: "Runner", source: "local" },
+      ],
+      [{ description: "Main entry", id: "agent:Main Agent", kind: "agent", name: "Main Agent", source: "local" }],
+    );
+
+    const { result } = renderHook(() => useMarketDirectory(), {
+      wrapper: createWrapper(["/market?source=local&q=main"]),
+    });
+
+    await waitFor(() => expect(result.current.localEntries).toHaveLength(1));
+    expect(result.current.counts.localAgents).toBe(2);
+    expect(result.current.counts.localSkills).toBe(1);
+    expect(result.current.counts.localCLIs).toBe(1);
+    expect(requestJSONMock).toHaveBeenCalledWith("/market/artifacts?kind=agent&source=local&limit=1");
+    expect(requestJSONMock).toHaveBeenCalledWith("/market/artifacts?kind=skill&source=local&limit=1");
+    expect(requestJSONMock).toHaveBeenCalledWith("/market/artifacts?kind=cli&source=local&limit=1");
   });
 
   it("preserves cloud search score breakdown for marketplace views", async () => {

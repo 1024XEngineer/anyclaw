@@ -149,6 +149,7 @@ type MarketArtifactsQueryResult = {
   artifactLookup: Record<string, MarketArtifactDetail>;
   cloudError: string;
   entries: MarketDirectoryEntry[];
+  total: number;
 };
 
 type MarketArtifactDetailResponse = {
@@ -319,7 +320,18 @@ async function loadMarketArtifacts(kind: MarketKind, source: MarketSource, query
     artifactLookup,
     cloudError: payload.meta?.cloud_error ?? "",
     entries: items.map(normalizeArtifact),
+    total: payload.data?.total ?? items.length,
   };
+}
+
+async function loadMarketCount(kind: MarketKind, source: MarketSource): Promise<number> {
+  const params = new URLSearchParams();
+  params.set("kind", kind);
+  params.set("source", source);
+  params.set("limit", "1");
+
+  const payload = await requestJSON<MarketArtifactsResponse>(`/market/artifacts?${params.toString()}`);
+  return payload.data?.total ?? 0;
 }
 
 export function useMarketDirectory() {
@@ -347,11 +359,27 @@ export function useMarketDirectory() {
   const artifactsQuery = useQuery({
     queryKey: ["market", "artifacts", kind, source, query, filters],
     queryFn: () => loadMarketArtifacts(kind, source, query, filters),
-    placeholderData: { artifactLookup: {}, cloudError: "", entries: [] } satisfies MarketArtifactsQueryResult,
+    placeholderData: { artifactLookup: {}, cloudError: "", entries: [], total: 0 } satisfies MarketArtifactsQueryResult,
     staleTime: 5000,
   });
 
   const entries = artifactsQuery.data?.entries ?? [];
+  const directoryTotal = artifactsQuery.data?.total ?? entries.length;
+  const localAgentCountQuery = useQuery({
+    queryKey: ["market", "count", "local", "agent"],
+    queryFn: () => loadMarketCount("agent", "local"),
+    staleTime: 5000,
+  });
+  const localSkillCountQuery = useQuery({
+    queryKey: ["market", "count", "local", "skill"],
+    queryFn: () => loadMarketCount("skill", "local"),
+    staleTime: 5000,
+  });
+  const localCLICountQuery = useQuery({
+    queryKey: ["market", "count", "local", "cli"],
+    queryFn: () => loadMarketCount("cli", "local"),
+    staleTime: 5000,
+  });
   const selectedParam = searchParams.get("selected");
   const selectedId = entries.some((entry) => entry.id === selectedParam) ? selectedParam : (entries[0]?.id ?? null);
   const selectedEntry = entries.find((entry) => entry.id === selectedId) ?? null;
@@ -551,14 +579,15 @@ export function useMarketDirectory() {
     canInstall: installAllowed(selectedEntry),
     cloudPanels: [],
     counts: {
-      cloudAgents: source === "cloud" && kind === "agent" ? entries.length : 0,
-      cloudSkills: source === "cloud" && kind === "skill" ? entries.length : 0,
-      localAgents: source === "local" && kind === "agent" ? entries.length : 0,
-      localCLIs: source === "local" && kind === "cli" ? entries.length : 0,
-      localSkills: source === "local" && kind === "skill" ? entries.length : 0,
+      cloudAgents: source === "cloud" && kind === "agent" ? directoryTotal : 0,
+      cloudSkills: source === "cloud" && kind === "skill" ? directoryTotal : 0,
+      localAgents: localAgentCountQuery.data ?? 0,
+      localCLIs: localCLICountQuery.data ?? 0,
+      localSkills: localSkillCountQuery.data ?? 0,
     },
     data,
     detail: detailQuery.data ?? null,
+    directoryTotal,
     errorMessage: artifactsQuery.error instanceof Error ? artifactsQuery.error.message : (artifactsQuery.data?.cloudError ?? ""),
     installArtifact: () => {
       if (selectedId) installMutation.mutate(selectedId);
