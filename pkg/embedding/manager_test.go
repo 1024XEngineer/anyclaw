@@ -224,6 +224,34 @@ func TestGeminiProvider(t *testing.T) {
 	}
 }
 
+func TestGeminiProviderGeminiEmbedding001(t *testing.T) {
+	p, err := NewGeminiProvider("test-key", WithGeminiModel("gemini-embedding-001"))
+	if err != nil {
+		t.Fatalf("failed to create provider: %v", err)
+	}
+
+	if p.model != "models/gemini-embedding-001" {
+		t.Fatalf("expected normalized model path, got %q", p.model)
+	}
+	if p.Dimension() != 3072 {
+		t.Fatalf("expected dimension 3072, got %d", p.Dimension())
+	}
+}
+
+func TestGeminiProviderNormalizesModelPath(t *testing.T) {
+	p, err := NewGeminiProvider("test-key", WithGeminiModel("text-embedding-004"))
+	if err != nil {
+		t.Fatalf("failed to create provider: %v", err)
+	}
+
+	if p.model != "models/text-embedding-004" {
+		t.Fatalf("expected normalized model path, got %q", p.model)
+	}
+	if p.Dimension() != 768 {
+		t.Fatalf("expected dimension 768, got %d", p.Dimension())
+	}
+}
+
 func TestOllamaProvider(t *testing.T) {
 	p := NewOllamaProvider(
 		WithOllamaBaseURL("http://localhost:11434"),

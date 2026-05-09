@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -20,7 +21,10 @@ type GeminiProvider struct {
 type GeminiOption func(*GeminiProvider)
 
 func WithGeminiModel(model string) GeminiOption {
-	return func(p *GeminiProvider) { p.model = model }
+	return func(p *GeminiProvider) {
+		p.model = normalizeGeminiModel(model)
+		p.dimension = geminiModelDimension(p.model)
+	}
 }
 
 func NewGeminiProvider(apiKey string, opts ...GeminiOption) (*GeminiProvider, error) {
@@ -71,6 +75,7 @@ func (p *GeminiProvider) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 
 func (p *GeminiProvider) embedSingle(ctx context.Context, text string) ([]float32, error) {
 	payload := map[string]any{
+		"model": p.model,
 		"content": map[string]any{
 			"parts": []any{
 				map[string]string{"text": text},
@@ -107,4 +112,26 @@ func (p *GeminiProvider) embedSingle(ctx context.Context, text string) ([]float3
 	}
 
 	return result.Embedding.Values, nil
+}
+
+func normalizeGeminiModel(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "models/text-embedding-004"
+	}
+	if !strings.Contains(model, "/") {
+		return "models/" + model
+	}
+	return model
+}
+
+func geminiModelDimension(model string) int {
+	switch normalizeGeminiModel(model) {
+	case "models/gemini-embedding-001":
+		return 3072
+	case "models/text-embedding-004":
+		return 768
+	default:
+		return 0
+	}
 }
