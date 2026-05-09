@@ -23,7 +23,9 @@ type GeminiOption func(*GeminiProvider)
 func WithGeminiModel(model string) GeminiOption {
 	return func(p *GeminiProvider) {
 		p.model = normalizeGeminiModel(model)
-		p.dimension = geminiModelDimension(p.model)
+		if dim := geminiModelDimension(p.model); dim > 0 {
+			p.dimension = dim
+		}
 	}
 }
 

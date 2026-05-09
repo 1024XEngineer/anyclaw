@@ -252,6 +252,20 @@ func TestGeminiProviderNormalizesModelPath(t *testing.T) {
 	}
 }
 
+func TestGeminiProviderUnknownModelKeepsDefaultDimension(t *testing.T) {
+	p, err := NewGeminiProvider("test-key", WithGeminiModel("custom-gemini-embed"))
+	if err != nil {
+		t.Fatalf("failed to create provider: %v", err)
+	}
+
+	if p.model != "models/custom-gemini-embed" {
+		t.Fatalf("expected normalized model path, got %q", p.model)
+	}
+	if p.Dimension() != 768 {
+		t.Fatalf("expected default dimension 768 for unknown Gemini models, got %d", p.Dimension())
+	}
+}
+
 func TestOllamaProvider(t *testing.T) {
 	p := NewOllamaProvider(
 		WithOllamaBaseURL("http://localhost:11434"),
