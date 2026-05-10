@@ -30,16 +30,18 @@ type Bridge interface {
 }
 
 type SearchRequest struct {
-	Query  string
-	Kind   marketplace.ArtifactKind
-	Source marketplace.SourceKind
-	Limit  int
+	Query      string
+	Kind       marketplace.ArtifactKind
+	Source     marketplace.SourceKind
+	SearchMode marketplace.SearchMode
+	Limit      int
 }
 
 type SearchResult struct {
-	Local    []marketplace.Artifact
-	Cloud    []marketplace.Artifact
-	CloudErr string
+	Local         []marketplace.Artifact
+	Cloud         []marketplace.Artifact
+	CloudErr      string
+	RetrievalMeta *marketplace.RetrievalMeta
 }
 
 type ListResult struct {
@@ -107,18 +109,30 @@ func (b *DefaultBridge) Search(ctx context.Context, req SearchRequest) (SearchRe
 	}
 	var cloud []marketplace.Artifact
 	var cloudErr string
+	var retrievalMeta *marketplace.RetrievalMeta
 	if req.Source != marketplace.SourceLocal && b.registry != nil {
-		result, err := b.registry.List(ctx, marketplace.Filter{Kind: req.Kind, Query: req.Query, Limit: limit})
+		result, err := b.registry.List(ctx, marketplace.Filter{
+			Kind:       req.Kind,
+			Query:      req.Query,
+			SearchMode: req.SearchMode,
+			Limit:      limit,
+		})
 		if err != nil {
 			cloudErr = err.Error()
 		} else {
 			cloud = result.Items
+			retrievalMeta = result.RetrievalMeta
 		}
 	}
 	if req.Source == marketplace.SourceCloud {
 		local = nil
 	}
-	return SearchResult{Local: local, Cloud: cloud, CloudErr: cloudErr}, nil
+	return SearchResult{
+		Local:         local,
+		Cloud:         cloud,
+		CloudErr:      cloudErr,
+		RetrievalMeta: retrievalMeta,
+	}, nil
 }
 
 func (b *DefaultBridge) List(ctx context.Context, filter marketplace.Filter) (ListResult, error) {

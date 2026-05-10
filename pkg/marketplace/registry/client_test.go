@@ -41,12 +41,16 @@ func TestClientListConvertsCloudArtifactsAndCaches(t *testing.T) {
 						"tags":           []string{"release"},
 						"hit_signals":    []string{"changelog"},
 						"score":          0.9,
+						"final_score":    0.9,
+						"match_signals":  []string{"lexical", "trust"},
 					},
 				},
-				"total":  1,
-				"limit":  10,
-				"offset": 0,
+				"total":          1,
+				"limit":          10,
+				"offset":         0,
+				"retrieval_meta": map[string]any{"search_mode": "lexical", "vector_applied": false},
 			},
+			"meta": map[string]any{"search_mode": "lexical", "vector_applied": false},
 		})
 	}))
 	defer server.Close()
@@ -77,12 +81,51 @@ func TestClientListConvertsCloudArtifactsAndCaches(t *testing.T) {
 	if item.Description != "Detailed release notes skill." {
 		t.Fatalf("unexpected description %q", item.Description)
 	}
+	if item.FinalScore != 0.9 || len(item.MatchSignals) == 0 {
+		t.Fatalf("unexpected scoring metadata: %#v", item)
+	}
+	if result.RetrievalMeta == nil || result.RetrievalMeta.SearchMode != marketplace.SearchModeLexical {
+		t.Fatalf("expected retrieval meta, got %#v", result.RetrievalMeta)
+	}
+	if result.RetrievalMeta.VectorApplied == nil || *result.RetrievalMeta.VectorApplied {
+		t.Fatalf("expected vector_applied=false, got %#v", result.RetrievalMeta)
+	}
 
 	if _, err := client.List(context.Background(), marketplace.Filter{Kind: marketplace.ArtifactKindSkill, Limit: 10}); err != nil {
 		t.Fatal(err)
 	}
 	if listCalls != 1 {
 		t.Fatalf("expected cached second list call, got %d server calls", listCalls)
+	}
+}
+
+func TestClientListLegacyTopLevelMetaDoesNotFabricateRetrievalMeta(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(t, w, map[string]any{
+			"data": map[string]any{
+				"items":  []map[string]any{testRemoteArtifact("skill")},
+				"total":  1,
+				"limit":  10,
+				"offset": 0,
+			},
+			"meta": map[string]any{
+				"protocol_version": "1.0",
+				"count":            1,
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{Endpoint: server.URL})
+	result, err := client.List(context.Background(), marketplace.Filter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.RetrievalMeta != nil {
+		t.Fatalf("expected nil retrieval meta for legacy top-level meta, got %#v", result.RetrievalMeta)
 	}
 }
 

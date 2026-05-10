@@ -29,8 +29,38 @@ type Artifact struct {
 	Tags            []string          `json:"tags,omitempty"`
 	HitSignals      []string          `json:"hit_signals,omitempty"`
 	Score           float64           `json:"score,omitempty"`
+	LexicalScore    float64           `json:"lexical_score,omitempty"`
+	VectorScore     *float64          `json:"vector_score,omitempty"`
+	TagScore        float64           `json:"tag_score,omitempty"`
+	TrustScore      float64           `json:"trust_score,omitempty"`
+	FreshnessScore  float64           `json:"freshness_score,omitempty"`
+	RiskPenalty     float64           `json:"risk_penalty,omitempty"`
+	FinalScore      float64           `json:"final_score,omitempty"`
+	MatchSignals    []string          `json:"match_signals,omitempty"`
 	UpdatedAt       string            `json:"updated_at,omitempty"`
 	ManifestSummary map[string]string `json:"manifest_summary,omitempty"`
+}
+
+type SearchMode string
+
+const (
+	SearchModeAuto            SearchMode = "auto"
+	SearchModeLexical         SearchMode = "lexical"
+	SearchModeHybrid          SearchMode = "hybrid"
+	SearchModeLexicalFallback SearchMode = "lexical_fallback"
+)
+
+type CandidateCounts struct {
+	Lexical int `json:"lexical,omitempty"`
+	Vector  int `json:"vector,omitempty"`
+	Merged  int `json:"merged,omitempty"`
+}
+
+type RetrievalMeta struct {
+	SearchMode           SearchMode       `json:"search_mode,omitempty"`
+	VectorApplied        bool             `json:"vector_applied,omitempty"`
+	VectorFallbackReason string           `json:"vector_fallback_reason,omitempty"`
+	CandidateCounts      *CandidateCounts `json:"candidate_counts,omitempty"`
 }
 
 type Compatibility struct {
@@ -89,6 +119,7 @@ type SearchFilter struct {
 	Kind       ArtifactKind `json:"kind,omitempty"`
 	Source     string       `json:"source,omitempty"`
 	Query      string       `json:"q,omitempty"`
+	SearchMode SearchMode   `json:"search_mode,omitempty"`
 	Risk       string       `json:"risk,omitempty"`
 	Trust      string       `json:"trust,omitempty"`
 	Tag        string       `json:"tag,omitempty"`
@@ -102,10 +133,11 @@ type SearchFilter struct {
 }
 
 type ListResult struct {
-	Items  []Artifact `json:"items"`
-	Total  int        `json:"total"`
-	Limit  int        `json:"limit"`
-	Offset int        `json:"offset"`
+	Items         []Artifact     `json:"items"`
+	Total         int            `json:"total"`
+	Limit         int            `json:"limit"`
+	Offset        int            `json:"offset"`
+	RetrievalMeta *RetrievalMeta `json:"retrieval_meta,omitempty"`
 }
 
 type VersionListResult struct {
@@ -114,8 +146,12 @@ type VersionListResult struct {
 }
 
 type ResponseMeta struct {
-	ProtocolVersion string `json:"protocol_version,omitempty"`
-	Count           int    `json:"count,omitempty"`
+	ProtocolVersion      string           `json:"protocol_version,omitempty"`
+	Count                int              `json:"count,omitempty"`
+	SearchMode           SearchMode       `json:"search_mode,omitempty"`
+	VectorApplied        *bool            `json:"vector_applied,omitempty"`
+	VectorFallbackReason string           `json:"vector_fallback_reason,omitempty"`
+	CandidateCounts      *CandidateCounts `json:"candidate_counts,omitempty"`
 }
 
 type ErrorResponse struct {

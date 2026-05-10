@@ -53,6 +53,12 @@ func TestSearchToolRoutesMissingCapabilityToCloud(t *testing.T) {
 	if !strings.Contains(out, `"action": "install_from_market"`) || !strings.Contains(out, "cloud.skill.release-notes") {
 		t.Fatalf("output = %s, want cloud install route", out)
 	}
+	if !strings.Contains(out, `"retrieval_meta"`) || !strings.Contains(out, `"search_mode": "lexical"`) {
+		t.Fatalf("output = %s, want retrieval meta", out)
+	}
+	if !strings.Contains(out, `"cloud_artifacts"`) || !strings.Contains(out, `"final_score": 0.91`) {
+		t.Fatalf("output = %s, want full cloud artifacts with final_score", out)
+	}
 }
 
 func TestInstallToolAskReturnsConfirmationWithoutInstalling(t *testing.T) {
@@ -244,11 +250,16 @@ func testMarketRegistryServer(t *testing.T, id, kind, risk, trust string, permis
 					"tags":           []string{"release notes", "changelog", "code review", "pull request"},
 					"hit_signals":    []string{"release notes", "code review"},
 					"score":          0.91,
+					"final_score":    0.91,
+					"match_signals":  []string{"lexical", "trust"},
 				}},
-				"total":  1,
-				"limit":  10,
-				"offset": 0,
-			}})
+				"total":          1,
+				"limit":          10,
+				"offset":         0,
+				"retrieval_meta": map[string]any{"search_mode": "lexical", "vector_applied": false},
+			},
+				"meta": map[string]any{"search_mode": "lexical", "vector_applied": false},
+			})
 		default:
 			http.NotFound(w, r)
 		}

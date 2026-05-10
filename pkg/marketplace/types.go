@@ -18,6 +18,15 @@ const (
 	SourceCloud SourceKind = "cloud"
 )
 
+type SearchMode string
+
+const (
+	SearchModeAuto            SearchMode = "auto"
+	SearchModeLexical         SearchMode = "lexical"
+	SearchModeHybrid          SearchMode = "hybrid"
+	SearchModeLexicalFallback SearchMode = "lexical_fallback"
+)
+
 type ArtifactStatus string
 
 const (
@@ -61,36 +70,57 @@ type ArtifactVersion struct {
 	Deprecated      bool          `json:"deprecated,omitempty"`
 }
 
+type CandidateCounts struct {
+	Lexical int `json:"lexical,omitempty"`
+	Vector  int `json:"vector,omitempty"`
+	Merged  int `json:"merged,omitempty"`
+}
+
+type RetrievalMeta struct {
+	SearchMode           SearchMode       `json:"search_mode,omitempty"`
+	VectorApplied        *bool            `json:"vector_applied,omitempty"`
+	VectorFallbackReason string           `json:"vector_fallback_reason,omitempty"`
+	CandidateCounts      *CandidateCounts `json:"candidate_counts,omitempty"`
+}
+
 type Artifact struct {
-	ID            string               `json:"id"`
-	Kind          ArtifactKind         `json:"kind"`
-	Name          string               `json:"name"`
-	DisplayName   string               `json:"display_name,omitempty"`
-	Description   string               `json:"description,omitempty"`
-	Version       string               `json:"version,omitempty"`
-	LatestVersion string               `json:"latest_version,omitempty"`
-	Source        SourceKind           `json:"source"`
-	SourceID      string               `json:"source_id,omitempty"`
-	Status        ArtifactStatus       `json:"status"`
-	Installed     bool                 `json:"installed"`
-	Bound         bool                 `json:"bound"`
-	Active        bool                 `json:"active"`
-	Enabled       bool                 `json:"enabled"`
-	Owner         string               `json:"owner,omitempty"`
-	Category      string               `json:"category,omitempty"`
-	Tags          []string             `json:"tags,omitempty"`
-	Permissions   []string             `json:"permissions,omitempty"`
-	RiskLevel     string               `json:"risk_level,omitempty"`
-	TrustLevel    string               `json:"trust_level,omitempty"`
-	Verified      bool                 `json:"verified,omitempty"`
-	Compatibility Compatibility        `json:"compatibility,omitempty"`
-	Dependencies  []ArtifactDependency `json:"dependencies,omitempty"`
-	HitSignals    []string             `json:"hit_signals,omitempty"`
-	Score         float64              `json:"score,omitempty"`
-	InstallHint   string               `json:"install_hint,omitempty"`
-	TargetHints   []string             `json:"target_hints,omitempty"`
-	Capabilities  []string             `json:"capabilities,omitempty"`
-	Metadata      map[string]string    `json:"metadata,omitempty"`
+	ID             string               `json:"id"`
+	Kind           ArtifactKind         `json:"kind"`
+	Name           string               `json:"name"`
+	DisplayName    string               `json:"display_name,omitempty"`
+	Description    string               `json:"description,omitempty"`
+	Version        string               `json:"version,omitempty"`
+	LatestVersion  string               `json:"latest_version,omitempty"`
+	Source         SourceKind           `json:"source"`
+	SourceID       string               `json:"source_id,omitempty"`
+	Status         ArtifactStatus       `json:"status"`
+	Installed      bool                 `json:"installed"`
+	Bound          bool                 `json:"bound"`
+	Active         bool                 `json:"active"`
+	Enabled        bool                 `json:"enabled"`
+	Owner          string               `json:"owner,omitempty"`
+	Category       string               `json:"category,omitempty"`
+	Tags           []string             `json:"tags,omitempty"`
+	Permissions    []string             `json:"permissions,omitempty"`
+	RiskLevel      string               `json:"risk_level,omitempty"`
+	TrustLevel     string               `json:"trust_level,omitempty"`
+	Verified       bool                 `json:"verified,omitempty"`
+	Compatibility  Compatibility        `json:"compatibility,omitempty"`
+	Dependencies   []ArtifactDependency `json:"dependencies,omitempty"`
+	HitSignals     []string             `json:"hit_signals,omitempty"`
+	Score          float64              `json:"score,omitempty"`
+	LexicalScore   float64              `json:"lexical_score,omitempty"`
+	VectorScore    *float64             `json:"vector_score,omitempty"`
+	TagScore       float64              `json:"tag_score,omitempty"`
+	TrustScore     float64              `json:"trust_score,omitempty"`
+	FreshnessScore float64              `json:"freshness_score,omitempty"`
+	RiskPenalty    float64              `json:"risk_penalty,omitempty"`
+	FinalScore     float64              `json:"final_score,omitempty"`
+	MatchSignals   []string             `json:"match_signals,omitempty"`
+	InstallHint    string               `json:"install_hint,omitempty"`
+	TargetHints    []string             `json:"target_hints,omitempty"`
+	Capabilities   []string             `json:"capabilities,omitempty"`
+	Metadata       map[string]string    `json:"metadata,omitempty"`
 }
 
 type JobState string
@@ -278,16 +308,23 @@ type MarketEventListResult struct {
 }
 
 type CapabilityIndexItem struct {
-	ArtifactID   string       `json:"artifact_id"`
-	Kind         ArtifactKind `json:"kind"`
-	Name         string       `json:"name"`
-	Source       SourceKind   `json:"source"`
-	Status       string       `json:"status"`
-	Capabilities []string     `json:"capabilities,omitempty"`
-	Permissions  []string     `json:"permissions,omitempty"`
-	RiskLevel    string       `json:"risk_level,omitempty"`
-	TrustLevel   string       `json:"trust_level,omitempty"`
-	Score        float64      `json:"score,omitempty"`
+	ID            string        `json:"id,omitempty"`
+	ArtifactID    string        `json:"artifact_id"`
+	Kind          ArtifactKind  `json:"kind"`
+	Name          string        `json:"name"`
+	Description   string        `json:"description,omitempty"`
+	Source        SourceKind    `json:"source"`
+	Status        string        `json:"status"`
+	Capabilities  []string      `json:"capabilities,omitempty"`
+	Permissions   []string      `json:"permissions,omitempty"`
+	RiskLevel     string        `json:"risk_level,omitempty"`
+	TrustLevel    string        `json:"trust_level,omitempty"`
+	Compatibility Compatibility `json:"compatibility,omitempty"`
+	Installed     bool          `json:"installed,omitempty"`
+	Score         float64       `json:"score,omitempty"`
+	FinalScore    float64       `json:"final_score,omitempty"`
+	VectorScore   *float64      `json:"vector_score,omitempty"`
+	MatchSignals  []string      `json:"match_signals,omitempty"`
 }
 
 type CapabilityRoute struct {
@@ -302,6 +339,7 @@ type Filter struct {
 	Kind       ArtifactKind
 	Source     SourceKind
 	Query      string
+	SearchMode SearchMode
 	Status     ArtifactStatus
 	Risk       string
 	Trust      string
@@ -316,10 +354,11 @@ type Filter struct {
 }
 
 type ListResult struct {
-	Items  []Artifact `json:"items"`
-	Total  int        `json:"total"`
-	Limit  int        `json:"limit"`
-	Offset int        `json:"offset"`
+	Items         []Artifact     `json:"items"`
+	Total         int            `json:"total"`
+	Limit         int            `json:"limit"`
+	Offset        int            `json:"offset"`
+	RetrievalMeta *RetrievalMeta `json:"retrieval_meta,omitempty"`
 }
 
 func NormalizeKind(value string) ArtifactKind {
@@ -343,6 +382,19 @@ func NormalizeSource(value string) SourceKind {
 		return SourceLocal
 	case SourceCloud:
 		return SourceCloud
+	default:
+		return ""
+	}
+}
+
+func NormalizeSearchMode(value string) SearchMode {
+	switch SearchMode(strings.ToLower(strings.TrimSpace(value))) {
+	case SearchModeAuto:
+		return SearchModeAuto
+	case SearchModeLexical:
+		return SearchModeLexical
+	case SearchModeHybrid:
+		return SearchModeHybrid
 	default:
 		return ""
 	}

@@ -23,8 +23,29 @@ type remoteArtifact struct {
 	Tags            []string                 `json:"tags,omitempty"`
 	HitSignals      []string                 `json:"hit_signals,omitempty"`
 	Score           float64                  `json:"score,omitempty"`
+	LexicalScore    float64                  `json:"lexical_score,omitempty"`
+	VectorScore     *float64                 `json:"vector_score,omitempty"`
+	TagScore        float64                  `json:"tag_score,omitempty"`
+	TrustScore      float64                  `json:"trust_score,omitempty"`
+	FreshnessScore  float64                  `json:"freshness_score,omitempty"`
+	RiskPenalty     float64                  `json:"risk_penalty,omitempty"`
+	FinalScore      float64                  `json:"final_score,omitempty"`
+	MatchSignals    []string                 `json:"match_signals,omitempty"`
 	UpdatedAt       string                   `json:"updated_at,omitempty"`
 	ManifestSummary map[string]string        `json:"manifest_summary,omitempty"`
+}
+
+type remoteCandidateCounts struct {
+	Lexical int `json:"lexical,omitempty"`
+	Vector  int `json:"vector,omitempty"`
+	Merged  int `json:"merged,omitempty"`
+}
+
+type remoteRetrievalMeta struct {
+	SearchMode           marketplace.SearchMode `json:"search_mode,omitempty"`
+	VectorApplied        *bool                  `json:"vector_applied,omitempty"`
+	VectorFallbackReason string                 `json:"vector_fallback_reason,omitempty"`
+	CandidateCounts      *remoteCandidateCounts `json:"candidate_counts,omitempty"`
 }
 
 type remoteCompatibility struct {
@@ -79,11 +100,13 @@ type ResolvedArtifact struct {
 
 type listEnvelope struct {
 	Data struct {
-		Items  []remoteArtifact `json:"items"`
-		Total  int              `json:"total"`
-		Limit  int              `json:"limit"`
-		Offset int              `json:"offset"`
+		Items         []remoteArtifact     `json:"items"`
+		Total         int                  `json:"total"`
+		Limit         int                  `json:"limit"`
+		Offset        int                  `json:"offset"`
+		RetrievalMeta *remoteRetrievalMeta `json:"retrieval_meta,omitempty"`
 	} `json:"data"`
+	Meta remoteRetrievalMeta `json:"meta"`
 }
 
 type artifactEnvelope struct {

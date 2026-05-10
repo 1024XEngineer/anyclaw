@@ -22,19 +22,26 @@ type ServerConfig struct {
 	RequireAdminToken   bool
 	Seed                bool
 	MaxRequestBodyBytes int64
+	Vector              VectorConfig
+	TestArtifactEmbed   embeddingProvider
+	TestQueryEmbed      embeddingProvider
 }
 
 type Server struct {
 	mux                 *http.ServeMux
 	store               *Store
 	storage             PackageStorage
+	vector              *vectorRuntime
+	metrics             *registryMetrics
 	addr                string
 	adminToken          string
 	maxRequestBodyBytes int64
+	workerCancel        context.CancelFunc
+	workerDone          chan struct{}
 }
 
 func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
-	if strings.TrimSpace(cfg.AdminToken) == "" {
+	if strings.TrimSpace(cfg.AdminToken) == "" && cfg.RequireAdminToken {
 		return nil, fmt.Errorf("admin token is required")
 	}
 	store, err := OpenStoreWithConfig(ctx, StoreConfig{DataDir: cfg.DataDir, Driver: cfg.DBDriver, DSN: cfg.DBDSN})
@@ -52,13 +59,29 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 			return nil, err
 		}
 	}
+	var vectorRuntime *vectorRuntime
+	if cfg.TestArtifactEmbed != nil || cfg.TestQueryEmbed != nil {
+		vectorRuntime, err = newVectorRuntimeWithProviders(cfg.Vector, cfg.TestArtifactEmbed, cfg.TestQueryEmbed)
+	} else {
+		vectorRuntime, err = newVectorRuntime(cfg.Vector)
+	}
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	store.SetVectorRuntime(vectorRuntime)
 	s := &Server{
 		mux:                 http.NewServeMux(),
 		store:               store,
 		storage:             storage,
+		vector:              vectorRuntime,
+		metrics:             newRegistryMetrics(),
 		addr:                cfg.Addr,
 		adminToken:          strings.TrimSpace(cfg.AdminToken),
 		maxRequestBodyBytes: cfg.MaxRequestBodyBytes,
+	}
+	if vectorRuntime != nil {
+		vectorRuntime.metrics = s.metrics
 	}
 	if s.addr == "" {
 		s.addr = ":8791"
@@ -67,12 +90,27 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		s.maxRequestBodyBytes = 2 << 20
 	}
 	s.registerRoutes()
+	if s.vector != nil && s.vector.enabled() {
+		workerCtx, workerCancel := context.WithCancel(ctx)
+		s.workerCancel = workerCancel
+		s.workerDone = make(chan struct{})
+		go func() {
+			defer close(s.workerDone)
+			s.runEmbeddingWorker(workerCtx)
+		}()
+	}
 	return s, nil
 }
 
 func (s *Server) Close() error {
 	if s == nil {
 		return nil
+	}
+	if s.workerCancel != nil {
+		s.workerCancel()
+	}
+	if s.workerDone != nil {
+		<-s.workerDone
 	}
 	return s.store.Close()
 }
@@ -102,6 +140,8 @@ func (s *Server) StartWithContext(ctx context.Context) error {
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /v1/health", s.handleHealth)
 	s.mux.HandleFunc("GET /v1/control-plane", s.handleControlPlane)
+	s.mux.HandleFunc("GET /metrics", s.handleMetricsPrometheus)
+	s.mux.HandleFunc("GET /metrics.json", s.handleMetricsJSON)
 	s.mux.HandleFunc("GET /v1/sources", s.handleSources)
 	s.mux.HandleFunc("GET /v1/artifacts", s.handleListArtifacts)
 	s.mux.HandleFunc("GET /v1/artifacts/{id}", s.handleArtifactDetail)
@@ -118,10 +158,28 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /v1/artifacts/{id}/unquarantine", s.handleUnquarantine)
 	s.mux.HandleFunc("GET /v1/admin/audit", s.handleAdminAudit)
 	s.mux.HandleFunc("GET /v1/admin/downloads", s.handleAdminDownloads)
+	s.mux.HandleFunc("GET /v1/admin/embedding-jobs", s.handleAdminEmbeddingJobs)
+	s.mux.HandleFunc("GET /v1/admin/embeddings", s.handleAdminEmbeddings)
+	s.mux.HandleFunc("GET /v1/admin/embeddings/{id}", s.handleAdminEmbeddingDetail)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeData(w, http.StatusOK, map[string]string{"status": "ok", "service": "anyclaw-registry"}, 0)
+	stats, _ := s.store.EmbeddingAdminStats(r.Context())
+	cacheSize := 0
+	if s.vector != nil && s.vector.queryCache != nil {
+		cacheSize = s.vector.queryCache.Len()
+	}
+	if s.metrics != nil {
+		s.metrics.updateRuntimeState(cacheSize, stats)
+	}
+	writeData(w, http.StatusOK, map[string]any{
+		"status":                "ok",
+		"service":               "anyclaw-registry",
+		"vector_enabled":        s.vector != nil && s.vector.enabled(),
+		"query_cache_size":      cacheSize,
+		"embedding_ready_count": stats.ReadyEmbeddings,
+		"embedding_failed_jobs": stats.FailedJobs,
+	}, 0)
 }
 
 func (s *Server) handleControlPlane(w http.ResponseWriter, r *http.Request) {
@@ -144,9 +202,42 @@ func (s *Server) handleControlPlane(w http.ResponseWriter, r *http.Request) {
 			"POST /v1/admin/tokens/{id}/revoke",
 			"GET /v1/admin/audit",
 			"GET /v1/admin/downloads",
+			"GET /v1/admin/embedding-jobs",
+			"GET /v1/admin/embeddings",
+			"GET /v1/admin/embeddings/{id}",
+			"GET /metrics",
+			"GET /metrics.json",
 		},
 		"admin_auth": "bearer",
 	}, 0)
+}
+
+func (s *Server) handleMetricsPrometheus(w http.ResponseWriter, r *http.Request) {
+	stats, _ := s.store.EmbeddingAdminStats(r.Context())
+	cacheSize := 0
+	if s.vector != nil && s.vector.queryCache != nil {
+		cacheSize = s.vector.queryCache.Len()
+	}
+	if s.metrics != nil {
+		s.metrics.updateRuntimeState(cacheSize, stats)
+		s.metrics.prometheus(w, r)
+		return
+	}
+	http.Error(w, "metrics unavailable", http.StatusServiceUnavailable)
+}
+
+func (s *Server) handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
+	stats, _ := s.store.EmbeddingAdminStats(r.Context())
+	cacheSize := 0
+	if s.vector != nil && s.vector.queryCache != nil {
+		cacheSize = s.vector.queryCache.Len()
+	}
+	if s.metrics != nil {
+		s.metrics.updateRuntimeState(cacheSize, stats)
+		s.metrics.json(w, r)
+		return
+	}
+	http.Error(w, "metrics unavailable", http.StatusServiceUnavailable)
 }
 
 func (s *Server) handleSources(w http.ResponseWriter, r *http.Request) {
@@ -429,6 +520,49 @@ func (s *Server) handleAdminDownloads(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, result, len(result.Items))
 }
 
+func (s *Server) handleAdminEmbeddingJobs(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "admin token required", "")
+		return
+	}
+	result, err := s.store.ListArtifactEmbeddingJobs(r.Context(), strings.TrimSpace(r.URL.Query().Get("status")), parseInt(r.URL.Query().Get("limit"), 100))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "embedding_jobs_failed", "failed to list embedding jobs", err.Error())
+		return
+	}
+	writeData(w, http.StatusOK, result, len(result.Items))
+}
+
+func (s *Server) handleAdminEmbeddings(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "admin token required", "")
+		return
+	}
+	result, err := s.store.ListArtifactEmbeddings(r.Context(), strings.TrimSpace(r.URL.Query().Get("status")), parseInt(r.URL.Query().Get("limit"), 100))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "embeddings_failed", "failed to list embeddings", err.Error())
+		return
+	}
+	writeData(w, http.StatusOK, result, len(result.Items))
+}
+
+func (s *Server) handleAdminEmbeddingDetail(w http.ResponseWriter, r *http.Request) {
+	if !s.authorizeAdmin(r) {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "admin token required", "")
+		return
+	}
+	item, err := s.store.loadArtifactEmbedding(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "embedding_failed", "failed to load embedding", err.Error())
+		return
+	}
+	if item == nil {
+		writeError(w, http.StatusNotFound, "not_found", "embedding not found", "")
+		return
+	}
+	writeData(w, http.StatusOK, item, 1)
+}
+
 func (s *Server) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBodyBytes)
 	dec := json.NewDecoder(r.Body)
@@ -449,6 +583,7 @@ func filterFromQuery(r *http.Request) SearchFilter {
 		Kind:       ArtifactKind(strings.TrimSpace(q.Get("kind"))),
 		Source:     strings.TrimSpace(q.Get("source")),
 		Query:      strings.TrimSpace(q.Get("q")),
+		SearchMode: normalizeSearchMode(q.Get("search_mode")),
 		Risk:       strings.TrimSpace(q.Get("risk")),
 		Trust:      strings.TrimSpace(q.Get("trust")),
 		Tag:        strings.TrimSpace(q.Get("tag")),
@@ -515,13 +650,32 @@ func writeStoreError(w http.ResponseWriter, err error) {
 }
 
 func writeData(w http.ResponseWriter, status int, data any, count int) {
+	meta := ResponseMeta{
+		ProtocolVersion: defaultProtocolVersion,
+		Count:           count,
+	}
+	if result, ok := data.(ListResult); ok && result.RetrievalMeta != nil {
+		meta.SearchMode = result.RetrievalMeta.SearchMode
+		meta.VectorFallbackReason = result.RetrievalMeta.VectorFallbackReason
+		meta.CandidateCounts = result.RetrievalMeta.CandidateCounts
+		vectorApplied := result.RetrievalMeta.VectorApplied
+		meta.VectorApplied = &vectorApplied
+	}
 	writeJSON(w, status, map[string]any{
 		"data": data,
-		"meta": ResponseMeta{
-			ProtocolVersion: defaultProtocolVersion,
-			Count:           count,
-		},
+		"meta": meta,
 	})
+}
+
+func normalizeSearchMode(value string) SearchMode {
+	switch SearchMode(strings.ToLower(strings.TrimSpace(value))) {
+	case SearchModeLexical:
+		return SearchModeLexical
+	case SearchModeHybrid:
+		return SearchModeHybrid
+	default:
+		return SearchModeAuto
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, code, message, detail string) {

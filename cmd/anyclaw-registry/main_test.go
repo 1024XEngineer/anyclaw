@@ -11,7 +11,7 @@ import (
 func TestRunDefaultsToServeAndRequiresAdminToken(t *testing.T) {
 	t.Setenv("ANYCLAW_REGISTRY_ADMIN_TOKEN", "")
 
-	err := run([]string{"serve", "--data-dir", t.TempDir(), "--seed=false"})
+	err := run([]string{"serve", "--data-dir", t.TempDir(), "--seed=false", "--require-admin-token=true"})
 	if err == nil || !strings.Contains(err.Error(), "admin token is required") {
 		t.Fatalf("expected missing admin token error, got %v", err)
 	}
